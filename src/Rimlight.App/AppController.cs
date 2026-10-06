@@ -88,6 +88,15 @@ internal sealed class AppController : IDisposable
         settings = new SettingsService(CoreFactory.CreateSettingsStore(directory));
         Settings initial = settings.Current;
 
+        // A later start of the app hands over its request ("show-settings") instead of running twice. Listening starts
+        // before the slow parts below, since a later start waits only 3 s for the pipe; OnCommand just queues the
+        // request on the dispatcher.
+        if (instance is not null)
+        {
+            instance.CommandReceived += OnCommand;
+            instance.StartListening();
+        }
+
         // The glow's system-wide shortcut (doc 06 §4), on a message-only window on this thread.
         try
         {
@@ -142,13 +151,6 @@ internal sealed class AppController : IDisposable
         // Launch at startup (doc 06 §4): the Run entry follows the setting, which is on by default, so the first run
         // registers it. Checked at every start, which also repairs a stale path.
         ApplyStartup(initial.LaunchAtStartup);
-
-        // A later start of the app hands over its request ("show-settings") instead of running twice.
-        if (instance is not null)
-        {
-            instance.CommandReceived += OnCommand;
-            instance.StartListening();
-        }
 
         if (!initial.FirstRunComplete)
         {
@@ -275,18 +277,23 @@ internal sealed class AppController : IDisposable
         HotkeyStatus status;
         try
         {
-            status = hotkey?.Register(text) ?? new HotkeyStatus(text ?? "", HotkeyState.Failed, null);
+            status = hotkey?.Register(text) ?? WithoutHotkeyWindow(text);
         }
         catch (Exception exception)
         {
             Trace.WriteLine($"[App] Registering the shortcut failed: {exception.Message}");
-            status = new HotkeyStatus(text ?? "", HotkeyState.Failed, null);
+            status = WithoutHotkeyWindow(text);
         }
         if (status == Hotkey) return;
         Hotkey = status;
         welcome?.SetHotkey(status);
         HotkeyChanged?.Invoke();
     }
+
+    // No shortcut can work: an empty setting is still "none", anything else failed.
+    private static HotkeyStatus WithoutHotkeyWindow(string? text) => string.IsNullOrWhiteSpace(text)
+        ? HotkeyStatus.None with { Text = text ?? "" }
+        : new HotkeyStatus(text, HotkeyState.Failed, null);
 
     // Thread pool: a later start's request. Only known commands do anything.
     private void OnCommand(string command)

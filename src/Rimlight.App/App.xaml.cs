@@ -57,6 +57,9 @@ public partial class App : Application
     /// <inheritdoc />
     protected override void OnExit(ExitEventArgs e)
     {
+        // First: a start during the teardown below then waits to take over instead of handing its request to this
+        // process, which would drop it.
+        instance?.StopListening();
         controller?.Dispose();
         controller = null;
         if (instance is not null) Trace.WriteLine("[App] Exited.");

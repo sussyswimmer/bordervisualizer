@@ -51,7 +51,7 @@ internal partial class WelcomeWindow : Window
     /// <param name="hotkey">The glow shortcut and whether it works.</param>
     public void SetHotkey(HotkeyStatus hotkey)
     {
-        string? gesture = hotkey.Gesture?.ToString();
+        string gesture = hotkey.Gesture?.ToString() ?? hotkey.Text; // no gesture when the shortcut window is missing
         SetText(HotkeyText, hotkey.State switch
         {
             HotkeyState.Registered => $"Press {gesture} anywhere to turn the glow on or off.",
