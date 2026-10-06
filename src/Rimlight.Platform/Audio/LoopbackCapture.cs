@@ -13,7 +13,9 @@ namespace Rimlight.Platform.Audio;
 public sealed class LoopbackCapture : IDisposable
 {
     private const double RingSeconds = 2;            // doc 03 §1: capacity 2 s of audio
-    private const int BufferMilliseconds = 40;        // WASAPI buffer; NAudio polls it every ~20 ms
+    // NAudio's WasapiLoopbackCapture uses a 100 ms buffer polled every ~50 ms, far over doc 03 §3's 10–20 ms
+    // loopback budget; a 40 ms buffer polled every ~20 ms fits it.
+    private const int BufferMilliseconds = 40;
     private const int DeviceChangeSettleMs = 250;     // the default device changes once per role; restart once
     private const double FirstBackoffSeconds = 0.5;
     private const double MaxBackoffSeconds = 5;
@@ -154,26 +156,34 @@ public sealed class LoopbackCapture : IDisposable
     }
 
     // One capture of one device: WASAPI loopback → mono floats → ring. Disposing it stops the capture.
+    // The polling loop is ours, not NAudio's WasapiCapture: its capture thread calls IAudioClient::Stop in a finally
+    // block, and when the device is invalidated (unplugged, disabled) that throws on a thread with no handler, which
+    // ends the process before the stop is reported. Here every audio call is inside one try/catch.
     private sealed class Session : IDisposable
     {
+        private const long ReferenceTimesPerMillisecond = 10_000; // REFERENCE_TIME is in 100 ns units
+
         private readonly MMDevice device;
-        private readonly LowLatencyLoopback capture;
+        private readonly AudioClient client;
         private readonly CaptureFormat format;
         private readonly AudioRingBuffer ring;
         private readonly float[] mono;
         private readonly Action onStopped;
+        private readonly Thread thread;
+        private volatile bool stopRequested;
         private volatile bool failed;
 
-        private Session(MMDevice device, LowLatencyLoopback capture, CaptureFormat format, Action onStopped)
+        private Session(MMDevice device, AudioClient client, CaptureFormat format, Action onStopped)
         {
             this.device = device;
-            this.capture = capture;
+            this.client = client;
             this.format = format;
             this.onStopped = onStopped;
             ring = new AudioRingBuffer(AudioRingBuffer.CapacityFor(format.SampleRate, RingSeconds));
-            // NAudio reuses one record buffer for the whole session; packets larger than this are converted in chunks.
+            // Packets larger than this are converted in chunks.
             mono = new float[Math.Max(1024, format.SampleRate / 4)];
             Audio = new CapturedAudio(ring, format.SampleRate, device.FriendlyName, format.ToString());
+            thread = new Thread(Run) { Name = "Rimlight audio loopback", IsBackground = true };
         }
 
         public CapturedAudio Audio { get; }
@@ -183,60 +193,118 @@ public sealed class LoopbackCapture : IDisposable
         public static Session Start(MMDeviceEnumerator enumerator, Action onStopped)
         {
             MMDevice device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-            LowLatencyLoopback? capture = null;
+            AudioClient? client = null;
             try
             {
-                capture = new LowLatencyLoopback(device, BufferMilliseconds);
-                CaptureFormat format = Describe(capture.WaveFormat)
-                    ?? throw new NotSupportedException($"Unsupported mix format: {capture.WaveFormat}.");
-                var session = new Session(device, capture, format, onStopped);
-                capture.DataAvailable += session.OnDataAvailable;
-                capture.RecordingStopped += session.OnRecordingStopped;
-                capture.StartRecording();
+                client = device.AudioClient;
+                WaveFormat mixFormat = client.MixFormat;
+                CaptureFormat format = Describe(mixFormat)
+                    ?? throw new NotSupportedException($"Unsupported mix format: {mixFormat}.");
+                // Shared mode in the mix format, so no conversion; Loopback captures what the device plays.
+                client.Initialize(AudioClientShareMode.Shared, AudioClientStreamFlags.Loopback,
+                    BufferMilliseconds * ReferenceTimesPerMillisecond, 0, mixFormat, Guid.Empty);
+                var session = new Session(device, client, format, onStopped);
+                session.thread.Start();
                 return session;
             }
             catch
             {
-                capture?.Dispose();
-                device.Dispose();
+                DisposeQuietly(client);
+                DisposeQuietly(device);
                 throw;
             }
         }
 
-        // Audio thread: no locks, no allocation, no logging (doc 02).
-        private void OnDataAvailable(object? sender, WaveInEventArgs e)
+        // Audio thread: no locks, no allocation, no logging (doc 02). Polls every half buffer (~20 ms): loopback
+        // event callbacks aren't reliable on every Windows 10 build.
+        private void Run()
         {
-            ReadOnlySpan<byte> data = e.Buffer.AsSpan(0, e.BytesRecorded);
-            int frameBytes = format.BytesPerFrame;
-            while (data.Length >= frameBytes)
+            Exception? error = null;
+            try
             {
-                int frames = MonoConverter.Convert(data, format, mono);
-                ring.Write(mono.AsSpan(0, frames));
-                data = data[(frames * frameBytes)..];
+                AudioCaptureClient capture = client.AudioCaptureClient;
+                int sleepMilliseconds = Math.Max(1, BufferMilliseconds / 2);
+                client.Start();
+                while (!stopRequested)
+                {
+                    Thread.Sleep(sleepMilliseconds);
+                    while (!stopRequested && capture.GetNextPacketSize() != 0)
+                    {
+                        IntPtr buffer = capture.GetBuffer(out int frames, out AudioClientBufferFlags flags);
+                        if ((flags & AudioClientBufferFlags.Silent) != 0) WriteSilence(frames);
+                        else WriteFrames(buffer, frames);
+                        capture.ReleaseBuffer(frames);
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                error = exception;
+            }
+            try
+            {
+                client.Stop();
+            }
+            catch (Exception exception)
+            {
+                // An invalidated device fails Stop too; the first error is the one worth reporting.
+                error ??= exception;
+            }
+            if (error is not null && !stopRequested)
+            {
+                Error = error;
+                failed = true;
+                onStopped();
             }
         }
 
-        private void OnRecordingStopped(object? sender, StoppedEventArgs e)
+        private unsafe void WriteFrames(IntPtr buffer, int frames)
         {
-            Error = e.Exception;
-            failed = true;
-            onStopped();
+            var data = new ReadOnlySpan<byte>((void*)buffer, frames * format.BytesPerFrame);
+            int frameBytes = format.BytesPerFrame;
+            while (data.Length >= frameBytes)
+            {
+                int converted = MonoConverter.Convert(data, format, mono);
+                ring.Write(mono.AsSpan(0, converted));
+                data = data[(converted * frameBytes)..];
+            }
+        }
+
+        private void WriteSilence(int frames)
+        {
+            while (frames > 0)
+            {
+                int chunk = Math.Min(frames, mono.Length);
+                Span<float> zeros = mono.AsSpan(0, chunk);
+                zeros.Clear();
+                ring.Write(zeros);
+                frames -= chunk;
+            }
         }
 
         public void Dispose()
         {
-            capture.DataAvailable -= OnDataAvailable;
+            stopRequested = true;
+            // The loop sleeps ~20 ms between polls; a thread stuck in a driver call is left behind rather than hang.
+            if (!thread.Join(TimeSpan.FromSeconds(2)))
+            {
+                Trace.WriteLine("[LoopbackCapture] The loopback thread did not stop within 2 s.");
+                return;
+            }
+            DisposeQuietly(client);
+            DisposeQuietly(device);
+        }
+
+        private static void DisposeQuietly(IDisposable? disposable)
+        {
             try
             {
-                if (capture.CaptureState is CaptureState.Capturing or CaptureState.Starting) capture.StopRecording();
+                disposable?.Dispose();
             }
             catch (Exception exception)
             {
-                Trace.WriteLine($"[LoopbackCapture] Stopping the capture failed: {exception.Message}");
+                Trace.WriteLine($"[LoopbackCapture] Releasing an audio object failed: {exception.Message}");
             }
-            capture.RecordingStopped -= OnRecordingStopped;
-            capture.Dispose();
-            device.Dispose();
         }
 
         private static readonly Guid SubtypePcm = new("00000001-0000-0010-8000-00aa00389b71");       // KSDATAFORMAT_SUBTYPE_PCM
@@ -262,16 +330,6 @@ public sealed class LoopbackCapture : IDisposable
             };
             return encoding is { } e ? new CaptureFormat(e, channels, waveFormat.SampleRate) : null;
         }
-    }
-
-    // NAudio's WasapiLoopbackCapture always uses a 100 ms buffer polled every ~50 ms, far over doc 03 §3's 10–20 ms
-    // loopback budget. The same loopback stream with a 40 ms buffer is polled every ~20 ms (polling, not events:
-    // loopback event callbacks aren't reliable on every Windows 10 build).
-    private sealed class LowLatencyLoopback(MMDevice device, int bufferMilliseconds)
-        : WasapiCapture(device, false, bufferMilliseconds)
-    {
-        protected override AudioClientStreamFlags GetAudioClientStreamFlags() =>
-            AudioClientStreamFlags.Loopback | base.GetAudioClientStreamFlags();
     }
 
     // COM callbacks arrive on an arbitrary thread and must return quickly without calling audio APIs: they only
