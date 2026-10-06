@@ -17,11 +17,13 @@ public static class CoreFactory
     /// The light engine must not apply it again. Setting <see cref="IAudioAnalyzer.Tuning"/> validates the value
     /// (invalid tuning throws and keeps the previous one); a <see cref="AudioTuning.WindowSize"/> change allocates,
     /// resets the analysis and replaces <see cref="IAudioAnalyzer.Diagnostics"/>, so read that property every frame.</para>
-    /// <para>Diagnostics: <see cref="AnalyzerDiagnostics.Spectrum"/> has WindowSize / 2 + 1 bins in amplitude units
-    /// (a full-scale sine centered on a bin reads about 1); bin k is at k × <see cref="AnalysisSampleRate"/> / WindowSize Hz.
+    /// <para>Diagnostics: <see cref="AnalyzerDiagnostics.Spectrum"/> has WindowSize / 2 + 1 bins, DC through Nyquist,
+    /// in amplitude units: |X[k]| × 4 / WindowSize, so a full-scale sine centered on a bin reads about 1. Bin k is at
+    /// k × <see cref="AnalysisSampleRate"/> / WindowSize Hz.
     /// <see cref="AnalyzerDiagnostics.FluxHistory"/> and <see cref="AnalyzerDiagnostics.ThresholdHistory"/> hold 240
-    /// entries, exactly one per <c>Process</c> call (empty spans included), oldest first and zero until filled. Each
-    /// flux entry is the largest flux of that call. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is the median of
+    /// entries, exactly one per <c>Process</c> call (empty spans included), oldest first and zero until filled; a time
+    /// axis must use the actual call cadence, not an assumed 60 Hz. Each flux entry is the largest flux of that call,
+    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is the median of
     /// recent beat intervals and returns to 0 after 4 s without a beat. <see cref="IAudioAnalyzer.Reset"/> clears
     /// everything except the current <see cref="AudioFeatures.IsSilent"/> state.</para>
     /// </remarks>

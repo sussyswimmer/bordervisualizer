@@ -33,6 +33,7 @@ internal sealed class SpectrumAnalyzer
     // Time-domain RMS (before the Hann window) of the quietest quarter of the current window. When any
     // quarter of the window is silent, the Hann-weighted band magnitudes collapse even though the whole-window
     // RMS can still be high, e.g. while a gap or the start of music only partly fills the window.
+    // The supported two-sample FFT uses one-sample blocks because it has no complete quarter.
     public float QuietestQuarterRms { get; private set; }
 
     public void Process(ReadOnlySpan<float> samples)
@@ -56,12 +57,12 @@ internal sealed class SpectrumAnalyzer
         // Unwritten startup slots are zero, preceding the samples received so far.
         ring.AsSpan(next).CopyTo(windowed);
         ring.AsSpan(0, next).CopyTo(windowed.AsSpan(ring.Length - next));
-        int quarter = windowed.Length / 4;
+        int quarter = Math.Max(1, windowed.Length / 4);
         float quietest = float.MaxValue;
-        for (int block = 0; block < 4; block++)
+        for (int start = 0; start < windowed.Length; start += quarter)
         {
             float squares = 0;
-            for (int i = block * quarter; i < (block + 1) * quarter; i++) squares += windowed[i] * windowed[i];
+            for (int i = start; i < start + quarter; i++) squares += windowed[i] * windowed[i];
             quietest = MathF.Min(quietest, squares);
         }
         QuietestQuarterRms = MathF.Sqrt(quietest / quarter);
