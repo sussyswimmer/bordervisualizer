@@ -77,7 +77,7 @@
 - [x] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip — PR #18 — effort: M (notes below; Windows manual test pending)
 - [x] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause — PR #19 — effort: M (notes below; Windows manual test pending)
 - [x] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow — PR #22 — effort: M (notes below; Windows manual test pending)
-- [ ] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names
+- [x] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names — PR #24 — effort: L (notes below; Windows manual test pending)
 - [ ] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode
 - [ ] K9 Velopack bootstrap in App (`VelopackApp.Build().Run()`), update checks, "Update ready" toast
 - [ ] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues
@@ -382,6 +382,83 @@
   - **K7:** set `SettingsWindow`; the Behavior page's Launch at startup and hotkey recorder (`HotkeyGesture.TryCreate` + `KeyInterop.VirtualKeyFromKey`, warning from `AppController.Hotkey`); the one-time "still running in the tray" toast via `IsFirstRunSession` and `Tray.Notify`; the welcome then shows its "Open Settings" button; theme the tray menu.
   - **K9:** set `Updates`; "Update ready" via `Tray.Notify` + `NotificationClicked`; call `StartupRegistration.Remove(AppInfo.Name)` from Velopack's uninstall hook; check that the stub passes `--background` through.
   - **K10:** with C7's store, the welcome shows once and `LaunchAtStartup`/`ToggleHotkey` persist.
+
+## K7 notes
+
+- **Structure:**
+  - `src/Rimlight.App/SettingsUi/` (namespace `Rimlight.App.SettingsUi`; a `…Settings` namespace would shadow the Core record):
+    - `SettingsWindow`: a WPF-UI `FluentWindow` with Mica, the title bar, and a `NavigationView` over six `ISettingsPage` user controls, handed to it by an `INavigationViewPageProvider`.
+      - Close hides the window (`AppController.IsExiting` lets Quit and session end really close it), with the one-time tray toast.
+      - Only the selected page is active, and only while the window is shown and not minimized. Outside events, timers and the audio request stop otherwise.
+    - `SettingsWindowLauncher` is K6's `IShowSettings`. It creates the window on first use, makes it the app's main window, and falls back to the welcome if it can't be built.
+    - The pages:
+      - Appearance: `GlowPreview` drawn by `GlowRaster`, the shape sliders, Cover taskbar, and preset chips.
+      - Color: `GlowColorEditor` ×2 and `SrgbColor`, plus the now-playing row.
+      - Motion: mode, when quiet, sensitivity, and the level meter.
+      - Displays: `MonitorChoice` and the frame rate limit.
+      - Behavior: the toggles, battery, and the shortcut recorder.
+      - About.
+    - Shared: `PageEdits` (live edits, guarded while a page shows the settings) and `PageStyles.xaml`.
+    - `UiTheme` loads WPF-UI app-wide, follows Windows' app mode and high contrast, and applies the brand accent.
+  - Platform:
+    - `DisplayMonitors.Describe()` returns the public `MonitorInfo`, with Windows' monitor names from the CCD API (`MonitorNames`).
+    - `HotkeyGesture` refuses Windows' window and task keys.
+  - App:
+    - `MusicGlowSource.SetAudioWanted` and `LatestAudio` (`AudioReading`: one packed `long`, written with `Volatile`).
+    - `AppController`: `RequestAudio()` (counted, for K8 too), `SuspendHotkey()` / `ResumeHotkey()`, `Glow`, `IsExiting`, and `EndSession()` (formerly `Flush()`).
+    - The tray re-syncs the theme when its menu opens.
+- **Spec clarifications and deviations:**
+  - **WPF-UI 4.3.0** (newest, MIT, net8 assets) is loaded in code at start, not in `App.xaml`. A second start that only hands over doesn't pay for it, and the tray menu gets Fluent light/dark styles too (K6 follow-up). A `--background` start pays a one-time load.
+  - **Theme:** it follows `AppsUseLightTheme` (as the welcome does) and `SystemParameters.HighContrast`, not WPF-UI's guess from the `.theme` file name. The accent is the brand #7C5CFF, not the system accent.
+  - **Pages are user controls with their own scroll viewer.** WPF's `Frame` is an inheritance boundary (`SkipToAppNow`), so each page sets its foreground and font and merges `PageStyles.xaml`. WPF-UI styles controls implicitly, so no page sets `Style` on a WPF-UI control.
+  - **Preview:**
+    - `GlowRaster` ports `Glow.hlsl` into a 352×198 `Pbgra32` bitmap at 30 fps. It caches the shape per pixel, so a frame costs about one exp per lit pixel.
+    - The card stands for a 1280-DIP-wide screen: thickness and corner radius scale by it, and the glow by the card's shorter side, as on screen.
+    - Its own engine and blender come from `CoreFactory` (H-012), with `MusicGlowSource`'s color rules and 800/200 ms crossfades.
+    - Its features come from the overlay's analyzer, and count as silence after 0.5 s without a new frame.
+    - It shows the glow as it looks when on: "Glow on" off, or Off mode, shows Idle Glow with a caption.
+  - **Audio wanted:** the meter, and the preview in music sync, keep the capture open and the analyzer at 10 Hz or more. The overlay's engine still hears silence outside music sync, so Settings never changes the glow.
+  - **Color picker:** a hex box plus hue and saturation sliders at the color's own brightness, instead of a 2-D field, so the keyboard and screen readers work with standard controls. Six-digit hex applies as it is typed; three digits apply on Enter or focus loss.
+  - **Displays:**
+    - All / Main display / Choose, plus a toggle per monitor. A toggle flipped under All or Main switches to Choose, starting from what is lit now.
+    - Choose restores the previous custom list if it lights an attached monitor. Unplugged IDs are always kept (H-009).
+    - Names are Windows' EDID names, "Built-in display", or "Display N" (numbered left to right).
+  - **Shortcut recorder:**
+    - The current shortcut is released while recording.
+    - Esc cancels, Tab and Shift+Tab leave, and Alt+F4 still closes.
+    - Alt+F4, Alt(+Shift)+Tab, Alt(+Shift)+Esc, Alt+Space, Ctrl+Esc and Ctrl+Shift+Esc are refused for every shortcut (`HotkeyGesture.IsAllowed`): `RegisterHotKey` would take them from every app.
+  - **200% text:** WPF ignores Windows' Text size. The content gets a `LayoutTransform` of `UISettings.TextScaleFactor` (up to 225%), and the first opening enlarges the window within the work area.
+  - **The toast** shows once per first-run session (K6's decision). Until C7 every run is a first run.
+  - **Presets row** is hidden while `Presets.All` is empty.
+  - **With Windows animations off,** pages switch without the slide.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - WPF-UI 4.3.0 was decompiled: `FluentWindow` (Mica needs `ExtendsContentIntoTitleBar`), the theme and accent managers, `UiApplication`'s binding on first use, `NavigationView` (the page provider; its frame swallows F5, so the recorder listens with `handledEventsToo`), `TextBlockMetadata`, `HyperlinkButton`, `TitleBar` close, and every theme key the pages use.
+  - The WPF 8.0.31 runtime was decompiled: `Frame`'s inheritance boundary, `DoShutdown` closing windows before `OnExit`, and `MainWindow` accepting null.
+  - The CCD signatures were checked against CsWin32 0.3.346's generated sources.
+  - **Scratch harness (not committed), 87 checks:**
+    - `SrgbColor`: HSV round trips exact on 85³ colors.
+    - Every `MonitorChoice` H-009 case.
+    - The refused system keys.
+    - `AudioReading`: round trip, the counter never 0, and 580 M concurrent reads without tearing.
+    - `MusicGlowSource` with audio wanted: capture, pacing and an engine that hears silence; 0 bytes over 100,000 frames.
+    - `GlowRaster` against a direct shader port:
+      - alpha exact, colors within 1 code value
+      - no lit pixel dropped
+      - 0 bytes per frame
+      - 0.5 ms a frame at the default look, 0.9 ms at 100% glow
+  - Rendered preview frames were checked by eye.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #24.
+- **Left for later:**
+  - **K8:** use `AppController.RequestAudio()` and `MusicGlowSource.LatestAudio`.
+  - **K9:** set `AppController.Updates`; About's button and the tray already call it.
+  - **K10:**
+    - The presets row with C7.
+    - The preview with the real C5/C6 (H-012).
+    - Check the WPF-UI tray menu on Windows.
+    - Optionally drop the Debug tray items Settings now covers.
+  - **K11:** measure CPU with Settings open on Appearance (target: about 3% or less) and with it hidden (idle).
+  - **K12:** use the About privacy bullets verbatim in the README.
 
 ## Lane B notes
 

@@ -18,8 +18,10 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     private const float IdleSettleSeconds = 1.75f;
     // Doc 05 §3: new album colors, or a switch between album and manual colors, crossfade over 800 ms; a manual color
     // edit over 200 ms, so a color picker feels live but smooth.
-    private static readonly TimeSpan AlbumFade = TimeSpan.FromMilliseconds(800);
-    private static readonly TimeSpan ManualEditFade = TimeSpan.FromMilliseconds(200);
+    internal static readonly TimeSpan AlbumFade = TimeSpan.FromMilliseconds(800);
+    internal static readonly TimeSpan ManualEditFade = TimeSpan.FromMilliseconds(200);
+    // What the light engine hears while the glow doesn't follow music, also when Settings keeps the analyzer running.
+    private static readonly AudioFeatures Silence = new(0, 0, 0, true);
 
     private readonly LoopbackCapture capture;
     private readonly NowPlayingService? media;
@@ -37,6 +39,9 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     private bool paletteChanged;
     private float filledRatio = float.NaN;
     private float silentSeconds;
+    private int audioWanted;   // written by the UI thread (Settings' meter and preview), read once per frame
+    private long latestAudio;  // AudioReading.Pack of the last frame's features, read by the UI thread
+    private int audioSequence;
 
     /// <summary>Creates the source (on any thread); <see cref="NextFrame"/> then runs on the overlay thread.</summary>
     /// <param name="settings">The initial settings.</param>
@@ -55,6 +60,17 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         applied = settings;
     }
 
+    /// <summary>The analyzer's features from the latest frame. Safe to read from any thread.</summary>
+    public AudioReading LatestAudio => AudioReading.Unpack(Volatile.Read(ref latestAudio));
+
+    /// <summary>
+    /// Keeps the loopback stream open and the analyzer running (at least 10 times a second) even when the glow doesn't
+    /// need audio (Idle Glow, Off, paused), while Settings shows the level meter or the preview. Safe to call from any
+    /// thread; ask the overlay for a frame afterwards (<see cref="OverlayHost.RequestFrame"/>) so a stopped loop notices.
+    /// </summary>
+    /// <param name="wanted">True while something shows the audio.</param>
+    public void SetAudioWanted(bool wanted) => Volatile.Write(ref audioWanted, wanted ? 1 : 0);
+
     public OverlayFrame NextFrame(float dtSeconds, Settings settings, bool paused, Span<float> gradient)
     {
         if (!ReferenceEquals(settings, applied)) ApplySettings(settings);
@@ -67,13 +83,14 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
             ShowPalette(settings, AlbumFade);
         }
 
-        // Audio matters only in music sync while the glow is on and not paused. Otherwise the capture is closed
-        // (no audio thread work at all) and the analyzer hears silence.
+        // Audio matters only in music sync while the glow is on and not paused, or while Settings shows it. Otherwise
+        // the capture is closed (no audio thread work at all) and the analyzer hears silence.
         bool listen = settings.Enabled && settings.Animation == AnimationMode.MusicSync && !paused;
-        if (listen != listening)
+        bool wanted = Volatile.Read(ref audioWanted) != 0;
+        if ((listen || wanted) != listening)
         {
-            listening = listen;
-            capture.SetActive(listen);
+            listening = listen || wanted;
+            capture.SetActive(listening);
         }
 
         CapturedAudio? latest = capture.Current;
@@ -89,10 +106,13 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         int count = audio?.Read(samples) ?? 0;
         AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), audio?.SampleRate ?? FallbackSampleRate, dtSeconds);
         silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
+        audioSequence = AudioReading.Next(audioSequence);
+        Volatile.Write(ref latestAudio, AudioReading.Pack(in features, audioSequence));
 
         bool crossfading = blender.IsAnimating;
         blender.Update(dtSeconds);
-        LightState state = engine.Update(dtSeconds, in features, palette, settings, paused);
+        // Only music sync hears the audio; a meter in Settings must not change the glow.
+        LightState state = engine.Update(dtSeconds, listen ? features : Silence, palette, settings, paused);
 
         // Refill after every SetTarget, after every update that was animating before it (so the crossfade's last
         // frame is uploaded too, H-006), and when the ratio changes.
@@ -105,16 +125,16 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
             filledRatio = state.Ratio;
         }
 
-        return new OverlayFrame(state, refill, Motion(listen, in features, settings));
+        return new OverlayFrame(state, refill, Motion(listen, wanted, in features, settings));
     }
 
     // How the glow will change: the overlay draws music at the full rate, breathing at 10 fps, and stops drawing a
-    // static glow (listening on at 10 Hz when music could bring it back).
-    private FrameMotion Motion(bool listen, in AudioFeatures features, Settings settings)
+    // static glow (listening on at 10 Hz when music could bring it back, or while Settings shows the audio).
+    private FrameMotion Motion(bool listen, bool wanted, in AudioFeatures features, Settings settings)
     {
         // A crossfade changes the colors every frame, even on a glow that is otherwise static.
         if (blender.IsAnimating) return FrameMotion.Full;
-        if (engine.IsStatic) return listen ? FrameMotion.Listening : FrameMotion.Still;
+        if (engine.IsStatic) return listen || wanted ? FrameMotion.Listening : FrameMotion.Still;
         if (!listen) return FrameMotion.Slow; // Idle Glow (or a fade the overlay sees as fast change)
         bool idle = features.IsSilent && silentSeconds >= IdleSettleSeconds && settings.WhenSilent == SilentBehavior.IdleGlow;
         return idle ? FrameMotion.Slow : FrameMotion.Full;
@@ -146,10 +166,12 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         paletteChanged = true;
     }
 
-    private static bool UsesAlbumColors(Settings settings) =>
+    /// <summary>Whether the glow shows the album colors (when there are any) rather than the manual ones.</summary>
+    internal static bool UsesAlbumColors(Settings settings) =>
         settings.ColorMode == ColorMode.AlbumArt && !settings.OverrideAlbumColor;
 
-    private static Palette ManualPalette(Settings settings)
+    /// <summary>The settings' manual colors; the default palette's for a color that isn't valid hex.</summary>
+    internal static Palette ManualPalette(Settings settings)
     {
         Rgb primary = SrgbHex.TryParse(settings.PrimaryHex, out Rgb a) ? a : Palette.Default.Primary;
         Rgb secondary = SrgbHex.TryParse(settings.SecondaryHex, out Rgb b) ? b : Palette.Default.Secondary;

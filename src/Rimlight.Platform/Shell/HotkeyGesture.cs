@@ -27,17 +27,22 @@ public enum HotkeyModifiers
 /// </summary>
 /// <remarks>
 /// A shortcut needs Ctrl, Alt or Win, so it never takes a key away from typing (Shift+A would steal capital A).
-/// Function keys may go without, except F12, which Windows reserves for the debugger. K7's shortcut recorder can turn
-/// a pressed key into a gesture with <see cref="TryCreate"/> (WPF's <c>KeyInterop.VirtualKeyFromKey</c> gives the
-/// virtual-key code) and store its <see cref="ToString"/>.
+/// Function keys may go without, except F12, which Windows reserves for the debugger. Windows' own window and task
+/// keys (Alt+F4, Alt+Tab, Alt+Esc, Alt+Space, Ctrl+Esc, Ctrl+Shift+Esc) are refused too: RegisterHotKey would take
+/// them away from every app. The settings window's shortcut recorder turns a pressed key into a gesture with
+/// <see cref="TryCreate"/> (WPF's <c>KeyInterop.VirtualKeyFromKey</c> gives the virtual-key code).
 /// </remarks>
 /// <param name="Modifiers">The modifier keys.</param>
 /// <param name="VirtualKey">The Windows virtual-key code of the key.</param>
 public readonly record struct HotkeyGesture(HotkeyModifiers Modifiers, int VirtualKey)
 {
     private const int F1 = 0x70;
+    private const int F4 = 0x73;
     private const int F12 = 0x7B;
     private const int F24 = 0x87;
+    private const int Tab = 0x09;
+    private const int Escape = 0x1B;
+    private const int Space = 0x20;
 
     // Key names by virtual-key code. The first name of a code is the canonical one; the others are accepted aliases.
     private static readonly (string Name, int Key)[] Names = BuildNames();
@@ -85,13 +90,14 @@ public readonly record struct HotkeyGesture(HotkeyModifiers Modifiers, int Virtu
 
     /// <summary>
     /// Whether a combination may be a global shortcut: Ctrl, Alt or Win must be part of it, except for the function
-    /// keys F1–F24 (not F12 alone).
+    /// keys F1–F24 (not F12 alone), and it must not be one of Windows' window and task keys.
     /// </summary>
     /// <param name="modifiers">The modifier keys.</param>
     /// <param name="virtualKey">The Windows virtual-key code.</param>
     /// <returns>True when allowed.</returns>
     public static bool IsAllowed(HotkeyModifiers modifiers, int virtualKey)
     {
+        if (IsSystemKey(modifiers, virtualKey)) return false;
         if ((modifiers & (HotkeyModifiers.Ctrl | HotkeyModifiers.Alt | HotkeyModifiers.Win)) != 0) return true;
         bool functionKey = virtualKey is >= F1 and <= F24;
         return functionKey && !(virtualKey == F12 && modifiers == HotkeyModifiers.None);
@@ -119,6 +125,19 @@ public readonly record struct HotkeyGesture(HotkeyModifiers Modifiers, int Virtu
         if (Modifiers.HasFlag(HotkeyModifiers.Shift)) text.Append("Shift+");
         if (Modifiers.HasFlag(HotkeyModifiers.Win)) text.Append("Win+");
         return text.Append(KeyName(VirtualKey) ?? $"0x{VirtualKey:X2}").ToString();
+    }
+
+    // Close window, switch apps (also backwards), cycle windows, window menu, Start, Task Manager.
+    private static bool IsSystemKey(HotkeyModifiers modifiers, int virtualKey)
+    {
+        const HotkeyModifiers Alt = HotkeyModifiers.Alt;
+        const HotkeyModifiers AltShift = HotkeyModifiers.Alt | HotkeyModifiers.Shift;
+        return (virtualKey, modifiers) switch
+        {
+            (F4, Alt) or (Tab, Alt) or (Tab, AltShift) or (Escape, Alt) or (Escape, AltShift) or (Space, Alt) => true,
+            (Escape, HotkeyModifiers.Ctrl) or (Escape, HotkeyModifiers.Ctrl | HotkeyModifiers.Shift) => true,
+            _ => false,
+        };
     }
 
     private static HotkeyModifiers ParseModifier(string token)
