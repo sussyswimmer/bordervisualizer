@@ -37,6 +37,24 @@
   - **Known limit, follows doc 03 as written:** a slow fade-out or fade-in, or a breakdown that empties one band (e.g. no bass for 15 s), still drops that band's floor by tens of dB. The next 20–40 s are then compressed toward 1 (Level ≈ 0.9 after an 8 s fade, against 0.46). Options for the sync point 2 tuning round: limit each band's floor relative to its peak, raise the floor faster when the value sits far above it, or hold a band while it is far below its own decayed peak.
   - **Left for C2:** the no-packet policy (stale window on empty spans), and bass resolution at 96/192 kHz with N = 2048.
 
+- [x] C2 spectral-flux beat detector, silence detection, `AnalyzerDiagnostics`, live `AudioTuning`, real `IAudioAnalyzer` + zero-alloc tests (made by Claude Code on Maxwell's instruction while Codex was idle; stacked on the C1 PR) — effort: M
+  - **Results (procedural signals only):**
+    - Kick tracks at 90/120/128/174 BPM are found within ±0.6 BPM at 44.1 and 48 kHz with ±20 % frame jitter, and every expected beat is detected.
+    - A music-like mix (kick, bass line, hats, pad, vocal tones) tracks at 124 ± 2 BPM.
+    - There are 0 beats on 60 s of white noise at three levels (0 in 8 min across seeds during tuning), and 0 on silence or missing packets.
+    - Beats are volume-invariant at −20 dB.
+    - 0 bytes per frame across 800/735/0/1/2048/5000-sample feeds and sample-rate changes.
+  - **Spec clarifications** (AGENTS.md standard 1):
+    - **Flux units:** flux and `Diagnostics.Spectrum` are in amplitude units (|X|·4/N, so a full-scale sine centered on a bin reads ≈ 1). `MinFlux` uses the same units.
+    - **Median onset guard** (`MedianOnsetRatio` = 10, internal): a beat also needs flux > 10 × the median flux of the history window. Without it, mean + 1.5σ fires several times a second on steady white noise, because the bass band spans only ~5 bins and its flux is heavy-tailed. Noise peaks at about 7.4× median, while kicks sit at ≥ 16× even under heavy noise. Sensitivity relaxes it like k: `1 + 9 / Sensitivity`. At Sensitivity 2, white noise gives about one false beat per 7 s. It could become an `AudioTuning` field at the next approved contract change.
+    - **Warm-up:** no beats until a quarter of `FluxHistorySeconds` of flux history exists.
+    - **Beat history:** frames without new samples add no entry to the beat history.
+    - **No packets:** after `NoPacketTimeoutSeconds`, missing packets are fed as zeros, so the spectrum, auto-gain hold and `IsSilent` behave as for digital silence. Level never rises during a gap, and `IsSilent` arrives 0.1 s + 2 s after the last packet.
+    - **`IsSilent`:** uses the RMS of each frame's new samples, entering below −60 dBFS after `SilenceHoldMs` and exiting above −55 dBFS.
+    - **Sensitivity:** applied once, in the analyzer. It divides k and the onset ratio and multiplies Level (clamped to 0..1). C6 must not apply it again (H-007).
+    - **Diagnostics:** one history entry per `Process` call, oldest first. `EstimatedBpm` is the median of the last 16 beat intervals up to 2 s. A `WindowSize` change reallocates inside the `Tuning` setter, resets, and replaces `Diagnostics`. Invalid tuning throws and keeps the previous value. A non-finite or negative dt is treated as 0.
+  - **Factory and fakes:** `CoreFactory.CreateAnalyzer` now returns `AudioAnalyzer`, and `FakeAnalyzer` is deleted. `FakeLightEngine` now uses Brightness × (0.35 + 0.65 × Level), so the glow keeps its floor with the real analyzer until C6 (H-007).
+
 ## Lane B — Claude Code
 
 - [x] K0 scaffold — by Codex — effort: M (validation details below)

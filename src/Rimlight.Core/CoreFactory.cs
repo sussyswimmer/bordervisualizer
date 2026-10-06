@@ -1,3 +1,4 @@
+using Rimlight.Core.Audio;
 using Rimlight.Core.Fakes;
 
 namespace Rimlight.Core;
@@ -5,10 +6,10 @@ namespace Rimlight.Core;
 /// <summary>The sole construction seam for Platform and App; K0 returns development fakes.</summary>
 public static class CoreFactory
 {
-    /// <summary>Creates a synthetic 120 BPM analyzer until C2 lands.</summary>
+    /// <summary>Creates the real audio analyzer: FFT, auto-gain, spectral-flux beats and silence detection (doc 03).</summary>
     /// <param name="tuning">Optional initial tuning parameters.</param>
     /// <returns>A new analyzer.</returns>
-    public static IAudioAnalyzer CreateAnalyzer(AudioTuning? tuning = null) => new FakeAnalyzer(tuning);
+    public static IAudioAnalyzer CreateAnalyzer(AudioTuning? tuning = null) => new AudioAnalyzer(tuning);
     /// <summary>Creates an average-color extractor until C4 lands.</summary>
     /// <returns>A new extractor.</returns>
     public static IPaletteExtractor CreatePaletteExtractor() => new FakePaletteExtractor();
