@@ -13,6 +13,8 @@ internal sealed record SoakOptions
     public double Jitter { get; init; } = 0.2;
     public double PacketSeconds { get; init; } = 0.01;
     public ulong Seed { get; init; } = 1;
+    /// <summary>Simulated seconds processed before measuring starts (JIT and tier-up happen there).</summary>
+    public double WarmupSeconds { get; init; } = 5;
     /// <summary>Simulated minutes between progress lines; 0 = ten lines per run.</summary>
     public double ReportEveryMinutes { get; init; }
 }
@@ -22,7 +24,8 @@ internal sealed record SoakSnapshot(double SimulatedSeconds, long Frames, double
 
 // Simulated-time soak: a long synthetic track streamed through the analyzer the way the render loop feeds it (jittered
 // frames, whole capture packets), as fast as the CPU allows. Only Process is timed and allocation-counted; the track
-// is generated between frames and needs no memory. C12 extends this run (light engine once C6 lands, 8-hour default,
+// is generated between frames and needs no memory. The first WarmupSeconds are processed but not measured, so JIT
+// and tier-up don't count as frame cost. C12 extends this run (light engine once C6 lands, 8-hour default,
 // docs/PERF.md); the frame loop, the constant-memory histogram and the snapshots are its structure.
 internal static class SoakRun
 {
@@ -38,9 +41,11 @@ internal static class SoakRun
 
         var cost = new LatencyHistogram();
         var snapshots = new List<SoakSnapshot>();
-        int gen0 = GC.CollectionCount(0), gen1 = GC.CollectionCount(1), gen2 = GC.CollectionCount(2);
-        double time = 0, end = track.Length / (double)options.SampleRate, nextReport = reportEvery;
+        int gen0 = 0, gen1 = 0, gen2 = 0;
+        double time = 0, end = track.Length / (double)options.SampleRate;
+        double warmup = Math.Min(options.WarmupSeconds, end / 2), nextReport = warmup + reportEvery;
         long position = 0, allocated = 0;
+        bool measuring = false;
         while (time < end)
         {
             double dt = 1 / options.Fps * (1 + options.Jitter * random.NextSigned());
@@ -48,6 +53,16 @@ internal static class SoakRun
             long arrived = Math.Min(track.Length, (long)(time * options.SampleRate) / packet * packet);
             int count = track.Read(buffer.AsSpan(0, (int)Math.Max(0, arrived - position)));
             position += count;
+            if (!measuring && time >= warmup)
+            {
+                measuring = true;
+                (gen0, gen1, gen2) = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+            }
+            if (!measuring)
+            {
+                analyzer.Process(buffer.AsSpan(0, count), options.SampleRate, (float)dt);
+                continue;
+            }
 
             long bytes = GC.GetAllocatedBytesForCurrentThread();
             long start = Stopwatch.GetTimestamp();

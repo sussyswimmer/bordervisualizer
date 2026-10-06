@@ -9,6 +9,8 @@ internal sealed record AnalyzerBenchmarkOptions
     public int SampleRate { get; init; } = 48000;
     public double Fps { get; init; } = 60;
     public int WarmupFrames { get; init; } = 2000;
+    /// <summary>Keep warming up at least this long, so tiered JIT has installed optimized code before timing.</summary>
+    public double MinWarmupSeconds { get; init; } = 0.5;
     public int Frames { get; init; } = 10000;
 }
 
@@ -40,7 +42,9 @@ internal static class AnalyzerBenchmark
         IAudioAnalyzer analyzer = CoreFactory.CreateAnalyzer();
         int offset = 0;
 
-        for (int i = 0; i < options.WarmupFrames; i++) Process(analyzer, signal, ref offset, frameSamples, usable, options.SampleRate, dt);
+        long warmupStart = Stopwatch.GetTimestamp();
+        for (int i = 0; i < options.WarmupFrames || Stopwatch.GetElapsedTime(warmupStart).TotalSeconds < options.MinWarmupSeconds; i++)
+            Process(analyzer, signal, ref offset, frameSamples, usable, options.SampleRate, dt);
 
         var cost = new LatencyHistogram();
         int beatsBefore = analyzer.Diagnostics.BeatCount;

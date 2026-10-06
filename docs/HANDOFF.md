@@ -1,5 +1,31 @@
 # Handoff
 
+## [OPEN] H-012 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
+**Need:** `AnalyzerDiagnostics.EstimatedBpm` (the median of the last 16 beat intervals) is biased when the render loop is steady. Beats are only seen at frame times, so the intervals are whole frames and the median picks one of the two neighbouring values.
+**Repro:**
+- Run `wav-analyze generate t.wav --bpm 174 --seconds 30`, then `wav-analyze t.wav --no-plot` (60 fps, no jitter).
+- At a steady 60 fps the analyzer reads:
+
+  | True tempo | Analyzer reads |
+  |---|---|
+  | 126 BPM | 124.1 |
+  | 128 BPM | 128.6 |
+  | 140 BPM | 138.5 |
+  | 174 BPM | 171.4 (outside doc 03's ±2) |
+
+- With `--jitter 0.2`, which is what the C2 tests use, the error dithers away (126.1, 127.9, 140.2, 173.5). A waitable swap chain is much steadier than ±20 %, so the K8 visualizer will show the bias.
+- The tool's own tempo (median, then the mean of the intervals within ±25 % of it) reads 126.0, 128.0, 140.0 and 174.0.
+**Proposed:** In `BeatDetector`, after the median, average the stored intervals within ±25 % of it. The buffer is already sorted, so this needs no allocation. Then add a no-jitter tempo test at 126 and 174 BPM. Display-only today: no light behavior depends on `EstimatedBpm`.
+---
+## [OPEN] H-011 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
+**Need:** K8's "Copy params as JSON" should produce what `wav-analyze --tuning` reads, so a tuned feel can be replayed offline and handed back for the default re-tune (sync point 2).
+**Format:**
+- One flat JSON object whose keys are `AudioTuning` property names. Any subset is allowed, and missing keys keep their defaults.
+- Keys are case-insensitive. Unknown keys are errors. Comments and trailing commas are allowed.
+- `System.Text.Json.JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })` with default naming already produces this. Copy every property, not only the changed ones, so the JSON stays valid if a default changes.
+- Reference implementation: `tools/audio-tools/TuningJson.cs`.
+**Proposed:** K8 serializes the live `analyzer.Tuning` this way. Mark DONE in the K8 PR.
+---
 ## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
@@ -14,6 +40,7 @@
 3. Add `* text=auto eol=lf` (plus `*.ico binary`) in `.gitattributes`.
 4. Add `<WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>` in `Directory.Build.props`.
 5. Add a `tools/Directory.Build.props` that imports the `src` one.
+**Progress:** item 5 is done in C3 (#13): `tools/Directory.Build.props` imports `src/Directory.Build.props`, so the tools build with nullable enabled, warnings as errors and the same `AppName`/`Version`. Items 1–4 are still open.
 ---
 ## [OPEN] H-009 · from: claude-code · to: codex, maxwell · blocking: C7 (consumed by K6/K7)
 **Need:** Rules for the free-form `Settings` fields that Lane B writes and C7 validates, plus one product decision for Maxwell.

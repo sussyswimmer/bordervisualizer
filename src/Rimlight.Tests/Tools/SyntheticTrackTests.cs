@@ -70,7 +70,7 @@ public sealed class SyntheticTrackTests
         // C12 streams hours of audio from it on the measured thread.
         var track = new SyntheticTrack(new SyntheticTrackOptions { Seconds = 60 }.WithFullMix());
         float[] buffer = new float[800];
-        track.Read(buffer);
+        for (int i = 0; i < 100; i++) track.Read(buffer); // past the tier-up call counts
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 500; i++) track.Read(buffer);
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);

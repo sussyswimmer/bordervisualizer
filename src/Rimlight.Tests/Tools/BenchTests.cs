@@ -9,7 +9,7 @@ public sealed class BenchTests
     [Fact]
     public void AnalyzerAllocatesNothingPerFrameAtFortyEightKilohertzAndSixtyFps()
     {
-        var options = new AnalyzerBenchmarkOptions { WarmupFrames = 300, Frames = 1500 };
+        var options = new AnalyzerBenchmarkOptions { WarmupFrames = 300, MinWarmupSeconds = 0, Frames = 1500 };
         foreach (string scenario in AnalyzerBenchmark.Scenarios)
         {
             BenchmarkResult result = AnalyzerBenchmark.Run(scenario, options);
@@ -24,11 +24,11 @@ public sealed class BenchTests
     public void SoakReportsSnapshotsWithoutAllocating()
     {
         var reported = new List<SoakSnapshot>();
-        IReadOnlyList<SoakSnapshot> snapshots = SoakRun.Run(new SoakOptions { Minutes = 0.25, ReportEveryMinutes = 0.05 }, reported.Add);
+        IReadOnlyList<SoakSnapshot> snapshots = SoakRun.Run(new SoakOptions { Minutes = 0.25, WarmupSeconds = 3, ReportEveryMinutes = 0.05 }, reported.Add);
         Assert.Equal(snapshots, reported);
-        Assert.InRange(snapshots.Count, 5, 6);
+        Assert.InRange(snapshots.Count, 4, 5);                              // every 3 s after the 3 s warm-up
         Assert.Equal(15, snapshots[^1].SimulatedSeconds, 1);
-        Assert.InRange(snapshots[^1].Frames, 15 * 60 - 20, 15 * 60 + 20);
+        Assert.InRange(snapshots[^1].Frames, 12 * 60 - 20, 12 * 60 + 20);  // only measured frames count
         Assert.All(snapshots, s => Assert.Equal(0, s.BytesPerFrame));
         Assert.True(snapshots[^1].Beats > 20);
         Assert.Contains("B/frame", SoakRun.Format(snapshots[^1]));

@@ -17,10 +17,11 @@ internal static class BenchCli
             --rate <Hz>          Sample rate (default 48000)
             --fps <n>            Frames per second; one frame of audio per call (default 60)
             --frames <n>         Measured frames per scenario (default 10000)
-            --warmup <n>         Unmeasured frames first (default 2000)
+            --warmup <n>         Unmeasured frames first (default 2000, and at least 0.5 s)
           soak [options]       Simulated-time run over a long synthetic track, with progress lines
             --minutes <n>        Simulated minutes (default 1)
             --rate <Hz>  --fps <n> (60)  --jitter <f> (0.2)  --packet-ms <ms> (10)  --seed <n> (1)
+            --warmup-seconds <s> Simulated seconds run before measuring starts (default 5)
             --report-every <min> Simulated minutes between progress lines (default: ten lines)
 
         Exit codes: 0 success, 1 allocations found on the measured path, 2 bad command line.
@@ -71,7 +72,7 @@ internal static class BenchCli
             WarmupFrames = a.Integer("warmup", 2000, 0, 10_000_000),
         };
         int frameSamples = (int)Math.Round(options.SampleRate / options.Fps);
-        output.WriteLine(string.Create(C, $"Analyzer benchmark: {options.SampleRate} Hz, {options.Fps:0.##} fps ({frameSamples} samples per frame), {options.WarmupFrames} warm-up + {options.Frames} measured frames per scenario"));
+        output.WriteLine(string.Create(C, $"Analyzer benchmark: {options.SampleRate} Hz, {options.Fps:0.##} fps ({frameSamples} samples per frame), {options.WarmupFrames} warm-up frames (at least {options.MinWarmupSeconds:0.#} s) + {options.Frames} measured frames per scenario"));
         output.WriteLine(Machine());
         output.WriteLine();
         output.WriteLine("| scenario | mean ns/frame | p50 | p99 | max | bytes/frame | core % | GCs (0/1/2) | beats | signal |");
@@ -92,7 +93,7 @@ internal static class BenchCli
 
     private static int Soak(string[] args, TextWriter output)
     {
-        var a = new CommandLine(args, ["minutes", "rate", "fps", "jitter", "packet-ms", "seed", "report-every"], []);
+        var a = new CommandLine(args, ["minutes", "rate", "fps", "jitter", "packet-ms", "seed", "warmup-seconds", "report-every"], []);
         if (a.Positional.Count != 0) throw new UsageException($"Unexpected argument \"{a.Positional[0]}\".");
         var options = new SoakOptions
         {
@@ -102,9 +103,10 @@ internal static class BenchCli
             Jitter = a.Number("jitter", 0.2, 0, 0.9),
             PacketSeconds = a.Number("packet-ms", 10, 0, 1000) / 1000,
             Seed = a.Seed("seed", 1),
+            WarmupSeconds = a.Number("warmup-seconds", 5, 0, 3600),
             ReportEveryMinutes = a.Number("report-every", 0, 0, 48 * 60),
         };
-        output.WriteLine(string.Create(C, $"Soak: {options.Minutes:0.##} simulated minutes of synthetic music (124 BPM full mix), {options.SampleRate} Hz, {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.PacketSeconds * 1000:0.#} ms packets"));
+        output.WriteLine(string.Create(C, $"Soak: {options.Minutes:0.##} simulated minutes of synthetic music (124 BPM full mix), {options.SampleRate} Hz, {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.PacketSeconds * 1000:0.#} ms packets, first {options.WarmupSeconds:0.#} s not measured"));
         output.WriteLine(Machine());
         IReadOnlyList<SoakSnapshot> snapshots = SoakRun.Run(options, s => output.WriteLine(SoakRun.Format(s)));
         bool allocationFree = snapshots.Count > 0 && snapshots[^1].BytesPerFrame == 0;

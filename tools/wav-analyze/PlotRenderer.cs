@@ -84,7 +84,7 @@ internal static class PlotRenderer
 
         float top = header;
         var x = new Func<double, float>(t => (float)(Left + (t - from) / (to - from) * plotWidth));
-        (double step, Func<double, string> label) = TimeTicks(to - from, plotWidth);
+        (double step, Func<double, string> label, string axisTitle) = TimeTicks(to - from, plotWidth);
         for (int p = 0; p < panels.Count; p++)
         {
             Panel panel = panels[p];
@@ -95,7 +95,7 @@ internal static class PlotRenderer
             {
                 for (double t = Math.Ceiling(from / step) * step; t <= to + 1e-9; t += step)
                     canvas.DrawText(label(t), x(t), rect.Bottom + 18, SKTextAlign.Center, fonts.Small, secondary);
-                canvas.DrawText("time (s)", Left + plotWidth / 2, rect.Bottom + 40, SKTextAlign.Center, fonts.Small, secondary);
+                canvas.DrawText(axisTitle, Left + plotWidth / 2, rect.Bottom + 40, SKTextAlign.Center, fonts.Small, secondary);
             }
         }
 
@@ -289,13 +289,13 @@ internal static class PlotRenderer
     }
 
     // Tick spacing of at least ~90 px; labels as seconds, or m:ss past two minutes.
-    private static (double Step, Func<double, string> Label) TimeTicks(double seconds, float plotWidth)
+    private static (double Step, Func<double, string> Label, string AxisTitle) TimeTicks(double seconds, float plotWidth)
     {
         double[] steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600];
         double step = steps.FirstOrDefault(s => s / seconds * plotWidth >= 90, steps[^1]);
-        if (step < 1) return (step, t => t.ToString("0.0", C));
-        if (seconds > 120) return (step, t => $"{(int)(t / 60)}:{(int)Math.Round(t % 60):00}");
-        return (step, t => t.ToString("0", C));
+        if (step < 1) return (step, t => t.ToString("0.0", C), "time (s)");
+        if (seconds > 120) return (step, t => $"{(long)Math.Round(t) / 60}:{(long)Math.Round(t) % 60:00}", "time (m:ss)");
+        return (step, t => t.ToString("0", C), "time (s)");
     }
 
     private static double NiceStep(double rough)
