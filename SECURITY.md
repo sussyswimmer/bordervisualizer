@@ -20,7 +20,7 @@ Security fixes go into the next release, and only the latest release is supporte
 2. Click **Report a vulnerability**, or go straight to the [private report form](https://github.com/sussyswimmer/bordervisualizer/security/advisories/new).
 3. Describe the problem: the Rimlight version (Settings > About), your Windows version and build (run `winver`), the steps or a proof of concept, and what an attacker could do with it.
 
-Only you and the maintainers can see the report. If you don't see the **Report a vulnerability** button, open an issue that says only that you have a security report to share, with no details, and the maintainer will set up a private channel with you.
+Only you and the maintainers can see the report. If you don't see the **Report a vulnerability** button, or the form doesn't open, [ask for a private contact](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=private_contact.yml) instead. That issue is public, so leave out every detail, and the maintainer will set up a private channel with you.
 
 What happens next:
 

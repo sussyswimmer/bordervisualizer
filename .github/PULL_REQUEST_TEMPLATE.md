@@ -1,7 +1,7 @@
 <!--
 Title: a Conventional Commit with the task ID if there is one, for example
 `feat(overlay): K1 click-through glow overlays` or `fix(audio): keep beats at low volume`.
-It becomes the squash commit on main and sets the labels for the release notes.
+It sets the labels for the release notes.
 -->
 
 ## What and why

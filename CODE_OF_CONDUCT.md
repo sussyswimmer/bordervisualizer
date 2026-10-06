@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement, the maintainer [@sussyswimmer](https://github.com/sussyswimmer), privately: on this repository's **Security** tab, choose [Report a vulnerability](https://github.com/sussyswimmer/bordervisualizer/security/advisories/new) and start the title with "Conduct report". Only the maintainers can read these reports. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement, the maintainer [@sussyswimmer](https://github.com/sussyswimmer), privately: on this repository's **Security** tab, choose [Report a vulnerability](https://github.com/sussyswimmer/bordervisualizer/security/advisories/new) and start the title with "Conduct report". Only the maintainers can read these reports. If that form doesn't open for you, [ask for a private contact](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=private_contact.yml) without giving any details, and the maintainer will set up a private channel with you. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

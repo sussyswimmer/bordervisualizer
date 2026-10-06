@@ -4,7 +4,7 @@ Thanks for helping out. A clear bug report with logs is as useful as a pull requ
 
 - **Something broken?** [Report a bug](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml).
 - **An idea?** [Suggest a feature](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=feature_request.yml).
-- **A security problem?** Please don't open an issue. Follow [SECURITY.md](SECURITY.md) instead.
+- **A security problem?** Please don't describe it in an issue. Follow [SECURITY.md](SECURITY.md) instead.
 
 Everyone who takes part agrees to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -82,7 +82,7 @@ New here? You don't need to learn the lanes in depth. Keep each pull request to 
 
 ## Branches, commits and pull requests
 
-- One change per branch and per pull request into `main`. Pull requests are squash-merged, so the pull request title becomes the commit on `main`.
+- One change per branch and per pull request into `main`. Pull requests are squash-merged.
 - Branch names: `claude/<task-id>-<slug>` or `codex/<task-id>-<slug>` for the planned tasks in doc 09 (for example `claude/k4-now-playing`), and a short descriptive name for anything else (`fix/tray-menu-keyboard`).
 - Commit messages and pull request titles use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `type(scope): summary`, for example `feat(overlay): reassert topmost after wake` or `fix(audio): keep beats at low volume`.
   - Types: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `build`, `ci`, `chore`.
