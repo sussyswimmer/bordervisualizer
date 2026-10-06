@@ -343,16 +343,18 @@ public sealed class OverlayHost : IDisposable
             }
 
             if (gpu is null) continue;
-            try
+            if (overlay.Surface is null) TryCreateSurface(overlay);
+            else
             {
-                if (overlay.Surface is null)
-                    overlay.Surface = new OverlaySurface(gpu, overlay.Window.Handle, overlay.Window.Width, overlay.Window.Height);
-                else
+                try
+                {
                     overlay.Surface.Resize(overlay.Window.Width, overlay.Window.Height);
-            }
-            catch (Exception exception) when (exception is SharpGenException or COMException)
-            {
-                ReleaseGpu($"surface for {monitor.DeviceName} failed: {exception.Message}");
+                }
+                catch (Exception exception) when (exception is SharpGenException or COMException)
+                {
+                    overlay.ReleaseSurface();
+                    OnSurfaceFailure(overlay, exception);
+                }
             }
         }
 
@@ -387,7 +389,10 @@ public sealed class OverlayHost : IDisposable
         {
             gpu = GpuDevice.Create();
             foreach (Overlay overlay in overlays)
-                overlay.Surface = new OverlaySurface(gpu, overlay.Window.Handle, overlay.Window.Width, overlay.Window.Height);
+            {
+                TryCreateSurface(overlay);
+                if (gpu is null) return; // the device was lost while creating surfaces; retried later
+            }
             CommitComposition();
             gradientUploaded = false;
             nextHardwareProbeMs = Environment.TickCount64 + HardwareProbeMs;
@@ -402,6 +407,28 @@ public sealed class OverlayHost : IDisposable
     }
 
     private void CommitComposition() => gpu!.Composition.Commit().CheckError();
+
+    // A surface that fails while the device is fine (an odd size, one window's DirectComposition target) leaves only
+    // that monitor without a glow until the next rebuild; only a real device loss starts the whole GPU over.
+    private void TryCreateSurface(Overlay overlay)
+    {
+        try
+        {
+            overlay.Surface = new OverlaySurface(gpu!, overlay.Window.Handle, overlay.Window.Width, overlay.Window.Height);
+        }
+        catch (Exception exception) when (exception is SharpGenException or COMException)
+        {
+            OnSurfaceFailure(overlay, exception);
+        }
+    }
+
+    private void OnSurfaceFailure(Overlay overlay, Exception exception)
+    {
+        if (GpuDevice.IsDeviceLost(exception) || !gpu!.IsHealthy)
+            ReleaseGpu($"surface for {overlay.Monitor.DeviceName} failed: {exception.Message}");
+        else
+            Trace.WriteLine($"[OverlayHost] No glow on {overlay.Monitor.DeviceName} until the next display change: {exception.Message}");
+    }
 
     // Drops every GPU object after a device loss (or a failed setup); EnsureGpu rebuilds them on the next frame.
     // The windows stay, so nothing moves or flashes on screen except one or two missing frames. A second release
