@@ -146,7 +146,7 @@
     1. Make sure K9 is merged and `main` is green.
     2. Run `git tag v1.0.0` on `main`, then `git push origin v1.0.0`. Push only the tag; don't create the release in the GitHub UI, or the publish job's `gh release create` fails.
     3. Bumping `<Version>` in `src/Directory.Build.props` is optional. The tag sets the release version; the props value only sets local and dry-run packs.
-    4. The run takes about 15 minutes.
+    4. The pack job takes about 3 minutes, and the publish job uploads about 650 MB.
   - **If a release run fails:**
     - If `publish` fails, delete the draft release (keep the tag) and use "Re-run failed jobs".
     - If `pack` fails, fix the problem, then delete and re-push the tag (`git push --delete origin v1.0.0`).
@@ -170,7 +170,12 @@
   - **Upload options.** The `vpk upload github` options parse, and `VPK_TOKEN` satisfies `--token`. This was checked against a non-existent repo, so no release was touched.
   - **Lint.** actionlint 1.7.12 with shellcheck 0.11.0 reports 0 problems. All YAML and JSON files parse. PSScriptAnalyzer only flags `Write-Host`, which this console build script uses on purpose.
   - **Tests and build.** Pester: 31/31 (reverting the vpk fix fails 2). Full `.sln` Release build: 0 warnings. `dotnet test`: 165 passed.
-  - **Not run here:** a native Windows pack (#21's dry run covers it), signing, and the publish job, which needs a real tag.
+  - **Windows dry run on #21** ([run 37451291615](https://github.com/sussyswimmer/bordervisualizer/actions/runs/37451291615)):
+    - SDK 8, windows-latest. Build, the 165 tests and the native vpk pack all pass. The pack job takes 2.5 min; the pack itself 35 s.
+    - Output: `RimlightSetup.exe` 83.0 MB, `RimlightSetup-arm64.exe` 77.2 MB, `Rimlight-win-Portable.zip` 75.7 MB, `Rimlight-win-arm64-Portable.zip` 71.5 MB.
+    - The `packages` artifact holds 14 files, 645 MB. The publish job was skipped, as it should be for a pull request.
+    - The Linux CI job ran the Pester tests.
+  - **Not run:** signing, and the publish job, which needs a real tag.
 - **Follow-ups:**
   - **Delta updates.** Running `vpk download github --channel <c>` into `artifacts/releases` before packing (and not wiping that folder) would make vpk build deltas. Turning that on later doesn't break existing installs.
   - **K9** removes the dry run's `-SkipVelopackAppCheck` (H-014).
