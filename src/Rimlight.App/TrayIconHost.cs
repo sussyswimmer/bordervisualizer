@@ -12,8 +12,8 @@ using Rimlight.Platform.Overlay;
 namespace Rimlight.App;
 
 /// <summary>
-/// Owns the notification-area icon: placeholder icon, the now-playing tooltip, "Glow on", "Mode" and Quit, plus a test
-/// submenu in Debug builds. The full menu (doc 06 §2) arrives in K6. Use it on the UI thread only.
+/// Owns the notification-area icon: placeholder icon, the now-playing tooltip, "Glow on", "Mode", "Colors" and Quit,
+/// plus a test submenu in Debug builds. The full menu (doc 06 §2) arrives in K6. Use it on the UI thread only.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
@@ -22,6 +22,7 @@ internal sealed class TrayIconHost : IDisposable
     private readonly string toolTipSuffix;
     private readonly MenuItem glowOn;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
+    private readonly (MenuItem Item, ColorMode Mode)[] colorModes;
 #if DEBUG
     private readonly DebugMenu debug;
 #endif
@@ -40,6 +41,10 @@ internal sealed class TrayIconHost : IDisposable
         var mode = new MenuItem { Header = "Mode" };
         modes = [Choice(mode, "Music Sync", AnimationMode.MusicSync), Choice(mode, "Idle Glow", AnimationMode.IdleGlow), Choice(mode, "Off", AnimationMode.Off)];
         menu.Items.Add(mode);
+
+        var colors = new MenuItem { Header = "Colors" };
+        colorModes = [ColorChoice(colors, "From album art", ColorMode.AlbumArt), ColorChoice(colors, "Manual", ColorMode.Manual)];
+        menu.Items.Add(colors);
         menu.Items.Add(new Separator());
 
 #if DEBUG
@@ -94,6 +99,14 @@ internal sealed class TrayIconHost : IDisposable
         return (item, mode);
     }
 
+    private (MenuItem, ColorMode) ColorChoice(MenuItem parent, string header, ColorMode mode)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => Update(s => s with { ColorMode = mode });
+        parent.Items.Add(item);
+        return (item, mode);
+    }
+
     private void Update(Func<Settings, Settings> change) => app.SettingsService.Update(change);
 
     // Check marks follow the current settings each time the menu opens.
@@ -102,6 +115,7 @@ internal sealed class TrayIconHost : IDisposable
         Settings current = app.SettingsService.Current;
         glowOn.IsChecked = current.Enabled;
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
+        foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
 #if DEBUG
         debug.Refresh(current);
 #endif
@@ -109,8 +123,8 @@ internal sealed class TrayIconHost : IDisposable
 
 #if DEBUG
     // "Render test (debug)": the render loop's live status, what the media session reader sees, settings without a
-    // settings window yet (K7), and stand-ins for the system watchers (K5): battery, a global pause and a per-monitor
-    // pause.
+    // settings window yet (K7: When silent, Override album color, FPS cap, On battery), and stand-ins for the system
+    // watchers (K5): battery, a global pause and a per-monitor pause.
     private sealed class DebugMenu
     {
         private readonly AppController app;
@@ -118,6 +132,7 @@ internal sealed class TrayIconHost : IDisposable
         private readonly MenuItem status = new() { IsEnabled = false };
         private readonly MenuItem media = new() { IsEnabled = false };
         private readonly MenuItem hideWhenSilent = new() { Header = "When silent: Hide" };
+        private readonly MenuItem overrideAlbum = new() { Header = "Override album color" };
         private readonly (MenuItem Item, int Cap)[] caps;
         private readonly (MenuItem Item, BatteryBehavior Behavior)[] batteryBehaviors;
         private readonly MenuItem onBattery = new() { Header = "Simulate running on battery" };
@@ -141,6 +156,9 @@ internal sealed class TrayIconHost : IDisposable
                 WhenSilent = s.WhenSilent == SilentBehavior.Hide ? SilentBehavior.IdleGlow : SilentBehavior.Hide,
             });
             Root.Items.Add(hideWhenSilent);
+
+            overrideAlbum.Click += (_, _) => update(s => s with { OverrideAlbumColor = !s.OverrideAlbumColor });
+            Root.Items.Add(overrideAlbum);
 
             var fps = new MenuItem { Header = "FPS cap" };
             caps = [Cap(fps, "30", 30), Cap(fps, "60", 60), Cap(fps, "120", 120), Cap(fps, "Native (display refresh)", 0)];
@@ -186,6 +204,7 @@ internal sealed class TrayIconHost : IDisposable
             status.Header = app.Overlays is { } overlays ? Describe(overlays.Status) : "The overlay is not running";
             media.Header = Describe(app.Media);
             hideWhenSilent.IsChecked = current.WhenSilent == SilentBehavior.Hide;
+            overrideAlbum.IsChecked = current.OverrideAlbumColor;
             foreach ((MenuItem item, int cap) in caps) item.IsChecked = current.FpsCap == cap;
             foreach ((MenuItem item, BatteryBehavior behavior) in batteryBehaviors) item.IsChecked = current.OnBattery == behavior;
             onBattery.IsChecked = simulatedBattery;
