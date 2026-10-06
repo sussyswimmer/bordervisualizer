@@ -74,7 +74,7 @@
 - [x] K1 Overlay windows, D3D11 + DirectComposition, `Glow.hlsl`, multi-monitor/DPI, device-loss recovery, topmost re-assert — PR #8 — effort: L (notes below; Windows manual test pending)
 - [x] K2 `LoopbackCapture` + lock-free ring buffer + device-change restart. Render thread drains the ring → `IAudioAnalyzer` (real since C2) — PR #9 — effort: M (notes below; Windows manual test pending)
 - [x] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale — PR #14 — effort: L (notes below; Windows manual test pending)
-- [ ] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip
+- [x] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip — PR #18 — effort: M (notes below; Windows manual test pending)
 - [ ] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause
 - [ ] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow
 - [ ] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names
@@ -233,6 +233,62 @@
     - fades jumped up to 100 ms ahead when an input arrived between 10 fps frames
     - vsync on a faster secondary monitor could exceed the cap
   - Nothing has run on Windows yet: Maxwell's checklist, with CPU measurement steps, is in #14.
+
+## K4 notes
+
+- **Structure:**
+  - `NowPlayingService` (`src/Rimlight.Platform/Media/`) reads Windows' media sessions on the thread pool.
+    - `RequestAsync` runs once. If it throws, `IsAvailable` is false and the glow keeps the manual colors for the session.
+    - Manager events (`CurrentSessionChanged`, `SessionsChanged`) and every session's `MediaPropertiesChanged` and `PlaybackInfoChanged` only schedule a refresh. `RefreshScheduler` debounces them: 250 ms after the last event, and at least once a second under a stream of events. One refresh runs at a time.
+    - A refresh picks the playing session (Windows' current one if several play, or if none plays) and reads its properties. The track ID is `app|artist|title`. The thumbnail is decoded and passed to `IPaletteExtractor`.
+  - Published, immutable and by reference: `Current` (`NowPlaying`), `AlbumPalette` (null = manual colors), `Art` (≤ 64×64 straight-alpha BGRA8, for K7's "Now playing" row). `NowPlayingChanged` and `AlbumArtChanged` fire on the pool only on real changes.
+  - `AlbumArtDecoder`: `BitmapDecoder` with a `BitmapTransform` (Fant, ≤ 64 px on the long side, aspect kept, never enlarged), `Bgra8`/`Straight`, EXIF and color profile ignored. Rows are repacked to exactly width × height × 4 bytes, which the real extractor (C4) requires.
+  - `MusicGlowSource` reads `AlbumPalette` once per frame.
+    - Album colors are used in Album Art mode without Override; the manual colors otherwise, and whenever there is no album palette.
+    - `SetTarget` gets 800 ms for album changes and album/manual switches, 200 ms for manual edits. It reports `Full` motion while the blender animates.
+  - `OverlayHost.RequestFrame()` wakes a static glow for a new palette.
+  - `TrayToolTip` builds the tooltip, and `AppController` marshals it to the UI thread (coalesced) and disposes the service first.
+  - The tray menu gains doc 06's "Colors ▸". Debug builds add a media status line and an "Override album color" toggle.
+- **Spec clarifications and deviations (doc 05 §1, §3; doc 06 §2):**
+  - **`BitmapAlphaMode.Straight`** (doc 05 says "premultiplied-ignore"): the extractor reads straight color and skips alpha < 128, and `Ignore` leaves the alpha byte undefined.
+  - **The tooltip names the track only while it plays**; paused reads "Waiting for music". Doc 05 exposes `IsPlaying` for the tooltip.
+  - **Tooltip text:**
+    - It is cut to 127 UTF-16 units (NOTIFYICONDATA.szTip) between whole text elements, with "…". The title gives way before the artist.
+    - Control characters become spaces.
+    - A failed `Shell_NotifyIcon` update is caught (H.NotifyIcon throws).
+  - **No art → manual colors** (doc 05 also allows keeping the previous palette). While a new track's art is read (up to about 1 s, including the 750 ms retry), the previous colors stay, so tracks never flash the manual colors in between. A track without a palette is read again on its later events, because some apps send a generic icon first and the cover later.
+  - **200 ms only for a manual edit while manual colors show**; every switch between album and manual colors uses 800 ms.
+  - **Robustness additions:**
+    - All sessions are subscribed, so a session that starts playing is noticed even if Windows keeps another one current.
+    - The debounce waits at most 1 s.
+    - Properties and decodes are bounded at 5 s.
+    - A session manager whose process died (RPC disconnected, e.g. an Explorer restart) is requested again every 5 s.
+  - `NowPlaying.SourceApp` is the raw `SourceAppUserModelId`. Track text is never logged.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Every WinRT, CsWinRT, H.NotifyIcon and WPF call was checked against the decompiled assemblies:
+    - the SDK projection 10.0.19041.57
+    - `AsTask(token)` only cancels the operation, hence `WaitAsync`
+    - `EventSource` add/remove semantics
+    - `TrayIcon.UpdateToolTip` throws, and `SetTo` truncates at 127
+    - `Dispatcher.InvokeAsync` after shutdown
+  - The real C4 extractor accepts the decoded layout and rejects padded rows.
+  - **Scratch harness (not committed), 73 checks:**
+    - session choice, decode sizing and repacking, and tooltip fitting over 20,000 random titles with emoji, ZWJ and combining marks
+    - the `SrgbHex` round trip
+    - scheduler timings (debounce, burst, endless stream, retry, 4-thread hammering)
+    - the unavailable path on Linux
+    - `MusicGlowSource`'s full palette-selection matrix with a recording blender, including 0 bytes per frame
+  - The harness found one scheduler bug, fixed before the PR: a compare-and-swap claim could spin forever under a stream of events.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #18.
+- **Left for later:**
+  - **K6:**
+    - Re-apply the tooltip after `TaskbarCreated` (Explorer restart). A tooltip update refused by the shell is otherwise retried only on the next track.
+    - Check whether a single `&` shows in the tooltip.
+  - **K7:**
+    - The "Now playing" row reads `Current` and `Art` (compare `Art.TrackId` with `Current.TrackId` to hide stale art), with swatches via `SrgbHex.Format`.
+    - Subscribe to the two events and marshal them to the dispatcher.
+  - **C4/C5 (via K10):** with the fakes, colors are averaged, never "no art", and switch instantly.
 
 ## Lane B notes
 
