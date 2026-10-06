@@ -1,5 +1,6 @@
 using Rimlight.Core.Audio;
 using Rimlight.Core.Fakes;
+using Rimlight.Core.Lighting;
 
 namespace Rimlight.Core;
 
@@ -46,9 +47,53 @@ public static class CoreFactory
     /// <param name="initial">Initial palette.</param>
     /// <returns>A new blender.</returns>
     public static IPaletteBlender CreatePaletteBlender(Palette initial) => new FakePaletteBlender(initial);
-    /// <summary>Creates a simple linear light engine until C6 lands.</summary>
+    /// <summary>Creates the real light engine: doc 07 Phase 3 intensity, beat pulse and phase drift, Idle Glow
+    /// breathing, and every fade (doc 01 §2, doc 04 §4).</summary>
     /// <returns>A new light engine.</returns>
-    public static ILightEngine CreateLightEngine() => new FakeLightEngine();
+    /// <remarks>
+    /// <para>Call each instance from one thread only: the render thread, which may own one per monitor (see below); a
+    /// Settings preview may own another. <see cref="ILightEngine.Update"/> never allocates, reads no clock and is
+    /// deterministic. A negative or non-finite dtSeconds counts as 0, a step over 0.1 s counts as 0.1 s, and the first
+    /// step that moves time, on a new engine or after a static frame, counts at most 1/60 s, so neither a stall, a slow
+    /// start nor a renderer waking from idle makes the light jump. Non-finite or out-of-range audio, colors and settings
+    /// are clamped, or replaced by 0 or the <see cref="Settings"/> default; every output is finite and in range. A null
+    /// palette or settings throws.</para>
+    /// <para><b>Intensity and Visibility (H-008 item 2, binding).</b> <see cref="LightState.Intensity"/> excludes
+    /// <see cref="LightState.Visibility"/>; the renderer multiplies alpha by both. Intensity is
+    /// Brightness × (0.35 + 0.65 × Level) in Music Sync and Brightness × 0.9 × (1 + 0.1 × sin(2π t / 6 s)) in
+    /// Idle Glow (breathing between 81 % and 99 % of Brightness). Level already carries Sensitivity, which the engine
+    /// never applies again (H-007). Visibility carries every fade: pause, Enabled = false and Animation = Off fade out
+    /// and back in over 300 ms; in Music Sync with WhenSilent = Hide, <see cref="AudioFeatures.IsSilent"/> fades out
+    /// over 1.5 s, keeping the look it starts with (Idle Glow too), and sound brings it back within 150 ms. With
+    /// WhenSilent = IdleGlow, IsSilent instead crossfades Intensity, Pulse and the drift to Idle Glow over 1.5 s and
+    /// back within 150 ms, and Visibility stays 1. Switching between Music Sync and Idle Glow uses the same crossfade.
+    /// A new engine starts at Visibility 0 and fades in over 300 ms. All fades are smoothstep-eased.</para>
+    /// <para><b>Other fields.</b> ColorA and ColorB are the palette's Primary and Secondary (pass the palette last given to
+    /// <see cref="IPaletteBlender.SetTarget"/>; the gradient carries the crossfade). Ratio is PrimaryRatio clamped to
+    /// 0.1..0.9, Spread is Glow (0..1, mapped to pixels by the renderer) and CoreThicknessDip is clamped to 0..40.
+    /// Pulse is Beat, unsmoothed, times the Music Sync weight. Phase is in [0, 1): it drifts 0.015 cycles/s, and each
+    /// beat (Beat rising by more than 0.1; it re-arms once Beat falls) adds 0.01 cycles as a push that decays with
+    /// τ = 120 ms. Idle Glow has no drift and no pulse.</para>
+    /// <para><b>IsStatic.</b> True only while the light is hidden and stays hidden for the same inputs: the 300 ms gate
+    /// fade has finished (paused, Enabled = false, Animation = Off), or, in Music Sync with WhenSilent = Hide, the 1.5 s
+    /// silence fade has. It turns true on the second such Update in a row, so the frame that reaches Visibility 0 is
+    /// still presented. While it is true nothing moves with time: Update returns the same state for the same inputs
+    /// whatever dtSeconds is, and how many calls it gets changes nothing later, so the renderer may stop presenting and
+    /// stop calling. It turns false on the very Update whose inputs can show the light again (even with
+    /// dtSeconds = 0): unpaused, Enabled, Animation not Off, IsSilent cleared, or WhenSilent or Animation no longer
+    /// hiding silence. Changes that cannot show the light (palette, Glow, Brightness and other appearance fields, Level,
+    /// Beat) leave it true. Every visible state moves (Music Sync drifts, Idle Glow breathes), so it is never true while
+    /// anything is visible.</para>
+    /// <para><b>Renderer guidance (doc 02).</b> While Music Sync hides silence, keep feeding the analyzer and calling
+    /// Update at a low rate, or the return of sound goes unnoticed. In Off, disabled or paused, only a settings or pause
+    /// change can wake it. Idle Glow (Animation = IdleGlow, or Music Sync with WhenSilent = IdleGlow from 1.5 s after
+    /// IsSilent) changes only through the 6 s breathing, so 10 fps is enough there.</para>
+    /// <para><b>Per-monitor pause (doc 04 §4).</b> <c>paused</c> is one flag per engine, so give each overlay its own
+    /// engine, all updated on the render thread with the same audio, palette and settings and that monitor's flag. An
+    /// Update costs well under a microsecond and allocates nothing. Stop rendering only while every engine reports
+    /// IsStatic. A new engine fades in over 300 ms, which also suits a monitor plugged in later.</para>
+    /// </remarks>
+    public static ILightEngine CreateLightEngine() => new LightEngine();
     /// <summary>Creates an in-memory settings stub until C7 lands; no file is written.</summary>
     /// <param name="directory">Directory for the eventual settings file.</param>
     /// <returns>A new settings store.</returns>
