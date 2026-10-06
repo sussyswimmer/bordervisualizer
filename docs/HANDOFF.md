@@ -1,6 +1,82 @@
 # Handoff
 
-## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
+## [OPEN] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
+**Need:** `AnalyzerDiagnostics.EstimatedBpm` (the median of the last 16 beat intervals) is biased when the render loop is steady. Beats are only seen at frame times, so the intervals are whole frames and the median picks one of the two neighbouring values.
+**Repro:**
+- Run `wav-analyze generate t.wav --bpm 174 --seconds 30`, then `wav-analyze t.wav --no-plot` (60 fps, no jitter).
+- At a steady 60 fps the analyzer reads:
+
+  | True tempo | Analyzer reads |
+  |---|---|
+  | 126 BPM | 124.1 |
+  | 128 BPM | 128.6 |
+  | 140 BPM | 138.5 |
+  | 174 BPM | 171.4 (outside doc 03's ±2) |
+
+- With `--jitter 0.2`, which is what the C2 tests use, the error dithers away (126.1, 127.9, 140.2, 173.5). A waitable swap chain is much steadier than ±20 %, so the K8 visualizer will show the bias.
+- The tool's own tempo (median, then the mean of the intervals within ±25 % of it) reads 126.0, 128.0, 140.0 and 174.0.
+**Proposed:** In `BeatDetector`, after the median, average the stored intervals within ±25 % of it. The buffer is already sorted, so this needs no allocation. Then add a no-jitter tempo test at 126 and 174 BPM. Display-only today: no light behavior depends on `EstimatedBpm`.
+---
+## [OPEN] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
+**Need:** K8's "Copy params as JSON" should produce what `wav-analyze --tuning` reads, so a tuned feel can be replayed offline and handed back for the default re-tune (sync point 2).
+**Format:**
+- One flat JSON object whose keys are `AudioTuning` property names. Any subset is allowed, and missing keys keep their defaults.
+- Keys are case-insensitive. Unknown keys are errors. Comments and trailing commas are allowed.
+- `System.Text.Json.JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })` with default naming already produces this. Copy every property, not only the changed ones, so the JSON stays valid if a default changes.
+- Reference implementation: `tools/audio-tools/TuningJson.cs`.
+**Proposed:** K8 serializes the live `analyzer.Tuning` this way. Mark DONE in the K8 PR.
+---
+## [OPEN] H-014 · from: claude-code (C9) · to: claude-code (Lane B: K9, K6, logging, K12) · blocking: K9 (the first release)
+**Need:** What the app must do now that `build/pack.ps1` packs it with Velopack. The setup is vpk 1.2.161, packId `Rimlight`, install root `%LocalAppData%\Rimlight`, and channels `win` (x64) and `win-arm64`.
+1. **K9, required before the first tag:**
+   - **Package.** Add the `Velopack` NuGet package at 1.2.161, the vpk version in `.config/dotnet-tools.json` (MIT). vpk warns when the two differ.
+   - **Entry point.** `VelopackApp.Build().Run()` must be the first statement of `Main`. WPF generates `Main` from `App.xaml`, so:
+     - Add a `[STAThread] Program.Main` that runs `VelopackApp.Build().Run()`, then `new App()`, `InitializeComponent()` and `Run()`.
+     - Make `App.xaml` a `Page` instead of the `ApplicationDefinition`.
+     - Without the call, vpk's entry-point check fails the pack ("Unable to verify VelopackApp is called"; reproduced on the C9 branch). A tag pushed before K9 therefore stops in the pack job, before anything is published.
+   - **Dry run.** Then delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch of `.github/workflows/release.yml`. The K9 PR changes `src/Rimlight.App`, so it runs the release dry run, which then checks the entry point.
+   - **Updates.** Use `new UpdateManager(new GithubSource("https://github.com/sussyswimmer/bordervisualizer", null, false))` with no explicit channel: each install reads its own channel's feed. `IsInstalled` is false in a dev run, so skip update checks there.
+   - **AUMID.** `VelopackApp` already sets the process AUMID to the shortcuts' `velopack.Rimlight`.
+2. **K6:**
+   - **Run order.** Velopack starts `Rimlight.exe` with hook arguments on install, update and uninstall. `VelopackApp.Run()` handles those and exits, so it must run before the single-instance mutex and the tray icon exist.
+   - **Startup entry.** Velopack removes only its own shortcuts and uninstall key. Remove the HKCU `Run` startup value in `OnBeforeUninstallFastCallback` (30 s limit).
+   - **Startup path.** Point the `Run` value at `%LocalAppData%\Rimlight\Rimlight.exe`, Velopack's stable launcher, not `current\Rimlight.exe` (doc 06 §4).
+3. **Logging (answers C11's H-013 item 4):** Velopack owns `%LocalAppData%\Rimlight`.
+   - Uninstall deletes that folder: `Update.exe` logs "Removing directory" and "Scheduling removal of install directory".
+   - Setup shows its overwrite/repair dialog when the folder already exists.
+   - Doc 02's `%LOCALAPPDATA%\Rimlight\logs\` is inside it. Logs would therefore be deleted on uninstall, although doc 07 Phase 6 says they stay. A dev run before the first install would also trigger that dialog.
+   - **Proposed:** `%APPDATA%\Rimlight\logs`, next to `settings.json`. Update doc 02, `CONTRIBUTING.md` and the bug form in the same PR.
+4. **K12:**
+   - **Asset names** on every release: `RimlightSetup.exe`, `RimlightSetup-arm64.exe`, `Rimlight-win-Portable.zip` and `Rimlight-win-arm64-Portable.zip`. Link them as `releases/latest/download/<name>`.
+   - **Release notes** start with `.github/release-notes-intro.md`. Put the demo GIF at its top, with an absolute URL (doc 08 §5).
+   - **Signing.** When signing is turned on, drop the SmartScreen sentence there and in the README.
+**Repro:** On the current app, `pwsh build/pack.ps1 -Runtimes win-x64` without `-SkipVelopackAppCheck` fails at vpk's check.
+**Proposed:** K9 does item 1 and the hook wiring in item 2, K6 the `Run` value, the logging task item 3, and K12 item 4. Mark this DONE in the K9 PR.
+---
+## [OPEN] H-013 · from: claude-code (C11) · to: claude-code (Lane B: logging, K6, K7, K9, K12), codex · blocking: none
+**Need:** C11's user-facing docs name UI strings and paths that Lane B hasn't built yet. Keep them as written, or update the files in the same PR that changes them.
+1. Logs live in `%LOCALAPPDATA%\Rimlight\logs`, at most five files of 1 MB (doc 02). The tray item is named exactly **Open logs folder** (doc 06 §2). Logs never contain audio.
+2. The version is shown in **Settings > About**. **Hide from screen capture** and auto-update are under **Settings > Behavior** (doc 06 §3).
+3. Settings are in `%APPDATA%\Rimlight\settings.json` (doc 02).
+4. **Please verify (K9/C9):** Velopack installs to `%LOCALAPPDATA%\{packId}` by default. If the pack ID is `Rimlight`, the logs folder sits inside the install root, which uninstall may delete. Doc 07 Phase 6 says uninstall keeps the settings and logs folders.
+**Repro:** `.github/ISSUE_TEMPLATE/bug_report.yml` (Logs, Rimlight version and screenshot fields), `CONTRIBUTING.md` ("Reporting a bug with logs"), `SECURITY.md` (Supported versions, Reporting).
+**Proposed:** Lane B keeps these names, or edits the three files when it renames one. K12's README FAQ "How do I report a bug?" links the bug form and CONTRIBUTING's "Reporting a bug with logs" section. For item 4, choose a logs location that survives uninstall, or change doc 07's promise.
+---
+## [OPEN] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
+**Need:** Use the icons C10 generated (PR #15).
+1. **K6, tray while the glow is off (doc 06 §2):** `src/Rimlight.App/Assets/Rimlight-dim.ico` is the app icon at 50 % opacity and is already a WPF `Resource`.
+   - When `Enabled` changes, swap `TaskbarIcon.IconSource` between `pack://application:,,,/Assets/Rimlight.ico` and `…/Rimlight-dim.ico`.
+   - Create both `BitmapImage`s once, after the `Application` exists. Deriving the dim icon at runtime also works, but the file needs no code.
+   - H.NotifyIcon converts `IconSource` with `System.Drawing.Icon` at the DPI-scaled small-icon size, so the tray shows the 16/20/24/32 px images (from `assets/icon-small.svg`).
+   - Also drop "placeholder icon" from the `TrayIconHost` summary. C10 left that file alone because the K1/K3 branches edit the same line.
+2. **K12:**
+   - `assets/icon-512.png` is doc 08's `icon.png (512)`, and `icon-256.png` is also available.
+   - The banner can reuse `assets/icon.svg`'s recipe: the gradient `#7C5CFF`→`#22D3EE` from top left to bottom right, the screen colors `#16141F`→`#0A0A0F`, and the rim, halo and inward spill.
+   - After editing either SVG, run `build/icons.sh` (or `icons.ps1`). `CommittedIconsTests` fails until the icons are regenerated.
+**Repro:** n/a.
+**Proposed:** K6 and K12 pick these up. Mark this DONE once the tray uses the dim icon.
+---
+## [DONE] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
 1. No `global.json`, so `LangVersion=latest` means C# 12 on the .NET 8 SDK (Codex) but C# 13/14 on a .NET 9/10 SDK (a typical Visual Studio install). Code can compile on one machine and fail on the other, and newer SDKs bring new analyzer warnings, which `TreatWarningsAsErrors` turns into errors.
@@ -14,22 +90,39 @@
 3. Add `* text=auto eol=lf` (plus `*.ico binary`) in `.gitattributes`.
 4. Add `<WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>` in `Directory.Build.props`.
 5. Add a `tools/Directory.Build.props` that imports the `src` one.
+**Resolved (C8, PR [#10](https://github.com/sussyswimmer/bordervisualizer/pull/10)):**
+1. `global.json` sets SDK `8.0.100` as the minimum with `rollForward: latestMajor` and `allowPrerelease: false`, instead of the proposed `latestFeature`. Maxwell's newer Visual Studio SDK builds without installing SDK 8.
+   - To make builds SDK-independent, `src/Directory.Build.props` pins `LangVersion` 12 and `AnalysisLevel` 8.0. A .NET 9/10 SDK then compiles the same C# with the same analyzer rules and warning wave. On SDK 8 nothing changes: `EffectiveAnalysisLevel` 8.0 and `WarningLevel` 8, before and after.
+   - CI covers both ends: the Linux job uses exactly SDK 8, and the Windows job uses the runner's newest SDK.
+2. `Rimlight.Core.slnf` uses backslash paths. `dotnet build` and `dotnet test` of it work on Linux (0 warnings, 165 tests), and the Windows CI job built it with Windows MSBuild (SDK 10.0.401) with 0 warnings on #10.
+3. `.gitattributes`: `* text=auto eol=lf`, CRLF for `*.cmd`/`*.bat`, and image/media/binary types marked `binary`. Renormalizing changed no committed file.
+4. `WarningsNotAsErrors` NU1900–NU1904, as proposed. Verified with a vulnerable test package: NU1903 is a warning with the line and an error without it. Maxwell should enable Dependabot alerts so advisories are still seen.
+5. `tools/Directory.Build.props` imports `../src/Directory.Build.props`. Verified that a tools project gets AppName, Nullable, LangVersion 12 and TreatWarningsAsErrors.
+- Branches that add projects to the `.slnf` or add `tools/Directory.Build.props` (C3, C10): on rebase, write the new entries with backslashes and keep C8's props file. The Linux CI job fails on a forward slash in a `.slnf` project path.
+**Progress (C3, #13):** item 5 is done in C3 too: `tools/Directory.Build.props` imports `src/Directory.Build.props`, so the tools build with nullable enabled, warnings as errors and the same `AppName`/`Version`. C8 resolved items 1–4; the integration branch keeps C8's version of the file.
 ---
-## [OPEN] H-009 · from: claude-code · to: codex, maxwell · blocking: C7 (consumed by K6/K7)
+## [DONE] H-009 · from: claude-code · to: codex, maxwell · blocking: C7 (consumed by K6/K7)
 **Need:** Rules for the free-form `Settings` fields that Lane B writes and C7 validates, plus one product decision for Maxwell.
 1. `ToggleHotkey`: Lane B writes `Modifier+…+Key` using the names `Ctrl`, `Alt`, `Shift`, `Win` and a key name (e.g. `Ctrl+Alt+L`). An empty string means "no hotkey". Please treat the value as opaque in C7: only replace `null` with the default, and don't reject strings Core can't parse. Platform owns parsing and reports registration failures in the UI (doc 06 §4).
 2. `CustomMonitorIds`: opaque `DISPLAY_DEVICE.DeviceID` strings (doc 06 §1), compared ordinally. Keep entries for monitors that are currently unplugged, so selections survive re-plugging. Only drop `null` or empty entries.
 3. **Decision for Maxwell, presets vs album art:** in the default Album Art mode a color-only preset is invisible, and doc 06 lists Minimal as "Idle Glow" (a motion change) although presets are "appearance only". The Lane B suggestion is that every preset also sets `OverrideAlbumColor = true` (the user's `ColorMode` is kept, and turning Override off restores album colors), and that Minimal may set `Animation = IdleGlow`.
 **Proposed:** Codex confirms 1–2 in C7. Maxwell answers 3 under this entry.
+**Resolved (C7, PR #16):**
+1. `ToggleHotkey` is opaque: only null becomes `Ctrl+Alt+L`, and an empty string is kept.
+2. `CustomMonitorIds` drops only null and empty entries (and non-string JSON entries). It keeps whitespace, duplicates and unplugged IDs, compared ordinally.
+3. Maxwell settled item 3 for this run with the Lane B suggestion: every preset sets `OverrideAlbumColor = true` and keeps `ColorMode`, Minimal also sets `Animation = IdleGlow`, and otherwise presets change appearance fields only. Details are in the C7 notes in PROGRESS.md.
 ---
-## [OPEN] H-008 · from: claude-code · to: codex · blocking: C5/C6 (K1/K3 render against these)
+## [DONE] H-008 · from: claude-code · to: codex · blocking: C5/C6 (K1/K3 render against these)
 **Need:** Semantics the renderer depends on that the contract XML leaves open. Lane B will build K1/K3 this way unless you object.
 1. **`FillGradient` layout:** texel i is the color at perimeter coordinate u = (i + 0.5) / 64, before `Phase` rotation (the shader applies `frac(t + Phase)` and samples with WRAP addressing and linear filtering). The loop is seamless (texel 63 blends into texel 0). Primary covers `ratio` of the loop with soft blends about 0.08 wide at both boundaries, interpolated in Oklab (doc 04 §3 steps 4–5). RGB is linear, alpha is 1, nothing is premultiplied.
 2. **`LightState.Intensity` vs `Visibility`:** `Intensity` excludes `Visibility`. Intensity is brightness times audio/idle shaping (doc 07 Phase 3: `Brightness × (0.35 + 0.65 × Level)`, plus idle breathing). `Visibility` carries every fade: the pause fade (300 ms, doc 04 §4), `Enabled = false`, `Animation = Off`, and silence→Hide (fade out over 1.5 s, back in within 150 ms, doc 01 §2). The renderer multiplies final alpha by both.
 3. **Fake engine before C6 (soft):** `FakeLightEngine` treats Idle Glow like Music Sync, ignores silence/Hide, never drifts `Phase` and has no fades. Maxwell's K6/K7 manual tests will look wrong until C6. If C6 is far off, a small stopgap would help: idle breathing, Hide→Visibility 0 and phase drift of 0.015 cycles/s.
 **Proposed:** Confirm 1–2, or correct them, in C5/C6. 3 is optional.
+**C6 (#11):** Item 2 is implemented as written and is binding: `Intensity` excludes `Visibility`, and Visibility carries pause, `Enabled = false` and `Animation = Off` (300 ms each way) and silence→Hide (1.5 s out, 150 ms back). The semantics are in the `CoreFactory.CreateLightEngine` remarks. Item 3 is obsolete because the real engine replaced the fake. Item 1 stays open for C5.
+**C5 (#20):** Item 1 is implemented as written and is binding. Texel i is the color at u = (i + 0.5) / 64 before `Phase`. Primary covers u = 0..ratio. Both boundaries, the seam between texels 63 and 0 included, are 0.08-wide smoothstep blends mixed in Oklab. Output is linear RGB, alpha 1, not premultiplied. Ratio is clamped to 0.1..0.9 (NaN → 0.6), and out-of-gamut mixes are clamped per channel. The semantics are in the `CoreFactory.CreatePaletteBlender` remarks. With C6 (#11) answering items 2–3, this entry is done once both merge.
+**Resolved (Lane A integration, PR [#23](https://github.com/sussyswimmer/bordervisualizer/pull/23)):** C5 and C6 are both merged there, so items 1 and 2 are binding as answered above, and item 3 is obsolete.
 ---
-## [OPEN] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
+## [DONE] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
 **Need:** Analyzer-side semantics for C2.
 1. **Sensitivity is applied once, in the analyzer.** Lane B keeps `analyzer.Tuning.Sensitivity` equal to `Settings.Sensitivity`: it sets it at creation and on every settings change, never per frame. The light engine (C6) must therefore *not* apply `Settings.Sensitivity` again.
 2. **`AnalyzerDiagnostics`:**
@@ -37,6 +130,7 @@
    - Bin k sits at `k · sampleRate / WindowSize` Hz.
 3. **Fake engine once the real analyzer lands:** the doc 07 intensity floor (`0.35 + 0.65 × Level`) lives in `FakeAnalyzer` (`Level = 0.35 + 0.65·pulse`), not in `FakeLightEngine` (`Intensity = Brightness × Level`). When C2 swaps `CreateAnalyzer` to the real analyzer, real Level ≈ 0 in quiet passages gives Intensity 0 and a dark glow until C6. Please move the floor into `FakeLightEngine` in the C2 PR, or land C6 right after.
 **Proposed:** Fold these into C2. Reply here or in the C2 PR.
+**Resolved:** Items 1–3 landed in C2 (#7): Sensitivity is applied once in the analyzer, the diagnostics are documented in the `CoreFactory.CreateAnalyzer` remarks, and the fake engine got the floor. C6 (#11) completes item 1 on the engine side: `LightEngine` never reads `Settings.Sensitivity`, and the test `SensitivityIsNotAppliedAgain` guards that. The fake engine is gone.
 ---
 ## [OPEN] H-005 · from: claude-code · to: maxwell · blocking: sync point 2
 **Need:** A decision on how `AudioTuning` defaults get re-tuned. Doc 09 sync point 2 expects Codex to update them from the debug-visualizer JSON, but the values live inside the frozen `src/Rimlight.Core/Contracts/AudioTuning.cs`.
@@ -55,10 +149,11 @@
 **Proposed:** Reply in your next PR, or mark DONE with any corrections.
 **Resolved:** Codex confirmed all six in its Lane A review of #3 (https://github.com/sussyswimmer/bordervisualizer/pull/3#pullrequestreview-5416425731). C2 owns `NoPacketTimeoutSeconds` and the silence policy; a `WindowSize` change may replace `Diagnostics` in the `Tuning` setter; item 4 was then revised so Lane B never reads `Current` per frame, which keeps C5's zero-alloc test at `Update`/`FillGradient` with no exemption. Two Lane B constraints were added; see Lane B notes in PROGRESS.md.
 ---
-## [OPEN] H-003 · from: claude-code · to: codex · blocking: K6
+## [DONE] H-003 · from: claude-code · to: codex · blocking: K6
 **Need:** `Presets.All` must not throw. K6 builds the tray "Presets ▸" submenu and K7 the Settings presets row from it.
 **Repro:** `src/Rimlight.Core/Presets.cs:7-8`: the getter throws `NotImplementedException`, so any enumeration crashes the app.
 **Proposed:** Until C7 lands, return the five doc 06 §1 names (Aurora, Sunset, Neon, Ember, Minimal) with placeholder `Apply` functions (identity is fine), or an empty list. C7 then fills in the real looks.
+**Resolved:** PR #4 made the catalog empty and safe. C7 (PR #16) fills it with the five real presets in menu order, as a read-only list. Each `Apply` returns new, validated `Settings` and throws `ArgumentNullException` for null.
 ---
 
 ## [DONE] H-006 · from: codex · to: claude-code · blocking: none

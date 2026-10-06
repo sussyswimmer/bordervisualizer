@@ -1,0 +1,60 @@
+name: Feature request
+description: Suggest an idea or an improvement for Rimlight.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Describing the problem you want solved is more useful than a finished design, so start there.
+
+        Rimlight keeps everything on your PC: it listens only to system output audio (never the microphone), sends no telemetry, and its only network request is the update check. Ideas that need the microphone, an account, or sending data off your PC don't fit the project.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation and what gets in the way today.
+      placeholder: I work on one monitor and watch music videos on the other, and I'd like a calm glow on the work monitor.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should Rimlight do?
+      description: Describe the behavior you'd like. Mockups or sketches are welcome.
+      placeholder: A Mode choice per monitor in Settings > Displays, so one monitor can use Idle Glow while the other follows the music.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of Rimlight is this about?
+      multiple: true
+      options:
+        - Glow look (thickness, glow, brightness, corners)
+        - Music and beat sync
+        - Album art colors
+        - Monitors and displays
+        - Pausing (fullscreen, battery, lock)
+        - Tray menu, hotkey and Settings window
+        - Performance and battery use
+        - Install and updates
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Workarounds you use today, or other ways to solve the same problem.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues, and this hasn't been suggested yet.
+          required: true
