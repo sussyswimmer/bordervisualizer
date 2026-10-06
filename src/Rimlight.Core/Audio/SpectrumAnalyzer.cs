@@ -36,6 +36,9 @@ internal sealed class SpectrumAnalyzer
     // The supported two-sample FFT uses one-sample blocks because it has no complete quarter.
     public float QuietestQuarterRms { get; private set; }
 
+    // Time-domain RMS (before the Hann window) of the whole current window: the level the beat gate is relative to.
+    public float WindowRms { get; private set; }
+
     public void Process(ReadOnlySpan<float> samples)
     {
         // No new samples: the window, magnitudes and RMS would be recomputed bit-identically.
@@ -58,14 +61,16 @@ internal sealed class SpectrumAnalyzer
         ring.AsSpan(next).CopyTo(windowed);
         ring.AsSpan(0, next).CopyTo(windowed.AsSpan(ring.Length - next));
         int quarter = Math.Max(1, windowed.Length / 4);
-        float quietest = float.MaxValue;
+        float quietest = float.MaxValue, total = 0;
         for (int start = 0; start < windowed.Length; start += quarter)
         {
             float squares = 0;
             for (int i = start; i < start + quarter; i++) squares += windowed[i] * windowed[i];
             quietest = MathF.Min(quietest, squares);
+            total += squares;
         }
         QuietestQuarterRms = MathF.Sqrt(quietest / quarter);
+        WindowRms = MathF.Sqrt(total / windowed.Length);
         window.Apply(windowed);
         fft.Transform(windowed, real, imaginary);
         for (int k = 0; k < magnitudes.Length; k++)
@@ -79,7 +84,7 @@ internal sealed class SpectrumAnalyzer
         Array.Clear(real);
         Array.Clear(imaginary);
         Array.Clear(magnitudes);
-        QuietestQuarterRms = 0;
+        QuietestQuarterRms = WindowRms = 0;
         next = 0;
     }
 

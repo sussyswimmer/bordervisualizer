@@ -2,19 +2,18 @@ namespace Rimlight.Core.Audio;
 
 internal readonly record struct AmplitudeFeatures(float Level, float Bass);
 
-// C1 building block, deliberately not IAudioAnalyzer: C2 adds flux, beats,
-// silence and diagnostics before replacing CoreFactory's FakeAnalyzer.
+// C1 building block for Level and Bass. AudioAnalyzer (C2) wraps it with beats, silence and diagnostics.
 // One instance belongs to one render thread. All storage is allocated up front.
 internal sealed class AudioFrontEnd
 {
-    private readonly AudioTuning tuning;
+    private AudioTuning tuning;
     private readonly SpectrumAnalyzer spectrum;
     private readonly AutoGain bassGain = new();
     private readonly AutoGain midGain = new();
     private readonly AutoGain highGain = new();
     private readonly Envelope level = new();
     private readonly Envelope bass = new();
-    private readonly float holdRms;
+    private float holdRms;
     private int previousSampleRate;
 
     public AudioFrontEnd(AudioTuning? tuning = null)
@@ -26,6 +25,24 @@ internal sealed class AudioFrontEnd
     }
 
     public ReadOnlySpan<float> Spectrum => spectrum.Magnitudes;
+
+    // Time-domain RMS of the current analysis window.
+    public float WindowRms => spectrum.WindowRms;
+
+    // Live tuning (doc 03 §4). WindowSize is fixed per instance; the analyzer rebuilds the front end to change it.
+    public AudioTuning Tuning
+    {
+        get => tuning;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.WindowSize != tuning.WindowSize)
+                throw new ArgumentException("WindowSize is fixed per front end; create a new one to change it.", nameof(value));
+            Validate(value);
+            tuning = value;
+            holdRms = HoldRms(value);
+        }
+    }
 
     public AmplitudeFeatures Process(ReadOnlySpan<float> samples, int sampleRate, float dtSeconds)
     {
@@ -64,7 +81,7 @@ internal sealed class AudioFrontEnd
     // between -80 and -60 dBFS keeps adapting as doc 03 describes; doc 03's 2 s IsSilent rule is C2's concern.
     internal static float HoldRms(AudioTuning tuning) => MathF.Pow(10, (tuning.SilenceThresholdDb - 20) / 20);
 
-    private static void Validate(AudioTuning tuning)
+    internal static void Validate(AudioTuning tuning)
     {
         Positive(tuning.MagnitudeEpsilon, nameof(tuning.MagnitudeEpsilon));
         Positive(tuning.PeakHalfLifeSeconds, nameof(tuning.PeakHalfLifeSeconds));
