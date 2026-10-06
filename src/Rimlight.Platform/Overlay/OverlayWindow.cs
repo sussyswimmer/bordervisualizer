@@ -55,15 +55,33 @@ internal sealed class OverlayWindow : IDisposable
         return window;
     }
 
-    // Shows the window topmost at its rectangle without activating it. Called once its surface exists.
-    public void Show() =>
+    // False until the first visible frame, and again while the glow is hidden (Off, paused, silent with Hide), so
+    // DWM doesn't blend a transparent full-screen layer over everything, and a fullscreen game below can be flipped
+    // directly to the display.
+    public bool IsVisible { get; private set; }
+
+    // Shows the window topmost at its rectangle without activating it.
+    public void Show()
+    {
         PInvoke.SetWindowPos(Handle, HWND.HWND_TOPMOST, Bounds.left, Bounds.top, Width, Height,
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_SHOWWINDOW);
+        IsVisible = true;
+    }
 
+    public void Hide()
+    {
+        PInvoke.SetWindowPos(Handle, default, 0, 0, 0, 0,
+            SET_WINDOW_POS_FLAGS.SWP_NOMOVE | SET_WINDOW_POS_FLAGS.SWP_NOSIZE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER
+            | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_HIDEWINDOW);
+        IsVisible = false;
+    }
+
+    // Moves the window to its monitor's (new) rectangle, topmost, without changing whether it is shown.
     public void Move(RECT bounds)
     {
         Bounds = bounds;
-        Show();
+        PInvoke.SetWindowPos(Handle, HWND.HWND_TOPMOST, Bounds.left, Bounds.top, Width, Height,
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | (IsVisible ? SET_WINDOW_POS_FLAGS.SWP_SHOWWINDOW : 0));
     }
 
     // Other topmost windows can cover the overlay; this puts it back on top of the topmost band.

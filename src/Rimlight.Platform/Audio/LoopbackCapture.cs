@@ -8,7 +8,8 @@ namespace Rimlight.Platform.Audio;
 /// <summary>
 /// Captures what the default render device plays (WASAPI loopback, never the microphone) as mono floats into a
 /// lock-free ring the render thread drains (doc 03 §1, doc 02). Restarts on a default-device change, and with backoff
-/// (0.5 s → 5 s) when the device fails or disappears.
+/// (0.5 s → 5 s) when the device fails or disappears. Captures only while <see cref="SetActive"/> says audio is
+/// needed; otherwise no stream is open and the capture thread just waits.
 /// </summary>
 public sealed class LoopbackCapture : IDisposable
 {
@@ -27,6 +28,7 @@ public sealed class LoopbackCapture : IDisposable
     private readonly Thread thread;
     private readonly AutoResetEvent wake = new(false);
     private volatile bool stopping;
+    private volatile bool active;
     private int restartRequested;
     private CapturedAudio? current;
 
@@ -40,8 +42,24 @@ public sealed class LoopbackCapture : IDisposable
     /// </summary>
     public CapturedAudio? Current => Volatile.Read(ref current);
 
-    /// <summary>Starts capturing on a background thread. Errors are retried there; this never throws for them.</summary>
+    /// <summary>
+    /// Starts the capture thread. It captures once <see cref="SetActive"/> asks for audio. Errors are retried there;
+    /// this never throws for them.
+    /// </summary>
     public void Start() => thread.Start();
+
+    /// <summary>
+    /// Opens the loopback stream (true) or closes it (false), on the capture thread. While inactive nothing is
+    /// captured and no audio thread runs, so a glow that is off costs no CPU; <see cref="Current"/> is then null.
+    /// Inactive until first asked. Cheap and safe from any thread; call it when the need changes, not per frame.
+    /// </summary>
+    /// <param name="active">True while the audio is needed.</param>
+    public void SetActive(bool active)
+    {
+        if (this.active == active) return;
+        this.active = active;
+        Signal();
+    }
 
     /// <summary>Stops capturing and waits for the capture thread to finish.</summary>
     public void Dispose()
@@ -87,6 +105,13 @@ public sealed class LoopbackCapture : IDisposable
             enumerator.RegisterEndpointNotificationCallback(notifications);
             while (!stopping)
             {
+                if (!active)
+                {
+                    // Nothing needs audio: no stream, and nothing to retry. SetActive or Dispose ends the wait.
+                    failures = 0;
+                    wake.WaitOne();
+                    continue;
+                }
                 Interlocked.Exchange(ref restartRequested, 0);
                 Session? session = null;
                 long started = Stopwatch.GetTimestamp();
@@ -95,7 +120,7 @@ public sealed class LoopbackCapture : IDisposable
                     session = Session.Start(enumerator, Signal);
                     Volatile.Write(ref current, session.Audio);
                     Trace.WriteLine($"[LoopbackCapture] Capturing \"{session.Audio.DeviceName}\" ({session.Audio.Format}).");
-                    while (!stopping && Volatile.Read(ref restartRequested) == 0 && !session.Failed) wake.WaitOne();
+                    while (!stopping && active && Volatile.Read(ref restartRequested) == 0 && !session.Failed) wake.WaitOne();
                     if (session.Failed) Trace.WriteLine($"[LoopbackCapture] Capture stopped: {session.Error?.Message ?? "unknown reason"}.");
                 }
                 catch (Exception exception)
@@ -108,6 +133,7 @@ public sealed class LoopbackCapture : IDisposable
                     session?.Dispose();
                 }
                 if (stopping) break;
+                if (!active) continue; // stopped on request, not a failure: no backoff
 
                 double delaySeconds;
                 if (Volatile.Read(ref restartRequested) != 0)
@@ -147,7 +173,7 @@ public sealed class LoopbackCapture : IDisposable
     private void Wait(double seconds)
     {
         long deadline = Stopwatch.GetTimestamp() + (long)(seconds * Stopwatch.Frequency);
-        while (!stopping)
+        while (!stopping && active)
         {
             long remaining = deadline - Stopwatch.GetTimestamp();
             if (remaining <= 0) return;

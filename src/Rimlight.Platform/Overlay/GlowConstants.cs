@@ -9,6 +9,15 @@ internal struct GlowConstants : IEquatable<GlowConstants>
 {
     public const int SizeInBytes = 64;
 
+    // Below this Visibility every pixel is transparent: alpha never exceeds Visibility, and the shader returns 0 for
+    // alpha under half a code value. Overlays whose visibility falls below it are hidden.
+    public const float MinVisibility = 0.5f / 255;
+
+    // LooksLike tolerances. Brightness-like values within half an 8-bit code value draw the same pixels (and the
+    // dither hides the rest); a phase shift of 0.0002 moves the colours by about a pixel along a 4K perimeter.
+    private const float ValueTolerance = 0.5f / 255;
+    private const float PhaseTolerance = 0.0002f;
+
     // PRD §1: "Glow: how far the light spills inward. 0 means a hairline; 100 means about 35% of the shorter screen
     // dimension." Spill is taken as three e-folding distances (the glow is down to 5% there), and the slider is
     // squared so it feels even: the default 0.45 reaches about 7% of the shorter side (25 px e-folding at 1080p).
@@ -88,6 +97,18 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         return new Rgb(r / 64, g / 64, b / 64);
     }
 
+    // True when both draw the same picture: the same geometry, and values that differ by less than the eye or the
+    // 8-bit swap chain can tell. Smoothed values approach their targets asymptotically; without this tolerance a
+    // static glow would keep presenting for many seconds. Compared against the last presented frame, so slow drift
+    // still reaches the screen once it adds up.
+    public readonly bool LooksLike(in GlowConstants other) =>
+        ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
+        CornerRadiusPx == other.CornerRadiusPx && CoreThicknessPx == other.CoreThicknessPx &&
+        SpreadPx == other.SpreadPx && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
+        Near(Intensity, other.Intensity) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
+        Near(MeanRed, other.MeanRed) && Near(MeanGreen, other.MeanGreen) && Near(MeanBlue, other.MeanBlue) &&
+        PhaseNear(Phase, other.Phase);
+
     public readonly bool Equals(GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
         CornerRadiusPx == other.CornerRadiusPx && CoreThicknessPx == other.CoreThicknessPx &&
@@ -100,6 +121,15 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     public override readonly int GetHashCode() => HashCode.Combine(ScreenWidthPx, ScreenHeightPx, SpreadPx, Intensity, Pulse, Phase, Visibility);
 
     private static float Finite(float value) => float.IsFinite(value) ? value : 0;
+
+    private static bool Near(float a, float b) => MathF.Abs(a - b) <= ValueTolerance;
+
+    // Phase is a fraction of the loop, so 0.9999 and 0 are neighbours.
+    private static bool PhaseNear(float a, float b)
+    {
+        float d = MathF.Abs(a - b);
+        return MathF.Min(d, 1 - d) <= PhaseTolerance;
+    }
 
     private static float Clamp01(float value) => float.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
 

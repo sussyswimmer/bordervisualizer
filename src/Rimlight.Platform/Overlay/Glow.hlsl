@@ -11,7 +11,7 @@ cbuffer Light : register(b0)
     float  Intensity;       // 0..1
     float  Pulse;           // 0..1 beat kick
     float  Phase;           // 0..1 gradient rotation
-    float  Visibility;      // 0..1 fades (pause, off, hide); multiplies alpha like Intensity
+    float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Intensity
     float  ColorRadiusPx;   // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
     float  GlowRadiusPx;    // corner radius of the glow field (>= CornerRadiusPx), see PSMain step 2
     float  _pad0;

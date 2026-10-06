@@ -5,39 +5,55 @@ using Rimlight.Platform.Overlay;
 namespace Rimlight.App.Overlay;
 
 /// <summary>
-/// The glow driven by what's playing (K2): each frame drains the loopback capture into the analyzer and maps the
-/// features to a light state (doc 02 render-thread steps 1–2). Runs on the overlay thread only. K3 adds pacing,
-/// idling and live settings; K4 the album-art palette.
+/// The glow driven by what's playing: each frame drains the loopback capture into the analyzer and maps the features
+/// to a light state (doc 02 render-thread steps 1–2), then tells the overlay how the glow will change so it can pace
+/// itself (doc 02 "Frame pacing"). Runs on the overlay thread only. K4 adds the album-art palette.
 /// </summary>
 internal sealed class MusicGlowSource : IOverlayFrameSource
 {
     private const int FallbackSampleRate = 48000; // used while no device is captured; only empty spans are passed then
+    // In music sync, sustained silence fades to Idle Glow over 1.5 s (PRD §2); after that only slow breathing is left.
+    private const float IdleSettleSeconds = 1.75f;
+    private static readonly TimeSpan ColorChangeDuration = TimeSpan.FromMilliseconds(800); // PRD §3 crossfade
 
     private readonly LoopbackCapture capture;
     private readonly IAudioAnalyzer analyzer;
     private readonly ILightEngine engine;
     private readonly IPaletteBlender blender;
-    private readonly Palette palette;
-    private readonly Settings settings;
+    private Palette palette;
+    private Settings? applied;
     private CapturedAudio? audio;
     private float[] samples = [];
+    private bool listening;
     private bool gradientFilled;
+    private bool paletteChanged;
+    private float filledRatio = float.NaN;
+    private float silentSeconds;
 
     public MusicGlowSource(Settings settings, LoopbackCapture capture)
     {
-        this.settings = settings;
         this.capture = capture;
-        Rgb primary = SrgbHex.TryParse(settings.PrimaryHex, out Rgb a) ? a : Palette.Default.Primary;
-        Rgb secondary = SrgbHex.TryParse(settings.SecondaryHex, out Rgb b) ? b : Palette.Default.Secondary;
-        palette = new Palette(primary, secondary, null);
+        palette = ManualPalette(settings);
         blender = CoreFactory.CreatePaletteBlender(palette);
-        // Sensitivity is applied once, by the analyzer (H-007); K7 updates it when the setting changes.
-        analyzer = CoreFactory.CreateAnalyzer(new AudioTuning { Sensitivity = Math.Clamp(settings.Sensitivity, 0.25f, 2f) });
+        // Sensitivity is applied once, by the analyzer (H-007): set here and on every settings change, never per frame.
+        analyzer = CoreFactory.CreateAnalyzer(new AudioTuning { Sensitivity = ClampSensitivity(settings.Sensitivity) });
         engine = CoreFactory.CreateLightEngine();
+        applied = settings;
     }
 
-    public LightState NextFrame(float dtSeconds, Span<float> gradient, out bool gradientChanged)
+    public OverlayFrame NextFrame(float dtSeconds, Settings settings, bool paused, Span<float> gradient)
     {
+        if (!ReferenceEquals(settings, applied)) ApplySettings(settings);
+
+        // Audio matters only in music sync while the glow is on and not paused. Otherwise the capture is closed
+        // (no audio thread work at all) and the analyzer hears silence.
+        bool listen = settings.Enabled && settings.Animation == AnimationMode.MusicSync && !paused;
+        if (listen != listening)
+        {
+            listening = listen;
+            capture.SetActive(listen);
+        }
+
         CapturedAudio? latest = capture.Current;
         if (!ReferenceEquals(latest, audio))
         {
@@ -50,14 +66,58 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
 
         int count = audio?.Read(samples) ?? 0;
         AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), audio?.SampleRate ?? FallbackSampleRate, dtSeconds);
-        LightState state = engine.Update(dtSeconds, in features, palette, settings, paused: false);
+        silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
 
-        gradientChanged = !gradientFilled;
-        if (!gradientFilled)
+        bool crossfading = blender.IsAnimating;
+        blender.Update(dtSeconds);
+        LightState state = engine.Update(dtSeconds, in features, palette, settings, paused);
+
+        // Refill after every SetTarget, after every update that was animating before it (so the crossfade's last
+        // frame is uploaded too, H-006), and when the ratio changes.
+        bool refill = !gradientFilled || paletteChanged || crossfading || state.Ratio != filledRatio;
+        if (refill)
         {
             blender.FillGradient(gradient, state.Ratio);
             gradientFilled = true;
+            paletteChanged = false;
+            filledRatio = state.Ratio;
         }
-        return state;
+
+        return new OverlayFrame(state, refill, Motion(listen, in features, settings));
     }
+
+    // How the glow will change: the overlay draws music at the full rate, breathing at 10 fps, and stops drawing a
+    // static glow (listening on at 10 Hz when music could bring it back).
+    private FrameMotion Motion(bool listen, in AudioFeatures features, Settings settings)
+    {
+        if (engine.IsStatic) return listen ? FrameMotion.Listening : FrameMotion.Still;
+        if (!listen) return FrameMotion.Slow; // Idle Glow (or a fade the overlay sees as fast change)
+        bool idle = features.IsSilent && silentSeconds >= IdleSettleSeconds && settings.WhenSilent == SilentBehavior.IdleGlow;
+        return idle ? FrameMotion.Slow : FrameMotion.Full;
+    }
+
+    private void ApplySettings(Settings settings)
+    {
+        Settings? previous = applied;
+        applied = settings;
+        if (previous is null || previous.Sensitivity != settings.Sensitivity)
+            analyzer.Tuning = analyzer.Tuning with { Sensitivity = ClampSensitivity(settings.Sensitivity) };
+        if (previous is null || previous.PrimaryHex != settings.PrimaryHex || previous.SecondaryHex != settings.SecondaryHex)
+        {
+            // Manual colors until K4 brings album art (ColorMode, OverrideAlbumColor).
+            palette = ManualPalette(settings);
+            blender.SetTarget(palette, ColorChangeDuration);
+            paletteChanged = true;
+        }
+    }
+
+    private static Palette ManualPalette(Settings settings)
+    {
+        Rgb primary = SrgbHex.TryParse(settings.PrimaryHex, out Rgb a) ? a : Palette.Default.Primary;
+        Rgb secondary = SrgbHex.TryParse(settings.SecondaryHex, out Rgb b) ? b : Palette.Default.Secondary;
+        return new Palette(primary, secondary, null);
+    }
+
+    private static float ClampSensitivity(float sensitivity) =>
+        float.IsFinite(sensitivity) ? Math.Clamp(sensitivity, 0.25f, 2f) : 1f;
 }

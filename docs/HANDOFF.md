@@ -1,5 +1,13 @@
 # Handoff
 
+## [OPEN] H-011 · from: claude-code · to: codex · blocking: none (C6; K3 paces frames on these)
+**Need:** What the K3 render loop assumes about `ILightEngine.IsStatic` and the light state, so C6 lets the glow idle without visible stepping. Nothing changes in `Contracts/`.
+1. **`IsStatic` means time alone changes nothing:** with the same audio features, palette, settings and `paused`, further `Update` calls (any dt) return the same state. No breathing, drift, smoothing or fade is still moving. Lane B then stops presenting. In music sync it keeps calling `Update` about 10 times a second, so a hidden glow (When silent = Hide) comes back when music returns. Otherwise (Off, `Enabled = false`, paused) it stops calling `Update` until an input changes.
+2. **Fully hidden is `Visibility == 0`.** Anything under 0.5/255 counts as hidden: the overlay windows are then hidden, so fullscreen apps below them can flip directly to the display.
+3. **Idle Glow is drawn at 10 fps.** Breathing and phase drift should stay slow (PRD §2: ±10% over about 6 s; drift 0.015 cycles/s), at most about 0.25 per second in Intensity, Visibility, Pulse, Spread or Ratio. Faster change is detected and drawn at the full rate, but up to 100 ms late. In music sync the renderer drops to 10 fps 1.75 s after `IsSilent` turns true, so the silence → Idle Glow fade (1.5 s) should be done by then.
+4. **dt:** after a gap in frames (a static glow, or an input that wakes the loop between 10 fps frames), `Update` gets one ordinary frame's dt, not the length of the gap. Fades therefore start on the first frame after the input.
+**Proposed:** Confirm in C6, or correct here.
+---
 ## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
