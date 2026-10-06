@@ -73,12 +73,15 @@ public static class CoreFactory
     /// <see cref="IPaletteBlender.SetTarget"/> allocates nothing for a palette with channels in 0..1. A null palette
     /// throws.</para>
     /// <para><b>Crossfade.</b> <see cref="IPaletteBlender.SetTarget"/> fades from the colors displayed at that moment
-    /// (a new target in the middle of a fade carries on from there, without a jump) to the target over the duration:
-    /// Primary to Primary and Secondary to Secondary along straight lines in Oklab, smoothstep-eased (3t² − 2t³ of the
-    /// elapsed share). Each call restarts the clock. A zero or negative duration, or a target whose colors are already
-    /// displayed, switches at once. <see cref="IPaletteBlender.IsAnimating"/> is true from SetTarget until the
-    /// <see cref="IPaletteBlender.Update"/> that reaches the duration; that Update settles exactly on the target's
-    /// colors, so refill the gradient after it too (H-006). Update ignores NaN, negative and zero steps; an infinite
+    /// (a new target in the middle of a fade carries on from there, without a jump) to the target over the whole
+    /// duration: Primary to Primary and Secondary to Secondary along straight lines in Oklab. A fade from rest is
+    /// smoothstep-eased (3t² − 2t³ of the elapsed share); one that takes over while the colors are moving eases out only
+    /// (t(2 − t)), so they keep moving: calling SetTarget with 200 ms on every edit of a color drag is fine, and the glow
+    /// trails the picker by about 0.1 s. A target with the colors the running fade is heading to (the next track of the
+    /// same album) leaves that fade as it is and only changes Current's track. A zero or negative duration, or a target
+    /// whose colors are already displayed, switches at once. <see cref="IPaletteBlender.IsAnimating"/> is true from
+    /// SetTarget until the <see cref="IPaletteBlender.Update"/> that reaches the duration; that Update settles exactly
+    /// on the target's colors, so refill the gradient after it too (H-006). Update ignores NaN, negative and zero steps; an infinite
     /// step finishes the fade. Channels outside 0..1 are clamped and NaN counts as 0.</para>
     /// <para><b>Current.</b> While idle it is the palette last passed to SetTarget (or <paramref name="initial"/>), the
     /// same instance unless a channel had to be clamped, and reading it allocates nothing. During a fade it is the

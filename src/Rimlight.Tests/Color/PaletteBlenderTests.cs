@@ -255,24 +255,26 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
-    public void BlendsOutsideSrgbAreClampedPerChannel()
+    [Theory]
+    [InlineData(1f, 1f, 1f, 1f, 0f, 0f, 1f)] // white and red: half way, linear red ≈ 1.11
+    [InlineData(0f, 0f, 1f, 0f, 1f, 0f, 0f)] // blue and green: half way, linear red ≈ −0.08
+    public void BlendsOutsideSrgbAreClampedPerChannel(float r1, float g1, float b1, float r2, float g2, float b2, float clampedRed)
     {
-        // White and red mix outside sRGB in Oklab: half way is linear red ≈ 1.11. The texels are clamped to 0..1 per
-        // channel, as the shader's saturate would, and the other channels are left alone.
-        var palette = new Palette(new Rgb(1, 1, 1), new Rgb(1, 0, 0), null);
+        // Some pairs mix outside sRGB in Oklab, over 1 or under 0 in red. The texels are clamped to 0..1 per channel,
+        // as the shader's saturate would, and the other channels are left alone.
+        var palette = new Palette(new Rgb(r1, g1, b1), new Rgb(r2, g2, b2), null);
         float[] gradient = Fill(new PaletteBlender(palette), 0.5f);
         Assert.All(gradient, value => Assert.InRange(value, 0f, 1f));
 
-        Oklab white = Oklab.FromLinearSrgb(palette.Primary), red = Oklab.FromLinearSrgb(palette.Secondary);
+        Oklab primary = Oklab.FromLinearSrgb(palette.Primary), secondary = Oklab.FromLinearSrgb(palette.Secondary);
         int clamped = 0;
         for (int i = 0; i < Texels; i++)
         {
             float w = PaletteBlender.PrimaryWeight((i + 0.5f) / Texels, 0.5f);
-            Rgb raw = Mix(red, white, w).ToLinearSrgb();
-            if (w is 0 or 1 || raw.R <= 1) continue; // pure texels are the exact input colors
+            Rgb raw = Mix(secondary, primary, w).ToLinearSrgb();
+            if (w is 0 or 1 || raw.R is >= 0 and <= 1) continue; // pure texels are the exact input colors
             clamped++;
-            Assert.Equal(1f, gradient[i * 4]);
+            Assert.Equal(clampedRed, gradient[i * 4]);
             Assert.Equal(raw.G, gradient[i * 4 + 1], 1e-6f);
             Assert.Equal(raw.B, gradient[i * 4 + 2], 1e-6f);
         }
@@ -401,7 +403,8 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
             AssertGradientsClose(before, Fill(blender, 0.6f), 1e-5f);
             AssertBlend(blender.Current, shown, shown, 0f);
 
-            // Then a smooth fade to the new target, from the colors it started at.
+            // Then a smooth fade to the new target, from the colors it started at. The colors were moving, so it eases
+            // out only, t(2 − t): they keep moving from the first frame on instead of stalling, and arrive at rest.
             float[] previous = Fill(blender, 0.6f);
             int frames = 0;
             while (blender.IsAnimating)
@@ -409,15 +412,203 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
                 blender.Update(1f / 60);
                 frames++;
                 float[] now = Fill(blender, 0.6f);
-                // Smoothstep's top speed is 1.5× the average: at most 1.5 × (1/60) / 0.8 of any channel's range per frame.
-                AssertGradientsClose(previous, now, 0.032f);
+                // Its top speed is 2× the average, at the start: about 2 × (1/60) / 0.8 ≈ 0.042 of a channel's range per
+                // frame, a little more where the cubic Oklab → linear map steepens a channel (0.052 at most here). A
+                // jump would be about 0.5.
+                AssertGradientsClose(previous, now, 0.055f);
                 previous = now;
-                if (blender.IsAnimating && frames == 24) AssertBlend(blender.Current, shown, next, 0.5f, 1e-4f);
+                float t = frames / 48f;
+                // `shown` was clamped where the old fade bowed about 1e-4 over blue = 1, hence the tolerance.
+                if (blender.IsAnimating) AssertBlend(blender.Current, shown, next, t * (2 - t), 3e-4f);
             }
             Assert.Equal(48, frames); // the new fade gets its whole duration
             Assert.Same(next, blender.Current);
             Assert.Equal(Fill(new PaletteBlender(next), 0.6f), previous);
         }
+    }
+
+    [Fact]
+    public void ARetargetBeforeTheColorsMoveStillEasesIn()
+    {
+        // Two targets in the same frame (a settings change and a new album palette): the colors have not moved yet,
+        // so the second fade eases in from rest like a first one.
+        var blender = new PaletteBlender(Violet);
+        blender.SetTarget(BlueOrange, AlbumFade);
+        blender.SetTarget(PinkTeal, AlbumFade);
+        blender.Update(0.1f);
+        AssertBlend(blender.Current, Violet, PinkTeal, 0.04296875f); // smoothstep at 1/8
+
+        // Once they move, a retarget keeps them moving, and so does another one before the next frame.
+        blender.SetTarget(BlueOrange, AlbumFade);
+        Palette shown = blender.Current;
+        blender.SetTarget(Violet, AlbumFade);
+        blender.Update(0.1f);
+        AssertBlend(blender.Current, shown, Violet, 0.234375f, 1e-4f); // t(2 − t) at 1/8
+    }
+
+    [Fact]
+    public void RetargetEaseLeavesAtSpeedAndArrivesAtRest()
+    {
+        Assert.Equal(0f, PaletteBlender.EaseOut(0));
+        Assert.Equal(1f, PaletteBlender.EaseOut(1));
+        Assert.Equal(0.75f, PaletteBlender.EaseOut(0.5f));
+        Assert.Equal(0f, PaletteBlender.EaseOut(-1));
+        Assert.Equal(1f, PaletteBlender.EaseOut(2));
+        float previous = 0;
+        for (int i = 1; i <= 100; i++)
+        {
+            float t = i / 100f;
+            float e = PaletteBlender.EaseOut(t);
+            Assert.Equal(t * (2 - t), e, 1e-6f);
+            Assert.True(e > previous);
+            previous = e;
+        }
+        // Twice the average speed at the start, zero at the end: the first 1 % of the time moves the colors about 2 %
+        // of the way, the last 1 % about 0.01 %.
+        Assert.Equal(0.0199f, PaletteBlender.EaseOut(0.01f), 1e-6f);
+        Assert.True(1 - PaletteBlender.EaseOut(0.99f) < 1.1e-4f);
+    }
+
+    [Theory]
+    [InlineData(60, 60)]
+    [InlineData(144, 60)]
+    [InlineData(60, 30)]
+    [InlineData(240, 120)]
+    public void AColorDragIsFollowedWithinTheManualFade(int fps, int editsPerSecond)
+    {
+        // Doc 05 §3 and doc 06 §2: a hue drag in Settings sends a 200 ms SetTarget on every edit, and the glow should
+        // follow it live. Each edit lands mid-fade, so a fade that eased in from rest every time would crawl about
+        // 2 % of the way per frame and trail the picker by about 0.8 s. The drag runs at constant speed in Oklab for
+        // 1 s, from a muted red to a muted blue (every color on the way is inside sRGB), so the displayed Primary
+        // stays on that line and its position on it says how far behind the picker it is.
+        Oklab from = Oklab.FromLinearSrgb(Linear("#C05050")), to = Oklab.FromLinearSrgb(Linear("#5070C0"));
+        Palette Picked(float s) => new(Oklab.Lerp(from, to, s).ToLinearSrgb(), Violet.Secondary, null);
+        for (int k = 0; k <= 100; k++)
+        {
+            Rgb picked = Picked(k / 100f).Primary;
+            Assert.True(picked.R is > 0 and < 1 && picked.G is > 0 and < 1 && picked.B is > 0 and < 1, $"{picked} at {k} %");
+        }
+
+        var blender = new PaletteBlender(Picked(0));
+        float dt = 1f / fps;
+        int sent = 0, frame = 0;
+        double worstLag = 0;
+        Palette last = blender.Current;
+        while (sent < editsPerSecond)
+        {
+            frame++;
+            double time = (double)frame / fps;
+            int due = Math.Min(editsPerSecond, (int)Math.Floor(time * editsPerSecond + 1e-9));
+            if (due > sent)
+            {
+                sent = due;
+                last = Picked((float)sent / editsPerSecond);
+                blender.SetTarget(last, ManualFade);
+            }
+            blender.Update(dt);
+            double shown = Position(Oklab.FromLinearSrgb(blender.Current.Primary), from, to);
+            worstLag = Math.Max(worstLag, Math.Min(time, 1) - shown); // the drag covers the line in 1 s
+            AssertRgb(Violet.Secondary, blender.Current.Secondary, 1e-5f); // the color not dragged stays put
+        }
+        output.WriteLine($"{fps} fps, {editsPerSecond} edits/s: the glow trails the picker by at most {worstLag * 1000:F0} ms");
+        Assert.True(worstLag <= 0.2, $"the glow trails the picker by {worstLag * 1000:F0} ms");
+
+        // After the last edit the glow arrives within the manual fade, and exactly on the picked colors.
+        int settle = 0;
+        while (blender.IsAnimating && settle < 1000)
+        {
+            blender.Update(dt);
+            settle++;
+        }
+        Assert.InRange(settle, 0, (int)Math.Ceiling(ManualFade.TotalSeconds * fps));
+        Assert.Same(last, blender.Current);
+    }
+
+    [Fact]
+    public void TheSameColorsAgainMidFadeLetTheFadeRunOn()
+    {
+        // The next song on the same album brings the same colors under a new SourceTrackId. The fade under way carries
+        // on exactly as it was, whatever duration comes with them: it neither stalls nor starts over.
+        var undisturbed = new PaletteBlender(Violet);
+        var blender = new PaletteBlender(Violet);
+        undisturbed.SetTarget(BlueOrange, AlbumFade);
+        blender.SetTarget(BlueOrange, AlbumFade);
+        Palette nextTrack = BlueOrange with { SourceTrackId = "next-track" };
+        Palette edited = BlueOrange with { SourceTrackId = "edited" };
+        int frames = 0;
+        while (undisturbed.IsAnimating)
+        {
+            frames++;
+            if (frames == 24)
+            {
+                blender.SetTarget(nextTrack, AlbumFade);
+                Assert.True(blender.IsAnimating);
+                Assert.Equal("next-track", blender.Current.SourceTrackId);
+            }
+            if (frames == 30) blender.SetTarget(edited, ManualFade);
+            undisturbed.Update(1f / 60);
+            blender.Update(1f / 60);
+            Assert.Equal(undisturbed.IsAnimating, blender.IsAnimating);
+            Assert.Equal(Fill(undisturbed, 0.6f), Fill(blender, 0.6f));
+            Assert.Equal(undisturbed.Current.Primary, blender.Current.Primary);
+            Assert.Equal(undisturbed.Current.Secondary, blender.Current.Secondary);
+        }
+        Assert.Equal(48, frames);
+        Assert.Same(edited, blender.Current);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ChangingOneColorFadesThatColorAlone(bool primary)
+    {
+        // The most common manual edit changes a single swatch: that one fades over the 200 ms, the other stays put.
+        Palette next = primary ? Violet with { Primary = BlueOrange.Primary } : Violet with { Secondary = BlueOrange.Secondary };
+        var blender = new PaletteBlender(Violet);
+        blender.SetTarget(next, ManualFade);
+        Assert.True(blender.IsAnimating);
+        int frames = 0;
+        while (blender.IsAnimating && frames < 100)
+        {
+            blender.Update(1f / 60);
+            frames++;
+            if (frames == 6) // 0.1 s, half way
+            {
+                Palette shown = blender.Current;
+                AssertBlend(shown, Violet, next, 0.5f, 1e-4f);
+                AssertRgb(primary ? Violet.Secondary : Violet.Primary, primary ? shown.Secondary : shown.Primary, 1e-5f);
+                Rgb changed = primary ? shown.Primary : shown.Secondary, old = primary ? Violet.Primary : Violet.Secondary;
+                Assert.True(MaxChannelDifference(changed, old) > 0.05f, "the edited color is on its way");
+            }
+        }
+        Assert.Equal(12, frames);
+        Assert.Same(next, blender.Current);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EditingOneColorMidFadeRetargetsIt(bool primary)
+    {
+        // One color of the new target is the one the fade is heading to, the other is not: that is a new destination,
+        // not the same colors again, so the fade turns towards it.
+        var blender = new PaletteBlender(Violet);
+        blender.SetTarget(BlueOrange, AlbumFade);
+        for (int i = 0; i < 24; i++) blender.Update(1f / 60);
+        Palette shown = blender.Current;
+        Palette edited = primary ? BlueOrange with { Primary = PinkTeal.Primary } : BlueOrange with { Secondary = PinkTeal.Secondary };
+        blender.SetTarget(edited, ManualFade);
+        int frames = 0;
+        while (blender.IsAnimating && frames < 100)
+        {
+            blender.Update(1f / 60);
+            frames++;
+            float t = frames / 12f;
+            if (blender.IsAnimating) AssertBlend(blender.Current, shown, edited, t * (2 - t), 3e-4f);
+        }
+        Assert.Equal(12, frames);
+        Assert.Same(edited, blender.Current);
+        Assert.Equal(Fill(new PaletteBlender(edited), 0.6f), Fill(blender, 0.6f));
     }
 
     [Theory]
@@ -438,6 +629,15 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
         Assert.False(blender.IsAnimating);
         Assert.Same(Violet, blender.Current);
         Assert.Equal(Fill(new PaletteBlender(Violet), 0.6f), Fill(blender, 0.6f));
+
+        // Even toward the colors the running fade is already heading to.
+        blender.SetTarget(PinkTeal, AlbumFade);
+        blender.Update(0.2f);
+        Palette sameColors = PinkTeal with { SourceTrackId = "again" };
+        blender.SetTarget(sameColors, TimeSpan.FromMilliseconds(milliseconds));
+        Assert.False(blender.IsAnimating);
+        Assert.Same(sameColors, blender.Current);
+        Assert.Equal(Fill(new PaletteBlender(PinkTeal), 0.6f), Fill(blender, 0.6f));
     }
 
     [Fact]
@@ -640,6 +840,30 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
         Assert.Same(BlueOrange, blender.Current);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OneOutOfRangeColorIsClampedAndTheOtherKept(bool primary)
+    {
+        Rgb odd = new(float.NaN, 2f, 0.5f), fine = new(0.2f, 0.3f, 0.4f);
+        var palette = primary ? new Palette(odd, fine, "one") : new Palette(fine, odd, "one");
+        var blender = new PaletteBlender(palette);
+        Palette shown = blender.Current;
+        Assert.Equal(new Rgb(0, 1, 0.5f), primary ? shown.Primary : shown.Secondary);
+        Assert.Equal(fine, primary ? shown.Secondary : shown.Primary);
+        Assert.Equal("one", shown.SourceTrackId);
+        Assert.All(Fill(blender, 0.6f), value => Assert.InRange(value, 0f, 1f));
+
+        blender = new PaletteBlender(Violet);
+        blender.SetTarget(palette, ManualFade);
+        while (blender.IsAnimating)
+        {
+            blender.Update(1f / 60);
+            Assert.All(Fill(blender, 0.6f), value => Assert.InRange(value, 0f, 1f));
+        }
+        Assert.Equal(shown, blender.Current);
+    }
+
     [Fact]
     public void FactoryReturnsTheRealBlender()
     {
@@ -706,6 +930,13 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
         Oklab s = Oklab.FromLinearSrgb(palette.Secondary), p = Oklab.FromLinearSrgb(palette.Primary);
         double dl = p.L - s.L, da = p.A - s.A, db = p.B - s.B;
         return ((color.L - s.L) * dl + (color.A - s.A) * da + (color.B - s.B) * db) / (dl * dl + da * da + db * db);
+    }
+
+    // Position of a color projected onto the Oklab line from `from` (0) to `to` (1).
+    private static double Position(Oklab color, Oklab from, Oklab to)
+    {
+        double dl = to.L - from.L, da = to.A - from.A, db = to.B - from.B;
+        return ((color.L - from.L) * dl + (color.A - from.A) * da + (color.B - from.B) * db) / (dl * dl + da * da + db * db);
     }
 
     // Distance of a color from the Oklab line through two others.

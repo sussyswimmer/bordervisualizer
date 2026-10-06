@@ -10,18 +10,21 @@ namespace Rimlight.Core.Color;
 /// allocate, and neither does <see cref="SetTarget"/> for a palette whose channels are already in 0..1.</para>
 /// <para><b>Crossfade.</b> <see cref="SetTarget"/> starts from the colors displayed at that moment, so a new target
 /// in the middle of a fade carries on from where the old one had got to, without a jump. Primary fades to Primary and
-/// Secondary to Secondary along straight lines in Oklab, with smoothstep easing (<see cref="Ease"/>) of the elapsed
-/// share of the duration. The fade ends on the <see cref="Update"/> that reaches the duration; from then on the
-/// target's own linear colors are shown, exactly. A zero or negative duration, or a target with the colors already
-/// displayed, switches at once.</para>
+/// Secondary to Secondary along straight lines in Oklab over the whole new duration. A fade that starts from rest
+/// eases in and out (<see cref="Ease"/>, smoothstep). One that replaces a fade while the colors are moving eases out
+/// only (<see cref="EaseOut"/>): it keeps them moving at once instead of stopping them, so a color drag that retargets
+/// a 200 ms fade on every edit trails the picker by about 0.1 s, not 0.8 s. A target with the colors the running fade
+/// is already heading to leaves that fade as it is and only replaces the palette <see cref="Current"/> reports. The
+/// fade ends on the <see cref="Update"/> that reaches the duration; from then on the target's own linear colors are
+/// shown, exactly. A zero or negative duration, or a target with the colors already displayed, switches at once.</para>
 /// <para><b>Gradient.</b> Texel i is the color at perimeter coordinate u = (i + 0.5) / 64 before the shader's
 /// <c>frac(t + Phase)</c> rotation; the shader samples it with WRAP addressing and linear filtering. Primary covers the
 /// arc from u = 0 to u = ratio (centered on ratio / 2), Secondary the rest. Each of the two boundaries, u = ratio and
 /// the seam u = 0 ≡ 1 between texels 63 and 0, is a smoothstep <see cref="BlendWidth"/> wide centered on it and mixed
 /// in Oklab, so the loop is seamless and Primary's weight over the whole loop averages exactly ratio. Texels away from
 /// the blends hold the displayed colors themselves. Linear RGB, alpha 1, not premultiplied. Oklab mixes that leave
-/// sRGB (up to about 0.11 over in one channel, between white and saturated red) are clamped to 0..1 per channel, as
-/// the shader's <c>saturate</c> would.</para>
+/// sRGB (about 0.11 over 1 in red between white and saturated red, about 0.08 under 0 between blue and green) are
+/// clamped to 0..1 per channel, as the shader's <c>saturate</c> would.</para>
 /// </remarks>
 internal sealed class PaletteBlender : IPaletteBlender
 {
@@ -50,6 +53,7 @@ internal sealed class PaletteBlender : IPaletteBlender
     private Oklab toPrimary, toSecondary;     // the target's colors
     private double elapsed, duration;         // seconds, double so long fades keep their precision
     private bool animating;
+    private bool easeOut;                     // the running fade took over from a moving one: EaseOut, not Ease
     private Palette? blended;                 // Current during a fade, built on first read after each step
 
     /// <summary>Creates a blender that shows <paramref name="initial"/>, with no fade running.</summary>
@@ -89,12 +93,21 @@ internal sealed class PaletteBlender : IPaletteBlender
     public bool IsAnimating => animating;
 
     // Eased share of the fade done, 0..1.
-    private float Progress => Ease((float)(elapsed / duration));
+    private float Progress
+    {
+        get
+        {
+            float t = (float)(elapsed / duration);
+            return easeOut ? EaseOut(t) : Ease(t);
+        }
+    }
 
     /// <summary>
     /// Fades from the colors displayed now to <paramref name="target"/> over <paramref name="duration"/> (doc 05 §3:
-    /// 800 ms for new album colors, 200 ms for a manual edit). Restarts the clock, so the new fade gets the whole
-    /// duration whatever was running. A zero or negative duration, or a target with the colors already displayed,
+    /// 800 ms for new album colors, 200 ms for a manual edit). The new fade gets the whole duration whatever was
+    /// running; it eases in from rest, or eases out only when it takes over while the colors are moving. A target with
+    /// the colors the running fade is heading to leaves that fade untouched and only replaces the palette
+    /// <see cref="Current"/> reports. A zero or negative duration, or a target with the colors already displayed,
     /// switches at once and leaves <see cref="IsAnimating"/> false.
     /// </summary>
     /// <param name="target">The palette to show. NaN channels count as 0; channels outside 0..1 are clamped.</param>
@@ -103,7 +116,19 @@ internal sealed class PaletteBlender : IPaletteBlender
     public void SetTarget(Palette target, TimeSpan duration)
     {
         ArgumentNullException.ThrowIfNull(target);
-        // Start from what is on screen now: the blend reached so far, or the settled target.
+        Palette next = InRange(target);
+        Oklab nextPrimary = Oklab.FromLinearSrgb(next.Primary), nextSecondary = Oklab.FromLinearSrgb(next.Secondary);
+        blended = null;
+        if (animating && duration > TimeSpan.Zero && nextPrimary == toPrimary && nextSecondary == toSecondary)
+        {
+            // Already on the way to these colors (the next track of the same album): let that fade run on.
+            this.target = next;
+            return;
+        }
+
+        // Start from what is on screen now: the blend reached so far, or the settled target. The colors are moving
+        // unless the fade under way has not advanced yet from rest.
+        bool moving = animating && (easeOut || elapsed > 0);
         if (animating)
         {
             float progress = Progress;
@@ -115,12 +140,12 @@ internal sealed class PaletteBlender : IPaletteBlender
             fromPrimary = toPrimary;
             fromSecondary = toSecondary;
         }
-        this.target = InRange(target);
-        toPrimary = Oklab.FromLinearSrgb(this.target.Primary);
-        toSecondary = Oklab.FromLinearSrgb(this.target.Secondary);
+        this.target = next;
+        toPrimary = nextPrimary;
+        toSecondary = nextSecondary;
         elapsed = 0;
         this.duration = duration.TotalSeconds;
-        blended = null;
+        easeOut = moving;
         animating = duration > TimeSpan.Zero && (fromPrimary != toPrimary || fromSecondary != toSecondary);
     }
 
@@ -200,6 +225,18 @@ internal sealed class PaletteBlender : IPaletteBlender
     /// <param name="t">Elapsed share of the duration.</param>
     /// <returns>Share of the way from the old colors to the new ones.</returns>
     internal static float Ease(float t) => SmoothStep(t);
+
+    /// <summary>The ease of a fade that takes over while the colors are moving: t(2 − t) of t clamped to 0..1. It
+    /// leaves at twice the average speed, so a stream of retargets keeps the colors moving (one every share x of the
+    /// duration leaves (1 − x)² of the way each time: an exponential follow with a time constant of about half the
+    /// duration), and it arrives with zero speed like <see cref="Ease"/>.</summary>
+    /// <param name="t">Elapsed share of the duration.</param>
+    /// <returns>Share of the way from the colors displayed at the retarget to the new ones.</returns>
+    internal static float EaseOut(float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        return t * (2 - t);
+    }
 
     /// <summary>Clamps a Primary share to <see cref="MinRatio"/>..<see cref="MaxRatio"/>; NaN gives
     /// <see cref="DefaultRatio"/>.</summary>
