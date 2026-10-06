@@ -1,0 +1,4 @@
+<Project>
+  <!-- Tools share the solution-wide settings (nullable, warnings as errors, AppName, version). -->
+  <Import Project="../src/Directory.Build.props" />
+</Project>

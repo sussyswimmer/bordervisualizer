@@ -3,7 +3,10 @@
     "path": "Rimlight.sln",
     "projects": [
       "src/Rimlight.Core/Rimlight.Core.csproj",
-      "src/Rimlight.Tests/Rimlight.Tests.csproj"
+      "src/Rimlight.Tests/Rimlight.Tests.csproj",
+      "src/Rimlight.Bench/Rimlight.Bench.csproj",
+      "tools/audio-tools/Rimlight.AudioTools.csproj",
+      "tools/wav-analyze/Rimlight.WavAnalyze.csproj"
     ]
   }
 }

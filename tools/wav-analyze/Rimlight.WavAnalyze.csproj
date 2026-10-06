@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Offline beat tuning without Windows (doc 09 C3): runs the real analyzer over a WAV file and writes a CSV and a
+       PNG plot; also generates synthetic test tracks. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>wav-analyze</AssemblyName>
+    <RootNamespace>Rimlight.WavAnalyze</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rimlight.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../audio-tools/Rimlight.AudioTools.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- MIT. SkiaSharp brings the Windows and macOS native libraries; Linux needs its own package, and the
+         NoDependencies build needs no system fontconfig (it reads fonts from /usr/share/fonts directly). -->
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
+  </ItemGroup>
+</Project>
