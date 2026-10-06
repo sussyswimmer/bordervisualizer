@@ -8,7 +8,8 @@ namespace Rimlight.Core.Lighting;
 //   gate   closes for pause, Enabled = false and Animation = Off; 300 ms out and in (doc 04 §4).
 //   shown  closes in Music Sync with WhenSilent = Hide while IsSilent; 1.5 s out, 150 ms back (doc 01 §2).
 //   music  is the Music Sync weight against Idle Glow: 0 in Idle Glow, and in Music Sync with WhenSilent = IdleGlow
-//          while IsSilent; 1.5 s toward Idle Glow, 150 ms back (doc 01 §2).
+//          while IsSilent; 1.5 s toward Idle Glow, 150 ms back (doc 01 §2). A Hide fade keeps the weight it starts
+//          with, as Off does, so the light fades out with the look it had.
 // Visibility = gate × shown (H-008 item 2: Visibility carries every fade, Intensity none). Intensity, Pulse and the
 // drift crossfade with the music weight.
 internal sealed class LightEngine : ILightEngine
@@ -26,8 +27,9 @@ internal sealed class LightEngine : ILightEngine
     internal const float QuietFadeSeconds = 1.5f;         // doc 01 §2: fade to the WhenSilent behavior
     internal const float WakeFadeSeconds = 0.15f;         // doc 01 §2: back within 150 ms when audio returns
     // Steps above 0.1 s (a stall, sleep) count as 0.1 s, so no fade or kick jumps; under 10 fps everything slows down
-    // instead. The first step after a static frame counts at most one 60 fps frame: a renderer that idled for an hour
-    // may pass the whole hour, and the fade-in must still start from its first frame.
+    // instead. The first step of a new engine, and the first after a static frame, counts at most one 60 fps frame
+    // (dt = 0 updates don't use it up): a renderer that spent half a second building swap chains, or idled for an
+    // hour, may pass all of that time, and the fade-in must still start from its first frame.
     internal const float MaxStepSeconds = 0.1f;
     internal const float WakeStepSeconds = 1f / 60;
     // A beat is a rise of Beat by more than this; it re-arms once Beat falls. The analyzer jumps from ≤ 0.22 to 1.
@@ -40,6 +42,7 @@ internal sealed class LightEngine : ILightEngine
     private float gate, shown = 1, music = 1, lastBeat;
     private double phase, breath, kick;                   // cycles, seconds, cycles per second
     private bool armed = true, wasHidden;
+    private float stepCap = WakeStepSeconds;              // until the first step that moves time, and again while static
 
     // True after the second Update in a row with the light hidden for good (see CoreFactory.CreateLightEngine).
     public bool IsStatic { get; private set; }
@@ -55,20 +58,26 @@ internal sealed class LightEngine : ILightEngine
     {
         ArgumentNullException.ThrowIfNull(palette);
         ArgumentNullException.ThrowIfNull(settings);
-        float step = float.IsFinite(dtSeconds) && dtSeconds > 0 ? MathF.Min(dtSeconds, IsStatic ? WakeStepSeconds : MaxStepSeconds) : 0;
+        float step = float.IsFinite(dtSeconds) && dtSeconds > 0 ? MathF.Min(dtSeconds, stepCap) : 0;
 
         // Targets come straight from the inputs every frame, so no settings cache can go stale. An undefined
         // Animation value behaves like Music Sync and an undefined WhenSilent like IdleGlow (the defaults).
         AnimationMode animation = settings.Animation;
         float gateTarget = !paused && settings.Enabled && animation != AnimationMode.Off ? 1 : 0;
-        float shownTarget = shown, musicTarget = music;   // Off keeps the look it fades out with
+        float shownTarget = shown, musicTarget = music;   // Off and a Hide fade keep the look they fade out with
         if (animation != AnimationMode.Off)
         {
             bool idle = animation == AnimationMode.IdleGlow;
-            bool hideWhenSilent = settings.WhenSilent == SilentBehavior.Hide;
             bool quiet = !idle && audio.IsSilent;
-            shownTarget = quiet && hideWhenSilent ? 0 : 1;
-            musicTarget = idle || (quiet && !hideWhenSilent) ? 0 : 1;
+            if (quiet && settings.WhenSilent == SilentBehavior.Hide)
+            {
+                shownTarget = 0;
+            }
+            else
+            {
+                shownTarget = 1;
+                musicTarget = idle || quiet ? 0 : 1;
+            }
         }
 
         // While nothing shows, nothing needs a fade: jump to the targets so the light reappears in the right state
@@ -82,16 +91,22 @@ internal sealed class LightEngine : ILightEngine
         {
             music = musicTarget;
         }
+        // The gate jumps too while silence hides the light (shown = 0), so nothing moves while IsStatic lets the
+        // renderer stop calling. Otherwise the gate would close or reopen one capped step per Update, and how far it
+        // got would decide whether the light came back within 150 ms of sound or with the rest of a 300 ms fade.
+        if (shown == 0) gate = gateTarget;
         gate = Approach(gate, gateTarget, step / GateFadeSeconds);
-        // A closing gate freezes the other two, so the fade-out keeps the look it started with. Otherwise pausing a
-        // light hidden by silence (WhenSilent = Hide) could raise `shown` while the gate falls: a flash.
+        // A closing gate freezes the other two, so the fade-out keeps the look it started with. Otherwise a light that
+        // silence is fading out (WhenSilent = Hide) could be paused as sound returns, and `shown` would rise while the
+        // gate falls: a flash.
         if (gateTarget == 1)
         {
             shown = Approach(shown, shownTarget, step / (shownTarget < shown ? QuietFadeSeconds : WakeFadeSeconds));
             music = Approach(music, musicTarget, step / (musicTarget < music ? QuietFadeSeconds : WakeFadeSeconds));
         }
-        // Hidden: Visibility is 0 and stays 0 until an input changes.
-        bool hidden = (gate == 0 && gateTarget == 0) || (shown == 0 && (shownTarget == 0 || gateTarget == 0));
+        // Hidden: Visibility is 0 and stays 0 until an input changes. (shown = 0 under a closed gate is the first case:
+        // the gate jumped shut above.)
+        bool hidden = (gate == 0 && gateTarget == 0) || (shown == 0 && shownTarget == 0);
 
         float beat = Unit(audio.Beat);
         bool onset = armed && beat > lastBeat + OnsetRise;
@@ -127,6 +142,8 @@ internal sealed class LightEngine : ILightEngine
 
         IsStatic = hidden && wasHidden;                   // the frame that reached Visibility 0 is still presented
         wasHidden = hidden;
+        if (IsStatic) stepCap = WakeStepSeconds;
+        else if (step > 0) stepCap = MaxStepSeconds;
         return new LightState(
             Color(palette.Primary),
             Color(palette.Secondary),

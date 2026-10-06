@@ -305,6 +305,28 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         Assert.Equal(1f, back[4].Visibility);                   // 0.5 of the way at 1/0.15 s: 75 ms
     }
 
+    [Theory]
+    [InlineData("when-silent")]
+    [InlineData("animation")]
+    public void AHideFadeKeepsTheLookItStartsWith(string change)
+    {
+        // The light shows Idle Glow while silent, then WhenSilent is set to Hide, or Animation switches from Idle Glow
+        // to Music Sync with WhenSilent = Hide. It fades out over 1.5 s still breathing as Idle Glow, instead of
+        // dropping to the quiet Music Sync level within 150 ms first.
+        var engine = Settled(change == "when-silent" ? Music : Idle with { WhenSilent = SilentBehavior.Hide }, Silent);
+        var fade = Frames(engine, 100, Silent, Hide);
+        Assert.All(fade, s => Assert.InRange(s.Intensity, IdleLow - 1e-6f, IdleHigh + 1e-6f));
+        Assert.Equal(0.5f, fade[44].Visibility, 1e-3f);       // 0.75 s
+        Assert.True(fade[88].Visibility > 0);
+        Assert.Equal(0f, fade[89].Visibility);                  // 1.5 s
+        for (int i = 1; i < fade.Count; i++) Assert.True(fade[i].Visibility <= fade[i - 1].Visibility);
+
+        // Once it is gone, sound brings it back with the Music Sync look straight away, within 150 ms.
+        var back = Frames(engine, 9, Loud, Hide);
+        Assert.Equal(1f, back[8].Visibility);
+        Assert.All(back, s => Assert.Equal(LoudIntensity, s.Intensity, 1e-6f));
+    }
+
     // ---- doc 04 §4 and H-008 item 2: pause, Enabled = false, Animation = Off ----
 
     [Theory]
@@ -346,6 +368,91 @@ public sealed class LightEngineTests(ITestOutputHelper output)
             Assert.True(engine.IsStatic);
         }
         Assert.Equal(1f, Run(engine, 0.15f, Loud, Hide).Visibility);
+    }
+
+    [Theory]
+    [InlineData("paused")]
+    [InlineData("off")]
+    [InlineData("disabled")]
+    public void ClosingTheGateDuringAHideFadeNeverBrightensTheLight(string reason)
+    {
+        // Silence has faded the light halfway out when the gate closes just as sound returns (a fullscreen app starts
+        // its video). The 300 ms gate fade keeps the half-faded light instead of letting it come back as it goes.
+        var (settings, audio, paused) = Hiding(reason);
+        var engine = Settled(Hide, Quiet);
+        float half = Frames(engine, 45, Silent, Hide)[^1].Visibility;
+        var fadeOut = Frames(engine, 18, audio, settings, paused);
+        Assert.True(fadeOut[0].Visibility < half);
+        for (int i = 1; i < fadeOut.Count; i++) Assert.True(fadeOut[i].Visibility < fadeOut[i - 1].Visibility);
+        Assert.Equal(half * 0.5f, fadeOut[8].Visibility, 1e-3f); // 150 ms
+        Assert.Equal(0f, fadeOut[17].Visibility);               // 300 ms
+
+        var fadeIn = Frames(engine, 18, Loud, Hide);             // sound is back, so the gate reopens onto a full light
+        Assert.Equal(0.5f, fadeIn[8].Visibility, 1e-3f);
+        Assert.Equal(1f, fadeIn[17].Visibility);
+    }
+
+    [Theory]
+    [InlineData("paused")]
+    [InlineData("disabled")]
+    public void ClosingTheGateDuringTheIdleGlowCrossfadeKeepsTheLook(string reason)
+    {
+        // Silence is halfway through handing Music Sync over to Idle Glow when the gate closes: the 300 ms fade-out
+        // keeps that blend (only the breathing moves it, by under 0.01) instead of finishing the 1.5 s crossfade.
+        var (settings, _, paused) = Hiding(reason);
+        var engine = Settled(Music, Quiet);
+        float blend = Frames(engine, 45, Silent, Music)[^1].Intensity;
+        Assert.InRange(blend, QuietIntensity + 0.1f, IdleLow - 0.05f);
+        Assert.All(Frames(engine, 18, Silent, settings, paused), s => Assert.Equal(blend, s.Intensity, 0.01f));
+    }
+
+    [Theory]
+    [InlineData("paused")]
+    [InlineData("off")]
+    [InlineData("disabled")]
+    public void HowOftenAStaticEngineIsUpdatedChangesNothingLater(string reason)
+    {
+        // Silence hides the light (WhenSilent = Hide), then the gate closes and reopens, or sound returns while it is
+        // closed. The engine stays static throughout, so the renderer may make one Update in each state or many: the
+        // light comes back the same way. Sound into a reopened gate shows it within 150 ms; reopening a gate after
+        // sound has returned uses the 300 ms gate fade.
+        var (closed, _, paused) = Hiding(reason);
+        closed = closed with { WhenSilent = SilentBehavior.Hide };
+        foreach (bool soundFirst in new[] { false, true })
+        {
+            List<LightState>? reference = null;
+            foreach (int closedUpdates in new[] { 1, 30 })
+                foreach (int reopenedUpdates in new[] { 1, 30 })
+                {
+                    var engine = Settled(Hide, Silent);
+                    for (int i = 0; i < closedUpdates; i++)
+                    {
+                        Assert.Equal(0f, engine.Update(Dt, soundFirst ? Loud : Silent, Palette.Default, closed, paused).Visibility);
+                        Assert.True(engine.IsStatic);
+                    }
+                    for (int i = 0; i < reopenedUpdates && !soundFirst; i++)
+                    {
+                        Assert.Equal(0f, engine.Update(Dt, Silent, Palette.Default, Hide, false).Visibility);
+                        Assert.True(engine.IsStatic);
+                    }
+                    var back = Frames(engine, 18, Loud, Hide);
+                    reference ??= back;
+                    Assert.Equal(reference, back);
+                }
+            Assert.All(reference!, s => Assert.Equal(LoudIntensity, s.Intensity, 1e-6f));
+            if (soundFirst)
+            {
+                Assert.Equal(0.5f, reference![8].Visibility, 1e-3f);
+                Assert.True(reference[16].Visibility < 1);
+                Assert.Equal(1f, reference[17].Visibility);     // 300 ms
+            }
+            else
+            {
+                Assert.InRange(reference![0].Visibility, 0.01f, 0.5f);
+                Assert.True(reference[7].Visibility < 1);
+                Assert.Equal(1f, reference[8].Visibility);      // 150 ms
+            }
+        }
     }
 
     [Fact]
@@ -538,6 +645,28 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         Assert.Equal(Smooth(1f / 60 / 0.3f), state.Visibility, 1e-6f);
         Assert.False(engine.IsStatic);
         Assert.Equal(Smooth(1f / 60 / 0.3f + 0.1f / 0.3f), engine.Update(3600, Loud, Palette.Default, Music, false).Visibility, 1e-5f);
+
+        // The cap holds for the first step that moves time: a wake with dt = 0 first does not use it up.
+        var probed = StaticEngine("paused");
+        probed.Update(0, Loud, Palette.Default, Music, false);
+        Assert.False(probed.IsStatic);
+        Assert.Equal(Smooth(1f / 60 / 0.3f), probed.Update(3600, Loud, Palette.Default, Music, false).Visibility, 1e-6f);
+    }
+
+    [Fact]
+    public void TheFirstStepOfANewEngineCountsAtMostOneFrame()
+    {
+        // A renderer may build its swap chains first and pass the half second that took as the first dt (K3, a Settings
+        // preview, a hotplugged monitor): the 300 ms fade-in still starts from its first frame, with or without an
+        // Update with dt = 0 before it.
+        float first = Smooth(1f / 60 / 0.3f);
+        var engine = new LightEngine();
+        Assert.Equal(first, engine.Update(0.5f, Loud, Palette.Default, Music, false).Visibility, 1e-6f);
+        Assert.Equal(Smooth(1f / 60 / 0.3f + 0.1f / 0.3f), engine.Update(0.5f, Loud, Palette.Default, Music, false).Visibility, 1e-5f);
+
+        var probed = new LightEngine();
+        Assert.Equal(0f, probed.Update(0, Loud, Palette.Default, Music, false).Visibility);
+        Assert.Equal(first, probed.Update(0.5f, Loud, Palette.Default, Music, false).Visibility, 1e-6f);
     }
 
     [Fact]
