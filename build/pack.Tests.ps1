@@ -1,7 +1,8 @@
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.0' }
-# Tests for the helpers in pack.ps1. Run: Invoke-Pester ./build
+# Tests for the helpers in pack.ps1, and for the checks it makes before it starts work.
+# Run: Invoke-Pester ./build
 # Packing itself is checked by the dry run of .github/workflows/release.yml, which runs on pull
-# requests that change the packaging.
+# requests that can break the packaging.
 
 BeforeAll {
     . (Join-Path $PSScriptRoot 'pack.ps1')
@@ -115,5 +116,30 @@ Describe 'Get-VpkArgumentList' {
     It 'keeps a single argument separate' {
         $list = Get-VpkArgumentList -Arguments 'pack' -OnWindows $true
         $list -join '|' | Should -Be 'vpk|pack'
+    }
+}
+
+Describe 'pack.ps1 -Stage' {
+    # The checks that run before the script deletes, restores or builds anything.
+    BeforeAll {
+        $script = Join-Path $PSScriptRoot 'pack.ps1'
+        $appName = Get-BuildProperty -Path (Join-Path $PSScriptRoot '../src/Directory.Build.props') -Name 'AppName'
+    }
+
+    It 'refuses to sign in the Publish stage' {
+        { & $script -Stage Publish -AzureTrustedSignFile 'signing.json' -OutputDir (Join-Path $TestDrive 'publish-only') } |
+            Should -Throw '*happens in the Pack stage*'
+    }
+
+    It 'packs only after every runtime was published, and deletes nothing before that' {
+        $out = Join-Path $TestDrive 'pack-only'
+        $x64 = New-Item -ItemType Directory -Path (Join-Path $out 'publish/win-x64')
+        Set-Content -LiteralPath (Join-Path $x64 "$appName.exe") -Value 'x64 build'
+        $releases = New-Item -ItemType Directory -Path (Join-Path $out 'releases')
+        Set-Content -LiteralPath (Join-Path $releases 'old.nupkg') -Value 'old package'
+
+        { & $script -Stage Pack -OutputDir $out } | Should -Throw "*No published build at*win-arm64*$appName.exe*"
+        Join-Path $releases 'old.nupkg' | Should -Exist
+        Join-Path $x64 "$appName.exe" | Should -Exist
     }
 }

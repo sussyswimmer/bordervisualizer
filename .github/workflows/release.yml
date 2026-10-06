@@ -3,19 +3,28 @@ name: Release
 # Pushing a tag vX.Y.Z (v1.0.0, or v1.1.0-beta.1 for a prerelease) builds, tests and packs Rimlight
 # for x64 and ARM64 with build/pack.ps1, then publishes the GitHub release that the README's
 # download button and the app's auto-update both read (doc 06 §5, doc 07 Phase 6).
-# Pull requests that change the packaging, and manual runs, are dry runs: the same build and pack,
-# unsigned, kept as a workflow artifact for 7 days. Nothing is published.
+# Pull requests that can break the packaging, and manual runs, are dry runs: the same build and
+# pack, unsigned, kept as a workflow artifact for 7 days. Nothing is published.
+#
+# Credentials go only to jobs that run no build code. NuGet packages run code while they are
+# restored and built (MSBuild targets, analyzers, source generators), so the build job, which
+# runs all of it, has a read-only token and no secrets. The pack job signs the build job's output
+# and restores nothing but vpk. Only the publish job gets the write token.
 
 on:
   push:
     tags: ['v*']
   pull_request:
+    # The packaging files, and what only a pack catches: vpk checks that the entry point in
+    # src/Rimlight.App calls VelopackApp.Build().Run() and reads the app's icon, and global.json
+    # picks the SDK.
     paths:
       - build/**
       - .config/dotnet-tools.json
       - .github/workflows/release.yml
+      - global.json
       - src/Directory.Build.props
-      - src/Rimlight.App/Rimlight.App.csproj
+      - src/Rimlight.App/**
   workflow_dispatch:
 
 permissions:
@@ -30,26 +39,15 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  # The tag's version for a release. Empty for a dry run: pack.ps1 then uses the version in
+  # src/Directory.Build.props. The build and pack jobs must agree on it.
+  PACK_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
 
 jobs:
-  pack:
-    # Builds, tests and packs with a read-only token. Only the publish job can write to the repo,
-    # and it runs no code from the build.
-    name: Build and pack (Windows)
+  build:
+    name: Build and publish (Windows)
     runs-on: windows-latest
-    timeout-minutes: 45
-    env:
-      # Optional code signing with Azure Trusted Signing. It is on only for a tagged release, and
-      # only when all six SIGNING_* secrets exist (Settings > Secrets and variables > Actions):
-      #   SIGNING_ENDPOINT       the account's endpoint, e.g. https://eus.codesigning.azure.net
-      #   SIGNING_ACCOUNT        the Trusted Signing account name
-      #   SIGNING_PROFILE        the certificate profile name
-      #   SIGNING_TENANT_ID, SIGNING_CLIENT_ID, SIGNING_CLIENT_SECRET
-      #                          an Entra ID app registration with the "Trusted Signing
-      #                          Certificate Profile Signer" role on that profile
-      # Without them releases are unsigned, and SmartScreen asks first-time users to click
-      # "More info", then "Run anyway" (README).
-      SIGN: ${{ github.event_name == 'push' && secrets.SIGNING_ENDPOINT != '' && secrets.SIGNING_ACCOUNT != '' && secrets.SIGNING_PROFILE != '' && secrets.SIGNING_TENANT_ID != '' && secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_CLIENT_SECRET != '' }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,6 +81,59 @@ jobs:
       - name: Test
         run: dotnet test Rimlight.sln -c Release --no-build
 
+      - name: Publish x64 and ARM64
+        shell: pwsh
+        run: ./build/pack.ps1 -Stage Publish -Version "$env:PACK_VERSION"
+
+      - name: Keep the published builds
+        uses: actions/upload-artifact@v4
+        with:
+          name: builds
+          path: artifacts/publish/
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  pack:
+    # Packs the published builds and, for a signed release, signs them. It holds the signing
+    # secrets, so it has no NuGet cache (the build job's code could have written to it), restores
+    # only vpk from the tool manifest, and runs no code from the build: vpk reads Rimlight.exe
+    # without running it.
+    name: Pack (Windows)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      # Optional code signing with Azure Trusted Signing. It is on only for a tagged release, and
+      # only when all six SIGNING_* secrets exist (Settings > Secrets and variables > Actions):
+      #   SIGNING_ENDPOINT       the account's endpoint, e.g. https://eus.codesigning.azure.net
+      #   SIGNING_ACCOUNT        the Trusted Signing account name
+      #   SIGNING_PROFILE        the certificate profile name
+      #   SIGNING_TENANT_ID, SIGNING_CLIENT_ID, SIGNING_CLIENT_SECRET
+      #                          an Entra ID app registration with the "Trusted Signing
+      #                          Certificate Profile Signer" role on that profile
+      # Without them releases are unsigned, and SmartScreen asks first-time users to click
+      # "More info", then "Run anyway" (README).
+      SIGN: ${{ github.event_name == 'push' && secrets.SIGNING_ENDPOINT != '' && secrets.SIGNING_ACCOUNT != '' && secrets.SIGNING_PROFILE != '' && secrets.SIGNING_TENANT_ID != '' && secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_CLIENT_SECRET != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The same SDK as the build job, for vpk.
+      - name: Set up the .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+
+      - name: Download the published builds
+        uses: actions/download-artifact@v4
+        with:
+          name: builds
+          path: artifacts/publish
+
       # Code signing, part 1: the metadata file for vpk's --azureTrustedSignFile. vpk brings
       # signtool and the Trusted Signing client library, and signs every executable and the
       # installer. Skipped unless SIGN is true (see the job's env).
@@ -109,13 +160,11 @@ jobs:
           AZURE_CLIENT_ID: ${{ env.SIGN == 'true' && secrets.SIGNING_CLIENT_ID || '' }}
           AZURE_CLIENT_SECRET: ${{ env.SIGN == 'true' && secrets.SIGNING_CLIENT_SECRET || '' }}
         run: |
-          $pack = @{}
-          if ($env:GITHUB_EVENT_NAME -eq 'push') {
-            # The tag's version. pack.ps1 drops the "v" and stops on anything that isn't SemVer 2.
-            $pack.Version = $env:GITHUB_REF_NAME
-          } else {
-            # A dry run packs the version in src/Directory.Build.props. It skips vpk's check that
-            # Rimlight.exe calls VelopackApp.Build().Run(), which K9 adds (HANDOFF H-014).
+          # pack.ps1 drops the tag's "v" and stops on anything that isn't SemVer 2.
+          $pack = @{ Stage = 'Pack'; Version = $env:PACK_VERSION }
+          if ($env:GITHUB_EVENT_NAME -ne 'push') {
+            # A dry run skips vpk's check that Rimlight.exe calls VelopackApp.Build().Run(), which
+            # K9 adds (HANDOFF H-014).
             $pack.SkipVelopackAppCheck = $true
           }
           if ($env:SIGN -eq 'true') {
@@ -134,6 +183,7 @@ jobs:
           retention-days: 7
           # Every package is a zip file already.
           compression-level: 0
+          overwrite: true
 
   publish:
     name: Publish the GitHub release

@@ -5,13 +5,13 @@
 .DESCRIPTION
     For each runtime in -Runtimes:
 
-      1. dotnet publish src/Rimlight.App into <OutputDir>/publish/<runtime>: Release,
-         self-contained, not trimmed.
-      2. vpk pack into <OutputDir>/releases. This makes the installer
+      1. Publish stage: dotnet publish src/Rimlight.App into <OutputDir>/publish/<runtime>:
+         Release, self-contained, not trimmed.
+      2. Pack stage: vpk pack into <OutputDir>/releases. This makes the installer
          (Rimlight-<channel>-Setup.exe), the portable zip (Rimlight-<channel>-Portable.zip), the
          full update package (.nupkg) and the update feed (releases.<channel>.json) that installed
          copies read. The channel is "win" for x64 and "win-arm64" for ARM64.
-      3. Copies the installer into <OutputDir>/installers as RimlightSetup.exe (x64) or
+         Then it copies the installer into <OutputDir>/installers as RimlightSetup.exe (x64) or
          RimlightSetup-arm64.exe (ARM64). The README's download button links to the first name.
 
     The installer needs no admin rights: Velopack installs per user, into
@@ -24,13 +24,19 @@
     with the same version. On Linux and macOS the script cross-packs with vpk's [win] directive;
     code signing needs Windows.
 
-    Every run starts by deleting <OutputDir>/publish, <OutputDir>/releases and
-    <OutputDir>/installers, so no stale package can end up in a release.
+    Each stage starts by deleting the folders it writes (publish; releases and installers), so no
+    stale package can end up in a release.
 
 .PARAMETER Version
     The package version: SemVer 2 without build metadata, such as 1.2.0, or 1.3.0-beta.1 for a
     prerelease. A leading "v" (or "V") is dropped, so a tag name works too. Default: <Version> in
     src/Directory.Build.props.
+
+.PARAMETER Stage
+    All (the default) publishes, then packs. Publish and Pack run one stage each, so the two can
+    run on different machines: the release workflow signs in a job that runs no build code (see
+    .github/workflows/release.yml). Pack takes the builds from <OutputDir>/publish, and both
+    stages need the same -Version, -Runtimes and -OutputDir.
 
 .PARAMETER Runtimes
     The builds to make: win-x64, win-arm64, or both (the default).
@@ -42,7 +48,7 @@
     Signs the executables and the installer with Azure Trusted Signing. The value is the path to
     the metadata JSON (Endpoint, CodeSigningAccountName, CertificateProfileName). The credentials
     come from the AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET environment variables.
-    Windows only. Without this parameter the build is unsigned.
+    Pack stage, Windows only. Without this parameter the build is unsigned.
 
 .PARAMETER SkipVelopackAppCheck
     Packs even when Rimlight.exe doesn't call VelopackApp.Build().Run() (task K9). This is only for
@@ -56,11 +62,20 @@
 
 .EXAMPLE
     ./build/pack.ps1 -Version v1.0.0 -Runtimes win-x64
+
+.EXAMPLE
+    ./build/pack.ps1 -Stage Publish -Version v1.0.0
+    ./build/pack.ps1 -Stage Pack -Version v1.0.0
+
+    The same packages in two steps, as the release workflow makes them.
 #>
 #Requires -Version 7.2
 [CmdletBinding()]
 param(
     [string] $Version,
+
+    [ValidateSet('All', 'Publish', 'Pack')]
+    [string] $Stage = 'All',
 
     [ValidateSet('win-x64', 'win-arm64')]
     [string[]] $Runtimes = @('win-x64', 'win-arm64'),
@@ -157,8 +172,11 @@ $appName = Get-BuildProperty -Path $props -Name 'AppName'
 $packVersion = Resolve-PackVersion -Version $Version -Default (Get-BuildProperty -Path $props -Name 'Version')
 $project = Join-Path $repoRoot 'src/Rimlight.App/Rimlight.App.csproj'
 $icon = Join-Path $repoRoot 'src/Rimlight.App/Assets/Rimlight.ico'
+$runPublish = $Stage -in 'All', 'Publish'
+$runPack = $Stage -in 'All', 'Pack'
 
 if ($AzureTrustedSignFile) {
+    if (-not $runPack) { throw 'Signing (-AzureTrustedSignFile) happens in the Pack stage; -Stage Publish signs nothing.' }
     if (-not $IsWindows) { throw 'Code signing (-AzureTrustedSignFile) needs Windows.' }
     if (-not (Test-Path -LiteralPath $AzureTrustedSignFile -PathType Leaf)) {
         throw "The signing metadata file '$AzureTrustedSignFile' doesn't exist."
@@ -170,56 +188,79 @@ $OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPS
 $publishRoot = Join-Path $OutputDir 'publish'
 $releaseDir = Join-Path $OutputDir 'releases'
 $installerDir = Join-Path $OutputDir 'installers'
-foreach ($dir in $publishRoot, $releaseDir, $installerDir) {
+
+if (-not $runPublish) {
+    # -Stage Pack packs the builds of an earlier -Stage Publish, possibly from another machine.
+    foreach ($runtime in $Runtimes) {
+        $exe = Join-Path $publishRoot $runtime "$appName.exe"
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "No published build at $exe. Run -Stage Publish first, with the same -Runtimes and -OutputDir."
+        }
+    }
+}
+
+$stale = @()
+if ($runPublish) { $stale += $publishRoot }
+if ($runPack) { $stale += $releaseDir, $installerDir }
+foreach ($dir in $stale) {
     if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
 }
-$null = New-Item -ItemType Directory -Path $releaseDir, $installerDir
+if ($runPack) { $null = New-Item -ItemType Directory -Path $releaseDir, $installerDir }
 
 # dotnet looks for the tool manifest from the current directory up.
 Push-Location -LiteralPath $repoRoot
 try {
-    Invoke-Native dotnet @('tool', 'restore')
+    if ($runPack) { Invoke-Native dotnet @('tool', 'restore') }
 
     foreach ($runtime in $Runtimes) {
         $channel = Get-PackChannel -Runtime $runtime
         $publishDir = Join-Path $publishRoot $runtime
-        Write-Host "`n==> $appName $packVersion for $runtime (Velopack channel '$channel')"
 
-        Invoke-Native dotnet @(
-            'publish', $project,
-            '--configuration', 'Release',
-            '--runtime', $runtime,
-            '--self-contained', 'true',
-            '--output', $publishDir,
-            '-p:PublishTrimmed=false',
-            '-p:PublishSingleFile=false',
-            "-p:Version=$packVersion")
+        if ($runPublish) {
+            Write-Host "`n==> Publishing $appName $packVersion for $runtime"
+            Invoke-Native dotnet @(
+                'publish', $project,
+                '--configuration', 'Release',
+                '--runtime', $runtime,
+                '--self-contained', 'true',
+                '--output', $publishDir,
+                '-p:PublishTrimmed=false',
+                '-p:PublishSingleFile=false',
+                "-p:Version=$packVersion")
+        }
 
-        $packArgs = @(
-            'pack',
-            '--packId', $appName,
-            '--packVersion', $packVersion,
-            '--packDir', $publishDir,
-            '--packTitle', $appName,
-            '--packAuthors', $PackAuthors,
-            '--mainExe', "$appName.exe",
-            '--icon', $icon,
-            '--channel', $channel,
-            '--runtime', $runtime,
-            '--outputDir', $releaseDir)
-        if ($AzureTrustedSignFile) { $packArgs += '--azureTrustedSignFile', $AzureTrustedSignFile }
-        if ($SkipVelopackAppCheck) { $packArgs += '--skipVeloAppCheck' }
-        Invoke-Native dotnet (Get-VpkArgumentList -Arguments $packArgs -OnWindows $IsWindows)
+        if ($runPack) {
+            Write-Host "`n==> Packing $appName $packVersion for $runtime (Velopack channel '$channel')"
+            $packArgs = @(
+                'pack',
+                '--packId', $appName,
+                '--packVersion', $packVersion,
+                '--packDir', $publishDir,
+                '--packTitle', $appName,
+                '--packAuthors', $PackAuthors,
+                '--mainExe', "$appName.exe",
+                '--icon', $icon,
+                '--channel', $channel,
+                '--runtime', $runtime,
+                '--outputDir', $releaseDir)
+            if ($AzureTrustedSignFile) { $packArgs += '--azureTrustedSignFile', $AzureTrustedSignFile }
+            if ($SkipVelopackAppCheck) { $packArgs += '--skipVeloAppCheck' }
+            Invoke-Native dotnet (Get-VpkArgumentList -Arguments $packArgs -OnWindows $IsWindows)
 
-        $setup = Join-Path $releaseDir "$appName-$channel-Setup.exe"
-        if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "vpk didn't create $setup." }
-        Copy-Item -LiteralPath $setup -Destination (Join-Path $installerDir (Get-InstallerAlias -AppName $appName -Runtime $runtime))
+            $setup = Join-Path $releaseDir "$appName-$channel-Setup.exe"
+            if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "vpk didn't create $setup." }
+            Copy-Item -LiteralPath $setup -Destination (Join-Path $installerDir (Get-InstallerAlias -AppName $appName -Runtime $runtime))
+        }
     }
 }
 finally {
     Pop-Location
 }
 
+if (-not $runPack) {
+    Write-Host "`n==> $appName $packVersion builds in $publishRoot"
+    return
+}
 Write-Host "`n==> $appName $packVersion packages in $OutputDir"
 Get-ChildItem -LiteralPath $releaseDir, $installerDir -File | ForEach-Object {
     Write-Host ('{0,9:N1} MB  {1}' -f ($_.Length / 1MB), [IO.Path]::GetRelativePath($OutputDir, $_.FullName))
