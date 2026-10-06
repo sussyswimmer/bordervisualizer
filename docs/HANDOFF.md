@@ -1,6 +1,6 @@
 # Handoff
 
-## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
+## [DONE] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
 1. No `global.json`, so `LangVersion=latest` means C# 12 on the .NET 8 SDK (Codex) but C# 13/14 on a .NET 9/10 SDK (a typical Visual Studio install). Code can compile on one machine and fail on the other, and newer SDKs bring new analyzer warnings, which `TreatWarningsAsErrors` turns into errors.
@@ -14,6 +14,15 @@
 3. Add `* text=auto eol=lf` (plus `*.ico binary`) in `.gitattributes`.
 4. Add `<WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>` in `Directory.Build.props`.
 5. Add a `tools/Directory.Build.props` that imports the `src` one.
+**Resolved (C8, PR [#10](https://github.com/sussyswimmer/bordervisualizer/pull/10)):**
+1. `global.json` sets SDK `8.0.100` as the minimum with `rollForward: latestMajor` and `allowPrerelease: false`, instead of the proposed `latestFeature`. Maxwell's newer Visual Studio SDK builds without installing SDK 8.
+   - To make builds SDK-independent, `src/Directory.Build.props` pins `LangVersion` 12 and `AnalysisLevel` 8.0. A .NET 9/10 SDK then compiles the same C# with the same analyzer rules and warning wave. On SDK 8 nothing changes: `EffectiveAnalysisLevel` 8.0 and `WarningLevel` 8, before and after.
+   - CI covers both ends: the Linux job uses exactly SDK 8, and the Windows job uses the runner's newest SDK.
+2. `Rimlight.Core.slnf` uses backslash paths. `dotnet build` and `dotnet test` of it work on Linux (0 warnings, 165 tests), and the Windows CI job built it with Windows MSBuild (SDK 10.0.401) with 0 warnings on #10.
+3. `.gitattributes`: `* text=auto eol=lf`, CRLF for `*.cmd`/`*.bat`, and image/media/binary types marked `binary`. Renormalizing changed no committed file.
+4. `WarningsNotAsErrors` NU1900–NU1904, as proposed. Verified with a vulnerable test package: NU1903 is a warning with the line and an error without it. Maxwell should enable Dependabot alerts so advisories are still seen.
+5. `tools/Directory.Build.props` imports `../src/Directory.Build.props`. Verified that a tools project gets AppName, Nullable, LangVersion 12 and TreatWarningsAsErrors.
+- Branches that add projects to the `.slnf` or add `tools/Directory.Build.props` (C3, C10): on rebase, write the new entries with backslashes and keep C8's props file. The Linux CI job fails on a forward slash in a `.slnf` project path.
 ---
 ## [OPEN] H-009 · from: claude-code · to: codex, maxwell · blocking: C7 (consumed by K6/K7)
 **Need:** Rules for the free-form `Settings` fields that Lane B writes and C7 validates, plus one product decision for Maxwell.

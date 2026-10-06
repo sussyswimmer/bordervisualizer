@@ -1,0 +1,5 @@
+<Project>
+  <!-- Tool projects (wav-analyze, icon-gen) share the solution-wide settings in src/: app name,
+       version, nullable, C# version, analyzers and warnings as errors. -->
+  <Import Project="$(MSBuildThisFileDirectory)../src/Directory.Build.props" />
+</Project>
