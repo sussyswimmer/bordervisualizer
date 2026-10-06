@@ -4,8 +4,16 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <UseWPF>true</UseWPF>
+    <!-- Rimlight.exe, as the docs and the Velopack packaging expect; the name comes from AppName in Directory.Build.props. -->
+    <AssemblyName>$(AppName)</AssemblyName>
+    <RootNamespace>Rimlight.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Placeholder until the real icon is generated from assets/icon.svg (C10 / K12). -->
+    <ApplicationIcon>Assets\Rimlight.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\Rimlight.ico" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
     <ProjectReference Include="../Rimlight.Platform/Rimlight.Platform.csproj" />
