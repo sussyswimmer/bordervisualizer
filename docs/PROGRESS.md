@@ -73,7 +73,7 @@
 - [x] K0 follow-up: Lane B fixes on Codex's K0 (tray Efficiency Mode off, Rimlight.exe, placeholder .ico, CsWin32 DPI check), HANDOFF H-003..H-005 — PR #3 — effort: S
 - [x] K1 Overlay windows, D3D11 + DirectComposition, `Glow.hlsl`, multi-monitor/DPI, device-loss recovery, topmost re-assert — PR #8 — effort: L (notes below; Windows manual test pending)
 - [x] K2 `LoopbackCapture` + lock-free ring buffer + device-change restart. Render thread drains the ring → `IAudioAnalyzer` (real since C2) — PR #9 — effort: M (notes below; Windows manual test pending)
-- [ ] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale
+- [x] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale — PR #14 — effort: L (notes below; Windows manual test pending)
 - [ ] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip
 - [ ] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause
 - [ ] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow
@@ -154,6 +154,85 @@
   - Release and Debug builds have 0 warnings, and `dotnet test` passes.
   - A scratch harness (not committed; Lane B has no test project) checks the ring's semantics and stress-tests it between two threads: 102 M samples, 0 out-of-sequence values, including while it was full and with small reads. It also checks the mono conversion is exact for float32, int16, int24 (sign extension), int32 and 5.1, and that convert + write + read allocates 0 bytes.
   - An adversarial multi-agent review (WASAPI/NAudio, concurrency, integration) runs on this PR; its upheld findings are fixed here before merge.
+
+## K3 notes
+
+- **Structure:**
+  - `FramePacer` (`src/Rimlight.Platform/Overlay/`, no Windows calls) decides how the overlay thread waits after each frame: full rate, 10 fps, or blocked. `OverlayHost` waits accordingly in `MsgWaitForMultipleObjectsEx`, so it keeps pumping messages in every mode.
+  - `IOverlayFrameSource.NextFrame(dt, settings, paused, gradient)` gets the settings snapshot and the pause state every frame. It returns `OverlayFrame(state, gradientChanged, FrameMotion)`:
+    - `Full`: music, or a transition.
+    - `Slow`: Idle Glow breathing.
+    - `Listening`: static, but music could change it.
+    - `Still`: static until an input changes.
+  - Inputs for K5 are thread-safe single-field writes followed by a wake: `SetPaused`, `SetOnBattery` (starts from `GetSystemPowerStatus`), and `SetPausedMonitors` (GDI device names; `DisplayMonitors.PrimaryDeviceName()`). `OverlayHost.Status` (`RenderStatus`) reports pace, frames/s, presents/s, half scale and shown overlays.
+  - `LoopbackCapture.SetActive` opens or closes the loopback stream on the capture thread, and is inactive until first asked. `MusicGlowSource` asks for audio only in Music Sync while the glow is enabled and not paused.
+  - **App:**
+    - `AppController` is the composition root; `App.xaml.cs` only creates and disposes it.
+    - `SettingsService` holds the immutable snapshot. `Update` runs on the UI thread and raises `Changed`. Saves go through `ISettingsStore` with a 500 ms debounce, serialized, and are flushed on exit.
+    - The tray has "Glow on" and "Mode". Debug builds add "Render test (debug)": the live status plus stand-ins for K5/K7 (When silent, FPS cap, On battery, simulated battery, pause everywhere, pause primary, device loss).
+- **Pacing (doc 02):**
+  - The full rate is FpsCap (0 = the primary monitor's refresh, from `EnumDisplaySettings`). It never exceeds that refresh, and is at most 30 fps under "Reduce on battery".
+  - Source motion picks the pace:
+    - `Full`: full rate.
+    - `Slow`: 10 fps.
+    - `Listening`: 10 Hz frames that present nothing new.
+    - `Still`: no frames; the thread waits only on the wake event and messages, with no timer.
+  - Host overrides:
+    - An unfinished present or a per-monitor fade runs at the full rate until it is done.
+    - `Slow` runs at the full rate for 1 s after an input change, and for 0.5 s after a gradient refill or a state change faster than 0.25/s (idle breathing is about 0.1/s).
+    - With nothing on screen, frames run at 10 Hz.
+  - **Static:** each surface remembers what it last presented and skips Draw and Present while the new constants look the same: identical geometry, values within half an 8-bit code value, phase within 0.0002.
+  - **Hidden:** an overlay whose visibility drops below 0.5/255 presents one transparent frame, then hides its window. DWM then composes nothing of ours, and fullscreen apps below can flip directly. The window is shown again, topmost, just before its next visible frame; windows are created hidden.
+  - **Time:** a gap over 0.25 s, or a frame that an input brought forward, gets one full-rate frame of dt. There are no dt spikes, and fades start on the frame after the input.
+  - **Capture** is closed whenever audio can't change the glow: Off, `Enabled = false`, Idle Glow, and paused. The analyzer then hears silence. With When silent = Hide, a static invisible glow keeps listening at 10 Hz.
+- **Battery and render scale (PRD §5, doc 04 §2):**
+  - "Reduce" caps the rate at 30 fps and renders at half scale.
+    - Each swap chain is half the window's size, rounded up. Its DirectComposition visual is stretched back by `SetTransform` (an exact window/buffer ratio), with linear interpolation and hard borders so the edge-hugging core stays solid.
+    - Constants are computed in swap-chain pixels (DPI scale × render scale), so every pixel measure halves and `Glow.hlsl` is unchanged.
+    - The scale change resizes buffers before the pipeline is bound, because a resize clears the context state. The transform is committed right after that frame's presents.
+  - "Pause" counts as paused.
+- **Per-monitor pause (doc 04 §4):** each overlay fades its own visibility multiplier over 300 ms. Once every overlay is paused and fully faded, the engine also gets `paused`, so it goes static and the loop stops.
+- **Spec clarifications and deviations:**
+  - **Native pacing waits on the frame-latency object, not `DwmFlush` (doc 02).**
+    - When the full rate equals the refresh (native, or a cap at least 97% of it, so 60 on 59.94 Hz qualifies), the thread waits on the overlay swap chain's frame-latency object inside `MsgWaitForMultipleObjectsEx`. With a maximum latency of 1, it is signaled when DWM takes the previous frame.
+    - `DwmFlush` would block for up to a frame without pumping messages. It also follows DWM's clock, not our surface.
+    - A successful wait takes the frame, so the surface remembers it holds it (`HoldsFrame`) and presents without waiting again; the host never waits on a frame it holds.
+    - A 100 ms timer covers a display that stops refreshing.
+    - Vsync is used only on a surface whose monitor has the pacing refresh rate, so a faster secondary can't exceed the cap. With an unknown refresh rate only Native uses vsync.
+    - Lower caps use K1's waitable timer. Cap 60 on a 60 Hz display is now vsync-paced, which removes the timer's drift against the refresh.
+  - **A cap above the refresh runs at the refresh** (120 on 60 Hz → 60).
+  - **Capture also closes in Idle Glow and while paused,** not only for Off and disabled. K7's live level meter and K8's visualizer will need a way to request audio while they are open.
+  - **The `AppController`/`SettingsService` skeleton lands in K3** because K3 needs live settings. The store stays in memory until C7.
+  - **What the loop assumes about C6** (`IsStatic` means time alone changes nothing; hidden means `Visibility == 0`; idle motion is slow; dt after gaps) is in HANDOFF H-011.
+- **Left for later:**
+  - K5 drives `SetPaused`, `SetOnBattery` (`WM_POWERBROADCAST`) and `SetPausedMonitors`.
+  - K7/K8 need an "audio wanted" input on the source.
+  - Swap chains stay allocated while Off. They could be released after a long Off if memory matters.
+  - The fake engine has no fades, no Hide and no breathing, so those paths can't be seen on Windows until C6.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Signatures were checked against CsWin32 0.3.346's generated sources (`EnumDisplaySettings`/`DEVMODEW`, `GetSystemPowerStatus`, `MsgWaitForMultipleObjectsEx`, `SWP_HIDEWINDOW`), decompiled Vortice 3.8.3 (`IDCompositionVisual.SetTransform(Matrix3x2)`, `SetBitmapInterpolationMode`, `SetBorderMode`) and H.NotifyIcon 2.3.2 (the WPF `ContextMenu` opens with `IsOpen`, so `Opened` fires).
+  - **Scratch harness 1 (not committed; Lane B has no test project)** links `FramePacer.cs` and `GlowConstants.cs`.
+    - It checks 14 cap/refresh/battery combinations, every pace decision, the change-rate threshold, the `LooksLike` tolerances, and that half scale halves every pixel measure.
+    - Pacer + constants allocate 0 bytes over 100,000 frames.
+    - An 85 s timeline with a C6-like engine reaches these steady states:
+      - music: 60 frames and presents/s
+      - silence → Idle Glow: 10/10
+      - Hide: 10 frames/s, 0 presents, hidden, listening
+      - Off, global pause and single-monitor pause: 0/0, capture closed
+      - Idle Glow: 10 fps
+      - Reduce: 30 fps
+    - Timings: music returns from Hide within 83 ms. Off and pause stop after 283 ms, and a monitor pause hides after its 300 ms fade. The largest dt is 100 ms.
+  - **Scratch harness 2** runs the real `MusicGlowSource` (real analyzer, fake engine) on Linux:
+    - motion is correct in every mode
+    - gradient refills are exact
+    - 0 bytes per frame in music sync, Idle Glow, Off and paused
+    - `SettingsService` debounces and flushes saves
+  - Three bugs found by walking through scenarios were fixed before the PR:
+    - the half-scale resize cleared the bound pipeline
+    - fades jumped up to 100 ms ahead when an input arrived between 10 fps frames
+    - vsync on a faster secondary monitor could exceed the cap
+  - Nothing has run on Windows yet: Maxwell's checklist, with CPU measurement steps, is in #14.
 
 ## Lane B notes
 
