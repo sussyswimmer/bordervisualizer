@@ -19,8 +19,9 @@ internal readonly record struct MigrationStep(int From, Action<Dictionary<string
 /// <c>glow</c> to <c>glowAmount</c> adds:</para>
 /// <code>new MigrationStep(1, fields => { if (fields.Remove("glow", out JsonElement value)) fields["glowAmount"] = value; })</code>
 /// <para>New fields with defaults don't need a step: a missing field reads as its default.</para>
-/// <para>A missing, non-integer or below-1 version is read as version 1. A file from a newer build is not migrated:
-/// the fields this build knows are read and the rest are ignored.</para>
+/// <para>A missing, non-integer or below-1 version is read as version 1; a whole number may be written as <c>2.0</c>,
+/// and one past <see cref="int.MaxValue"/> counts as <see cref="int.MaxValue"/>. A file from a newer build is not
+/// migrated: the fields this build knows are read and the rest are ignored.</para>
 /// </remarks>
 internal sealed class SettingsMigrator
 {
@@ -70,7 +71,7 @@ internal sealed class SettingsMigrator
     internal static int ReadVersion(IReadOnlyDictionary<string, JsonElement> fields) =>
         fields.TryGetValue(nameof(Settings.Version), out JsonElement element)
         && element.ValueKind == JsonValueKind.Number
-        && element.TryGetInt32(out int version)
+        && SettingsJson.TryGetWholeNumber(element, out int version)
             ? Math.Max(version, FirstVersion)
             : FirstVersion;
 

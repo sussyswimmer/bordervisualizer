@@ -50,6 +50,37 @@ public sealed class SettingsMigratorTests : IDisposable
         Assert.Equal(Math.Max(fileVersion, 4), version);
     }
 
+    [Theory]
+    [InlineData("2", 2)]
+    [InlineData("2.0", 2)]
+    [InlineData("2e0", 2)]
+    [InlineData("0.2e1", 2)]
+    [InlineData("2147483647", int.MaxValue)]
+    [InlineData("99999999999", int.MaxValue)] // from a far newer build, never "version 1"
+    [InlineData("1e400", int.MaxValue)]
+    [InlineData("0", 1)]
+    [InlineData("-99999999999", 1)]
+    [InlineData("1.5", 1)]
+    [InlineData("\"2\"", 1)]
+    [InlineData("true", 1)]
+    public void VersionIsAnyWholeNumberLiteral(string literal, int expected)
+    {
+        using JsonDocument document = JsonDocument.Parse($$"""{ "Version": {{literal}} }""");
+        var fields = document.RootElement.EnumerateObject().ToDictionary(p => p.Name, p => p.Value, StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(expected, SettingsMigrator.ReadVersion(fields));
+    }
+
+    [Fact]
+    public void FileFromAFarNewerBuildIsNotMigrated()
+    {
+        var migrator = new SettingsMigrator(2, [new MigrationStep(1, fields => fields.Remove("glow"))]);
+        dir.Create().Write("""{ "version": 99999999999, "glow": 0.7 }""");
+        Assert.Equal(0.7f, new JsonSettingsStore(dir.Path, migrator).Load().Glow);
+
+        dir.Write("""{ "version": 1.0, "glow": 0.7 }""");
+        Assert.Equal(0.45f, new JsonSettingsStore(dir.Path, migrator).Load().Glow); // version 1: the step ran
+    }
+
     [Fact]
     public void StoreMigratesOlderFilesBeforeReadingThem()
     {

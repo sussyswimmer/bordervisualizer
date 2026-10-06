@@ -82,6 +82,11 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal((byte)'{', bytes[0]); // no BOM
         string text = Encoding.UTF8.GetString(bytes);
         Assert.Contains("\n  \"version\": 1,", text.ReplaceLineEndings("\n"));
+        // Hand-editable: '+' and '&' are written as they are, not as \u escapes.
+        Assert.Contains("\"toggleHotkey\": \"Win+Shift+F9\"", text);
+        Assert.Contains(@"""\\\\?\\DISPLAY#DEL40F6#5&2f3a1b2c&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}""", text);
+        Assert.DoesNotContain(@"\u", text);
+        Assert.Contains("\"toggleHotkey\": \"Ctrl+Alt+L\"", Encoding.UTF8.GetString(SettingsJson.Serialize(new Settings())));
 
         using JsonDocument json = JsonDocument.Parse(bytes);
         string[] names = json.RootElement.EnumerateObject().Select(p => p.Name).ToArray();
@@ -132,7 +137,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
               "brightness": -3,
               "primaryRatio": 0.95,
               "coreThicknessDip": 1e39,
-              "sensitivity": 0,
+              "sensitivity": -1e400,
               "cornerRadiusDip": 41,
               "fpsCap": 144,
               "primaryHex": "#abc",
@@ -143,8 +148,8 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal(1f, loaded.Glow);
         Assert.Equal(0.1f, loaded.Brightness);
         Assert.Equal(0.9f, loaded.PrimaryRatio);
-        Assert.Equal(6f, loaded.CoreThicknessDip); // 1e39 overflows float to +∞, so the default
-        Assert.Equal(0.25f, loaded.Sensitivity);
+        Assert.Equal(40f, loaded.CoreThicknessDip); // finite in JSON, though past float's range: clamped, not reset
+        Assert.Equal(0.25f, loaded.Sensitivity);    // past double's range too
         Assert.Equal(40f, loaded.CornerRadiusDip);
         Assert.Equal(60, loaded.FpsCap);
         Assert.Equal("#AABBCC", loaded.PrimaryHex);
@@ -190,6 +195,22 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal(0.3f, loaded.Brightness);
         Assert.Equal(ColorMode.Manual, loaded.ColorMode);
         Assert.False(loaded.AutoUpdate);
+        Assert.False(File.Exists(dir.BadFile));
+    }
+
+    [Theory]
+    [InlineData("30", 30)]
+    [InlineData("30.0", 30)]
+    [InlineData("3e1", 30)]
+    [InlineData("1.2E+2", 120)]
+    [InlineData("-0.0", 0)]
+    [InlineData("30.5", 60)]
+    [InlineData("3e10", 60)]
+    [InlineData("1e400", 60)]
+    public void FpsCapAcceptsAnyWholeNumberLiteral(string literal, int expected)
+    {
+        dir.Create().Write($$"""{ "fpsCap": {{literal}} }""");
+        Assert.Equal(expected, new JsonSettingsStore(dir.Path).Load().FpsCap);
         Assert.False(File.Exists(dir.BadFile));
     }
 
@@ -363,6 +384,8 @@ public sealed class JsonSettingsStoreTests : IDisposable
     [InlineData("""{ "version": 0, "glow": 0.7 }""")]
     [InlineData("""{ "version": -4, "glow": 0.7 }""")]
     [InlineData("""{ "version": 1.5, "glow": 0.7 }""")]
+    [InlineData("""{ "version": 1.0, "glow": 0.7 }""")]
+    [InlineData("""{ "version": -1e10, "glow": 0.7 }""")]
     [InlineData("""{ "version": null, "glow": 0.7 }""")]
     public void MissingOrOddVersionsReadAsVersionOne(string json)
     {
@@ -426,6 +449,146 @@ public sealed class JsonSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void ReplaceThatRemovedTheOldFileThenFailedLeavesTheNewFile()
+    {
+        // ReplaceFile's ERROR_UNABLE_TO_MOVE_REPLACEMENT: settings.json is already gone, the new contents are only in
+        // the temporary file, and .NET throws. Deleting that file would lose every setting.
+        var store = new JsonSettingsStore(dir.Path);
+        store.Save(new Settings { Glow = 0.2f });
+        store.BeforeCommit = _ =>
+        {
+            File.Delete(dir.SettingsFile);
+            throw new IOException("Unable to move the replacement file to the file to be replaced.");
+        };
+
+        Assert.Throws<IOException>(() => store.Save(SettingsTestData.FullyCustom()));
+        SettingsTestData.AssertSameValues(SettingsTestData.FullyCustom(), new JsonSettingsStore(dir.Path).Load());
+        Assert.Empty(dir.TempFiles());
+        Assert.False(File.Exists(dir.BadFile));
+    }
+
+    [Fact]
+    public void ReplaceThatRemovedTheOldFileWritesTheNewOneWhenTheTemporaryFileCantBeMoved()
+    {
+        // As above, but the temporary file can't be renamed either (on Windows, whatever broke the swap may still
+        // hold it): the same bytes are written in place directly.
+        var store = new JsonSettingsStore(dir.Path);
+        store.Save(new Settings { Glow = 0.2f });
+        store.BeforeCommit = temp =>
+        {
+            File.Delete(dir.SettingsFile);
+            File.Delete(temp);
+            throw new IOException("Unable to move the replacement file to the file to be replaced.");
+        };
+
+        Assert.Throws<IOException>(() => store.Save(SettingsTestData.FullyCustom()));
+        SettingsTestData.AssertSameValues(SettingsTestData.FullyCustom(), new JsonSettingsStore(dir.Path).Load());
+        Assert.Empty(dir.TempFiles());
+    }
+
+    [Fact]
+    public void TemporaryFileIsKeptWhenItIsTheLastCopy()
+    {
+        var store = new JsonSettingsStore(dir.Path);
+        store.Save(new Settings { Glow = 0.2f });
+        string? staged = null;
+        store.BeforeCommit = temp =>
+        {
+            staged = temp;
+            File.Delete(dir.SettingsFile);
+            Directory.CreateDirectory(dir.SettingsFile); // nothing can be put in its place now
+            throw new IOException("Unable to move the replacement file to the file to be replaced.");
+        };
+
+        Assert.Throws<IOException>(() => store.Save(SettingsTestData.FullyCustom()));
+        Assert.True(File.Exists(staged));
+        SettingsTestData.AssertSameValues(SettingsTestData.FullyCustom(), SettingsJson.Deserialize(File.ReadAllBytes(staged!), SettingsMigrator.Default)!);
+    }
+
+    [Fact]
+    public void PartialTemporaryFileNeverTakesTheSettingsFilesPlace()
+    {
+        var store = new JsonSettingsStore(dir.Path);
+        store.Save(new Settings { Glow = 0.2f });
+        store.WrapTempStream = file =>
+        {
+            File.Delete(dir.SettingsFile); // even with no settings file left, a half-written one is worse than none
+            return new FailingStream(file, failAfterBytes: 40);
+        };
+
+        Assert.Throws<IOException>(() => store.Save(SettingsTestData.FullyCustom()));
+        Assert.Empty(Directory.GetFileSystemEntries(dir.Path));
+    }
+
+    [Fact]
+    public void SuccessfulSaveDeletesTemporaryFilesLeftByACrash()
+    {
+        dir.Create();
+        string[] leftovers =
+        [
+            dir.File("settings.json.0123456789abcdef0123456789abcdef.tmp"),
+            dir.File("settings.json.fedcba9876543210fedcba9876543210.tmp"),
+        ];
+        foreach (string leftover in leftovers) File.WriteAllText(leftover, """{ "glow": 0."""); // cut off mid-write
+        string[] unrelated = [dir.File("other.tmp"), dir.File("settings.json.bak"), dir.File("my-settings.json.1.tmp")];
+        foreach (string file in unrelated) File.WriteAllText(file, "keep");
+
+        var store = new JsonSettingsStore(dir.Path);
+        store.WrapTempStream = file => new FailingStream(file, failAfterBytes: 0);
+        Assert.Throws<IOException>(() => store.Save(new Settings { Glow = 0.7f }));
+        Assert.All(leftovers, leftover => Assert.True(File.Exists(leftover))); // only a successful save cleans up
+
+        store.WrapTempStream = null;
+        store.Save(new Settings { Glow = 0.7f });
+        Assert.Equal(0.7f, store.Load().Glow);
+        Assert.All(leftovers, leftover => Assert.False(File.Exists(leftover)));
+        Assert.All(unrelated, file => Assert.Equal("keep", File.ReadAllText(file)));
+    }
+
+    [Fact]
+    public void FileLockedForAMomentIsRetriedInsteadOfTreatedAsCorrupt()
+    {
+        new JsonSettingsStore(dir.Path).Save(new Settings { Glow = 0.7f });
+        int retries = 0;
+        // Another program (a save in another process, a scanner, a backup tool) opened the file without sharing it.
+        var holder = new FileStream(dir.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.None);
+        var store = new JsonSettingsStore(dir.Path)
+        {
+            BeforeReadRetry = () =>
+            {
+                if (++retries == JsonSettingsStore.ReadAttempts - 1) holder.Dispose(); // released before the last try
+            },
+        };
+
+        try
+        {
+            Assert.Equal(0.7f, store.Load().Glow);
+        }
+        finally
+        {
+            holder.Dispose();
+        }
+
+        Assert.Equal(JsonSettingsStore.ReadAttempts - 1, retries);
+        Assert.False(File.Exists(dir.BadFile));
+    }
+
+    [Fact]
+    public void FileLockedForLongerGivesTheDefaultsAfterTheLastTry()
+    {
+        new JsonSettingsStore(dir.Path).Save(new Settings { Glow = 0.7f });
+        int retries = 0;
+        var store = new JsonSettingsStore(dir.Path) { BeforeReadRetry = () => retries++ };
+        using (new FileStream(dir.SettingsFile, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            SettingsTestData.AssertSameValues(new Settings(), store.Load());
+        }
+
+        Assert.Equal(JsonSettingsStore.ReadAttempts - 1, retries);
+        Assert.Equal(0.7f, store.Load().Glow); // and read normally once it is free
+    }
+
+    [Fact]
     public void ConcurrentSavesAreSerializedAndTheFileIsAlwaysWhole()
     {
         var store = new JsonSettingsStore(dir.Path);
@@ -479,8 +642,9 @@ public sealed class JsonSettingsStoreTests : IDisposable
         writer.Save(new Settings { ToggleHotkey = "start" });
         var valid = new ConcurrentDictionary<string, bool>();
         valid["start"] = true;
-        // Windows' ReplaceFile isn't one rename, so a read there may briefly find no file and get the defaults.
-        // A partial file would still fail: it can't parse, so it would leave settings.bad.json behind.
+        // Windows' ReplaceFile isn't one rename, so a read there may briefly find no file and get the defaults (or
+        // find it locked, which Load retries). A partial file would still fail: it can't parse, so it would leave
+        // settings.bad.json behind.
         if (OperatingSystem.IsWindows()) valid[new Settings().ToggleHotkey] = true;
         var seen = new ConcurrentBag<string>();
         int writes = 0;

@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -8,13 +10,15 @@ namespace Rimlight.Core.SettingsStorage;
 /// <c>customMonitorIds</c>, …), enums as their C# member names (<c>"MusicSync"</c>), indented, UTF-8 without a BOM.
 /// </summary>
 /// <remarks>
-/// <para>Writing uses the source-generated <see cref="SettingsJsonContext"/>. Reading is field by field instead of one
-/// deserializer call, so a field with the wrong type or an unknown enum name falls back to its own default instead of
-/// failing the whole file (doc 06 §1: "reset invalid fields to their defaults").</para>
+/// <para>Writing uses the source-generated <see cref="SettingsJsonContext"/> with relaxed escaping, so a hand editor
+/// sees <c>Ctrl+Alt+L</c> and the <c>&amp;</c> in monitor IDs rather than <c>\u</c> escapes. Reading is field by field
+/// instead of one deserializer call, so a field with the wrong type or an unknown enum name falls back to its own
+/// default instead of failing the whole file (doc 06 §1: "reset invalid fields to their defaults").</para>
 /// <para>Reading is lenient about hand edits: property names match case-insensitively (the last duplicate wins),
 /// enum names too, comments and trailing commas are allowed, a UTF-8 BOM is skipped, unknown fields are ignored and
 /// missing fields take their defaults. Enums must be names; numbers are rejected. Monitor-ID entries that aren't
-/// non-empty strings are dropped.</para>
+/// non-empty strings are dropped. A number beyond <see cref="float"/>'s range is clamped like any other out-of-range
+/// value, and a whole number may be written as <c>30.0</c> or <c>3e1</c>.</para>
 /// </remarks>
 internal static class SettingsJson
 {
@@ -24,11 +28,45 @@ internal static class SettingsJson
         CommentHandling = JsonCommentHandling.Skip,
     };
 
+    // The default encoder also escapes HTML-sensitive characters such as '+' and '&', which a local file doesn't need.
+    private static readonly JsonWriterOptions WriterOptions = new()
+    {
+        Indented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
     /// <summary>Writes <paramref name="settings"/> as UTF-8 JSON. Validate first; this writes values as given.</summary>
     /// <param name="settings">Validated settings.</param>
     /// <returns>The file contents.</returns>
-    internal static byte[] Serialize(Settings settings) =>
-        JsonSerializer.SerializeToUtf8Bytes(settings, SettingsJsonContext.Default.Settings);
+    internal static byte[] Serialize(Settings settings)
+    {
+        var buffer = new ArrayBufferWriter<byte>(1024);
+        using (var writer = new Utf8JsonWriter(buffer, WriterOptions))
+        {
+            JsonSerializer.Serialize(writer, settings, SettingsJsonContext.Default.Settings);
+        }
+
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    /// <summary>Reads a whole number however it is written (<c>30</c>, <c>30.0</c>, <c>3e1</c>), saturated to the
+    /// <see cref="int"/> range.</summary>
+    /// <param name="number">A JSON number.</param>
+    /// <param name="value">The number, or 0 when it has a fractional part.</param>
+    /// <returns>Whether the number is whole.</returns>
+    internal static bool TryGetWholeNumber(JsonElement number, out int value)
+    {
+        if (number.TryGetInt32(out value)) return true;
+        // A JSON number past double's range parses as ±∞, which is whole and saturates too.
+        if (number.TryGetDouble(out double wide) && wide == Math.Floor(wide))
+        {
+            value = (int)Math.Clamp(wide, int.MinValue, int.MaxValue);
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
 
     /// <summary>Reads, migrates and validates a settings file.</summary>
     /// <param name="utf8">The file contents.</param>
@@ -94,13 +132,15 @@ internal static class SettingsJson
             ? e.GetBoolean()
             : fallback;
 
+    // A JSON number is always finite, but one past float's range parses as ±∞, which validation would reset to the
+    // default; clamping it to the float range lets validation clamp it to the field's range instead.
     private static float ReadFloat(IReadOnlyDictionary<string, JsonElement> f, string name, float fallback) =>
         f.TryGetValue(name, out JsonElement e) && e.ValueKind == JsonValueKind.Number && e.TryGetSingle(out float value)
-            ? value
+            ? Math.Clamp(value, float.MinValue, float.MaxValue)
             : fallback;
 
     private static int ReadInt(IReadOnlyDictionary<string, JsonElement> f, string name, int fallback) =>
-        f.TryGetValue(name, out JsonElement e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out int value)
+        f.TryGetValue(name, out JsonElement e) && e.ValueKind == JsonValueKind.Number && TryGetWholeNumber(e, out int value)
             ? value
             : fallback;
 

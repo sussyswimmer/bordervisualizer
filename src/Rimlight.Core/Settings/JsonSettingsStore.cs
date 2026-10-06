@@ -6,18 +6,23 @@ namespace Rimlight.Core.SettingsStorage;
 /// upgrades on <see cref="SettingsMigrator"/>.
 /// </summary>
 /// <remarks>
-/// <para><see cref="Load"/> never throws. A missing file gives defaults. A file that can't be read or parsed (not
-/// JSON, not an object, invalid UTF-8, over <see cref="MaxFileBytes"/>) is copied over <c>settings.bad.json</c> and
-/// defaults are returned; the original stays in place until the next save replaces it.</para>
+/// <para><see cref="Load"/> never throws. A missing file gives defaults. A file that is in use elsewhere is retried
+/// briefly (<see cref="ReadAttempts"/> tries). A file that can't be read or parsed (still locked, not JSON, not an
+/// object, invalid UTF-8, over <see cref="MaxFileBytes"/>) is copied over <c>settings.bad.json</c> and defaults are
+/// returned; the original stays in place until the next save replaces it.</para>
 /// <para><see cref="Save"/> validates, creates the directory, writes a uniquely named temporary file next to the target,
 /// flushes it to disk, then swaps it in with <see cref="File.Replace(string, string, string?, bool)"/> (or
-/// <see cref="File.Move(string, string)"/> when there is no file yet). If anything fails, the temporary file is deleted
-/// and the exception (an <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/>) propagates; the
-/// previous <c>settings.json</c> is untouched. A save always writes the current schema version, so a file written by a
-/// newer build is downgraded to the fields this build knows.</para>
+/// <see cref="File.Move(string, string)"/> when there is no file yet). If anything fails, the exception (an
+/// <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/>) propagates and the previous
+/// <c>settings.json</c> is kept, with one exception: Windows' ReplaceFile can fail after it has already removed the old
+/// file, and then the complete new file is put in its place instead (best effort; if even that fails, the temporary
+/// file is kept as the last copy). Otherwise the temporary file is deleted, and after a successful save so are
+/// temporary files left by a crash or power loss. A save always writes the current schema version, so a file written
+/// by a newer build is downgraded to the fields this build knows.</para>
 /// <para>Thread safety: calls on one instance are serialized; a save is never interleaved with another save or a
-/// load. Separate instances (or processes) on the same directory don't share that lock, but each swap is still
-/// all-or-nothing, so a reader sees either the old file or the new one.</para>
+/// load. Separate instances (or processes) on the same directory don't share that lock. They never see a partially
+/// written file, but on Windows ReplaceFile is not a single rename, so a load there may briefly find no file (and
+/// return the defaults) or find it locked (and retry).</para>
 /// </remarks>
 internal sealed class JsonSettingsStore : ISettingsStore
 {
@@ -30,6 +35,12 @@ internal sealed class JsonSettingsStore : ISettingsStore
     /// <summary>Files larger than this are treated as corrupt instead of being read into memory.</summary>
     /// <remarks>A real file is about 1 KB; this only guards startup against a runaway or damaged file.</remarks>
     internal const int MaxFileBytes = 1 << 20;
+
+    /// <summary>How many times <see cref="Load"/> tries to read a file that is in use elsewhere.</summary>
+    internal const int ReadAttempts = 3;
+
+    /// <summary>The pause between those tries.</summary>
+    private const int ReadRetryDelayMs = 20;
 
     private readonly object gate = new();
     private readonly string directory;
@@ -69,6 +80,9 @@ internal sealed class JsonSettingsStore : ISettingsStore
     /// <summary>Test seam: runs with the temporary file's path after it is flushed, right before the swap.</summary>
     internal Action<string>? BeforeCommit { get; set; }
 
+    /// <summary>Test seam: runs instead of the pause before <see cref="Load"/> tries a file in use again.</summary>
+    internal Action? BeforeReadRetry { get; set; }
+
     /// <inheritdoc />
     public Settings Load()
     {
@@ -93,7 +107,8 @@ internal sealed class JsonSettingsStore : ISettingsStore
 
     /// <inheritdoc />
     /// <exception cref="ArgumentNullException"><paramref name="settings"/> is null.</exception>
-    /// <exception cref="IOException">The directory or file can't be written; the previous file is kept.</exception>
+    /// <exception cref="IOException">The directory or file can't be written; the previous file (or, after a partial
+    /// replace, the new one) is kept.</exception>
     /// <exception cref="UnauthorizedAccessException">Access to the directory or file is denied; the previous file is
     /// kept.</exception>
     public void Save(Settings settings)
@@ -106,18 +121,15 @@ internal sealed class JsonSettingsStore : ISettingsStore
         {
             Directory.CreateDirectory(directory);
             string temp = System.IO.Path.Combine(directory, $"{FileName}.{Guid.NewGuid():N}.tmp");
+            bool replacing = false;
             try
             {
-                using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                {
-                    Stream target = WrapTempStream?.Invoke(file) ?? file;
-                    target.Write(contents);
-                    target.Flush();
-                    file.Flush(flushToDisk: true);
-                }
+                WriteFlushed(temp, contents, WrapTempStream);
 
+                // Set only once the temporary file is complete: a partial one must never take the settings file's place.
+                replacing = File.Exists(Path);
                 BeforeCommit?.Invoke(temp);
-                if (File.Exists(Path))
+                if (replacing)
                 {
                     File.Replace(temp, Path, destinationBackupFileName: null, ignoreMetadataErrors: true);
                 }
@@ -128,14 +140,35 @@ internal sealed class JsonSettingsStore : ISettingsStore
             }
             catch
             {
-                TryDelete(temp);
+                // ReplaceFile can fail after it has already removed settings.json (ERROR_UNABLE_TO_MOVE_REPLACEMENT and
+                // _2), leaving the new contents only in the temporary file: put them in place rather than lose both.
+                if (!replacing || File.Exists(Path) || TryRestore(temp, contents)) TryDelete(temp);
                 throw;
             }
+
+            DeleteLeftoverTempFiles();
         }
     }
 
     // Returns null when there is no settings file.
     private byte[]? ReadFile()
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return ReadFileOnce();
+            }
+            catch (IOException) when (attempt < ReadAttempts)
+            {
+                // Usually a sharing violation: another process is replacing, scanning or backing up the file right now.
+                if (BeforeReadRetry is { } retry) retry();
+                else Thread.Sleep(ReadRetryDelayMs);
+            }
+        }
+    }
+
+    private byte[]? ReadFileOnce()
     {
         FileStream file;
         try
@@ -160,6 +193,57 @@ internal sealed class JsonSettingsStore : ISettingsStore
         }
     }
 
+    private static void WriteFlushed(string path, byte[] contents, Func<Stream, Stream>? wrap)
+    {
+        using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        Stream target = wrap?.Invoke(file) ?? file;
+        target.Write(contents);
+        target.Flush();
+        file.Flush(flushToDisk: true);
+    }
+
+    // After a failed replace removed settings.json: moves the complete temporary file into its place or, if that is
+    // still held by whatever broke the swap, writes the same bytes there. Returns true when settings.json now holds
+    // them, false when the temporary file is the last copy.
+    private bool TryRestore(string temp, byte[] contents)
+    {
+        try
+        {
+            File.Move(temp, Path);
+            return true;
+        }
+        catch (Exception)
+        {
+            // Fall through: the bytes are still in memory.
+        }
+
+        try
+        {
+            WriteFlushed(Path, contents, wrap: null);
+            return true;
+        }
+        catch (Exception)
+        {
+            // Best effort. A file this created but couldn't finish is backed up as corrupt by the next load.
+            return false;
+        }
+    }
+
+    private void DeleteLeftoverTempFiles()
+    {
+        try
+        {
+            foreach (string leftover in Directory.EnumerateFiles(directory, $"{FileName}.*.tmp"))
+            {
+                TryDelete(leftover);
+            }
+        }
+        catch (Exception)
+        {
+            // Best effort: a leftover is never read, and the next save tries again.
+        }
+    }
+
     private void BackUpBadFile()
     {
         try
@@ -180,7 +264,8 @@ internal sealed class JsonSettingsStore : ISettingsStore
         }
         catch (Exception)
         {
-            // A leftover temp file is harmless: it never has the settings file's name and is never read.
+            // A leftover temp file is harmless: it never has the settings file's name, is never read, and the next
+            // successful save deletes it.
         }
     }
 }

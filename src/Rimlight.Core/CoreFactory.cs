@@ -58,17 +58,19 @@ public static class CoreFactory
     /// <exception cref="ArgumentException"><paramref name="directory"/> is null, empty or whitespace.</exception>
     /// <remarks>
     /// <para><b>Load</b> never throws and always returns valid settings. A missing file gives defaults. A file that
-    /// can't be read or parsed is copied over <c>settings.bad.json</c> in the same directory and defaults are returned.
-    /// Otherwise each field is read on its own: a missing, mistyped or invalid field takes its default and the rest are
-    /// kept. Numbers are clamped to their doc 06 range (NaN/∞ give the default), <see cref="Settings.FpsCap"/> outside
+    /// can't be read or parsed (after a brief retry if another program has it locked) is copied over
+    /// <c>settings.bad.json</c> in the same directory and defaults are returned. Otherwise each field is read on its
+    /// own: a missing, mistyped or invalid field takes its default and the rest are kept. Numbers are clamped to their
+    /// doc 06 range (a NaN or ∞ passed to Save gives the default), <see cref="Settings.FpsCap"/> outside
     /// {0, 30, 60, 120} gives 60, colors are stored as upper-case <c>#RRGGBB</c> (<c>#RGB</c> is expanded), and unknown
     /// fields are ignored. <see cref="Settings.ToggleHotkey"/> is opaque (only null is replaced; an empty string means no
     /// hotkey), and <see cref="Settings.CustomMonitorIds"/> keeps every non-empty ID, including unplugged monitors (H-009).
     /// A file from an older version is migrated; one from a newer version is read as far as this version understands it.</para>
     /// <para><b>Save</b> validates the same way, creates the directory, and replaces the file atomically (temporary file,
-    /// flush to disk, then a single swap), so a crash or failure leaves the previous file intact. It always writes the
-    /// current schema version, which drops fields only a newer version knows. It throws <see cref="IOException"/> or
-    /// <see cref="UnauthorizedAccessException"/> when the file can't be written; catch those and retry on the next change.</para>
+    /// flush to disk, then a swap), so a crash or failure leaves the previous file, or the complete new one if Windows'
+    /// replace failed half-way. It always writes the current schema version, which drops fields only a newer version
+    /// knows. It throws <see cref="IOException"/> or <see cref="UnauthorizedAccessException"/> when
+    /// the file can't be written; catch those and retry on the next change.</para>
     /// <para>The format is camelCase JSON with enums as names, e.g. <c>"animation": "MusicSync"</c>. Calls on one store
     /// are serialized internally and may come from any thread; never call them per frame.</para>
     /// </remarks>
