@@ -14,7 +14,9 @@ cbuffer Light : register(b0)
     float  Visibility;      // 0..1 fades (pause, off, hide); multiplies alpha like Intensity
     float  ColorRadiusPx;   // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
     float  GlowRadiusPx;    // corner radius of the glow field (>= CornerRadiusPx), see PSMain step 2
-    float  _pad;
+    float  _pad0;
+    float3 MeanColor;       // average of the gradient, linear RGB; the colour deep inside, see PSMain step 4
+    float  _pad1;
 };
 
 // 64 x 1, linear RGB. Texel i is the colour at perimeter position u = (i + 0.5) / 64 before Phase is applied
@@ -48,8 +50,8 @@ float QuarterAngle(float y, float x)
 // Perimeter coordinate in [0, 1): arc length clockwise along a rounded rectangle with corner radius r, starting at
 // the top-left corner (the middle of its arc, which is the screen corner's diagonal; H-008). Inside the corner zones
 // the position follows the arc, so it is continuous through the corners. Elsewhere it is the projection onto the
-// nearest straight edge, which is discontinuous only on the medial axis at least r from every edge, where the glow
-// has faded (the renderer keeps r >= 6 x SpreadPx).
+// nearest straight edge, which is discontinuous only on the medial axis at least r from every edge; PSMain blends
+// the colour to the mean before that depth.
 float PerimeterT(float2 p, float2 size, float r)
 {
     float topLen = size.x - 2 * r;
@@ -138,6 +140,11 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     // 3-5. Colour around the perimeter from the Oklab-blended gradient (built on the CPU when the palette changes).
     float u = frac(PerimeterT(p, ScreenPx, ColorRadiusPx) + Phase);
     float3 rgb = Gradient.SampleLevel(GradientSampler, float2(u, 0.5), 0).rgb;
+    // The perimeter coordinate has a seam deep inside (its medial axis, at least ColorRadiusPx from every edge). The
+    // colour blends to the gradient's mean before that depth, so both sides of the seam agree even when a wide glow
+    // (ColorRadiusPx clamped to half the screen) still lights it.
+    float depth = min(min(p.x, p.y), min(ScreenPx.x - p.x, ScreenPx.y - p.y));
+    rgb = lerp(rgb, MeanColor, smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth));
 
     // 6. Dither, then 7. output premultiplied. The swap chain is 8-bit UNORM, which DWM reads as sRGB-encoded,
     // so the linear gradient colour is encoded here before it is multiplied by alpha.

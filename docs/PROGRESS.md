@@ -117,8 +117,8 @@
   - `Glow.hlsl` is embedded and compiled at runtime (vs_4_0 / ps_4_0, feature level 10.0+). The gradient texture is R16G16B16A16_FLOAT, which every feature level ≥ 10.0 must be able to filter (32-bit float filtering is optional there).
 - **Spec clarifications and deviations (doc 04 §3):**
   - **Rounded glow field (deviation):** the glow's distance field has corners of radius ≥ 2 × spread. With doc 04's square field, the glows from two edges meet in a visible 45° crease (a picture-frame bevel); rounded, the light pools softly into the corners. The solid core still follows `CornerRadiusDip`.
-  - **Perimeter coordinate:** arc length along a rounded path (radius ≥ 6 × spread), starting at the top-left corner and running clockwise (H-008). It is continuous wherever the glow is visible, at most 0.0008 per pixel within 150 px of the edge. Its only seam lies ≥ 6 spreads inside, at alpha < 1/255.
-  - **Glow → spread:** doc 04 leaves the mapping to the renderer. `Glow` 0..1 maps to an e-folding reach of 2 + 148 × Glow² DIP (default 0.45 → 32 DIP).
+  - **Perimeter coordinate:** arc length along a rounded path (radius ≥ 6 × spread and ≥ 2 × the core), starting at the top-left corner and running clockwise (H-008). It is continuous through the corners, at most 0.0008 per pixel within 150 px of the edge. Its seam (the medial axis, ≥ that radius inside) is hidden: between 3 and 6 spreads deep the colour blends to the gradient's mean, so a wide glow that reaches the screen centre shows no seam.
+  - **Glow → spread (PRD §1):** "0 means a hairline; 100 means about 35% of the shorter screen dimension". Spill is taken as three e-folding distances, with a squared slider so it feels even. The e-folding distance is max(1 DIP, Glow² × 0.35 / 3 × shorter side); the default 0.45 gives about 25 px at 1080p.
   - **Core at thickness 0** draws no line.
   - **sRGB:** the gradient is linear RGB (H-008). The 8-bit swap chain is read by DWM as sRGB-encoded, so the shader encodes before premultiplying.
   - **Dither** is ±0.5/255 interleaved gradient noise on alpha.

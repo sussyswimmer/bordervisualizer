@@ -52,6 +52,7 @@ public sealed class OverlayHost : IDisposable
     private bool deviceCheckRequested;
     private bool hasGradient;
     private bool gradientUploaded;
+    private Rgb meanColor;
     private long frameTicks = Stopwatch.Frequency / DefaultFrameRate;
     private HWND helper;
     private HANDLE frameTimer;
@@ -455,7 +456,11 @@ public sealed class OverlayHost : IDisposable
         EnsureGpu();
         // The source advances even when nothing can be drawn, so its time stays in step with the clock.
         LightState state = source.NextFrame(dt, gradient, out bool gradientChanged);
-        if (gradientChanged) hasGradient = true;
+        if (gradientChanged)
+        {
+            hasGradient = true;
+            meanColor = GlowConstants.MeanOf(gradient);
+        }
         if (gpu is null || !hasGradient || !CheckGpu()) return;
 
         try
@@ -470,7 +475,7 @@ public sealed class OverlayHost : IDisposable
             foreach (Overlay overlay in overlays)
             {
                 if (overlay.Surface is not { } surface) continue;
-                var constants = GlowConstants.Create(state, surface.Width, surface.Height, overlay.Monitor.Scale, cornerRadiusDip);
+                var constants = GlowConstants.Create(state, surface.Width, surface.Height, overlay.Monitor.Scale, cornerRadiusDip, meanColor);
                 Result result = surface.Render(constants);
                 if (result.Failure)
                 {
