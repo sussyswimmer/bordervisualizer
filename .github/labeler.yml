@@ -11,6 +11,7 @@ lane-a:
           - src/Rimlight.Bench/**
           - tools/**
           - build/**
+          - .config/**
           - .github/**
           - CONTRIBUTING.md
           - SECURITY.md

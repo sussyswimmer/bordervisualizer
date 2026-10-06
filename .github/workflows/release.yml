@@ -1,0 +1,210 @@
+name: Release
+
+# Pushing a tag vX.Y.Z (v1.0.0, or v1.1.0-beta.1 for a prerelease) builds, tests and packs Rimlight
+# for x64 and ARM64 with build/pack.ps1, then publishes the GitHub release that the README's
+# download button and the app's auto-update both read (doc 06 §5, doc 07 Phase 6).
+# Pull requests that change the packaging, and manual runs, are dry runs: the same build and pack,
+# unsigned, kept as a workflow artifact for 7 days. Nothing is published.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - build/**
+      - .config/dotnet-tools.json
+      - .github/workflows/release.yml
+      - src/Directory.Build.props
+      - src/Rimlight.App/Rimlight.App.csproj
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to a pull request cancels its older dry run. A release run is never cancelled.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  pack:
+    # Builds, tests and packs with a read-only token. Only the publish job can write to the repo,
+    # and it runs no code from the build.
+    name: Build and pack (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # Optional code signing with Azure Trusted Signing. It is on only for a tagged release, and
+      # only when all six SIGNING_* secrets exist (Settings > Secrets and variables > Actions):
+      #   SIGNING_ENDPOINT       the account's endpoint, e.g. https://eus.codesigning.azure.net
+      #   SIGNING_ACCOUNT        the Trusted Signing account name
+      #   SIGNING_PROFILE        the certificate profile name
+      #   SIGNING_TENANT_ID, SIGNING_CLIENT_ID, SIGNING_CLIENT_SECRET
+      #                          an Entra ID app registration with the "Trusted Signing
+      #                          Certificate Profile Signer" role on that profile
+      # Without them releases are unsigned, and SmartScreen asks first-time users to click
+      # "More info", then "Run anyway" (README).
+      SIGN: ${{ github.event_name == 'push' && secrets.SIGNING_ENDPOINT != '' && secrets.SIGNING_ACCOUNT != '' && secrets.SIGNING_PROFILE != '' && secrets.SIGNING_TENANT_ID != '' && secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_CLIENT_SECRET != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Releases build with exactly the .NET 8 SDK, like the Linux CI job. The empty install
+      # directory hides the newer SDKs on the runner image, which global.json would roll forward to.
+      - name: Set up the .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-release-${{ hashFiles('**/*.csproj', '**/Directory.*.props', '.config/dotnet-tools.json') }}
+          restore-keys: nuget-${{ runner.os }}-release-
+
+      - name: Show the SDK
+        run: dotnet --version
+
+      - name: Restore
+        run: dotnet restore Rimlight.sln
+
+      - name: Build (Release)
+        run: dotnet build Rimlight.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test Rimlight.sln -c Release --no-build
+
+      # Code signing, part 1: the metadata file for vpk's --azureTrustedSignFile. vpk brings
+      # signtool and the Trusted Signing client library, and signs every executable and the
+      # installer. Skipped unless SIGN is true (see the job's env).
+      - name: Set up code signing (Azure Trusted Signing)
+        if: env.SIGN == 'true'
+        shell: pwsh
+        env:
+          SIGNING_ENDPOINT: ${{ secrets.SIGNING_ENDPOINT }}
+          SIGNING_ACCOUNT: ${{ secrets.SIGNING_ACCOUNT }}
+          SIGNING_PROFILE: ${{ secrets.SIGNING_PROFILE }}
+        run: |
+          @{
+            Endpoint = $env:SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:SIGNING_ACCOUNT
+            CertificateProfileName = $env:SIGNING_PROFILE
+          } | ConvertTo-Json | Set-Content -LiteralPath "$env:RUNNER_TEMP/trusted-signing.json"
+
+      - name: Pack
+        shell: pwsh
+        env:
+          # Code signing, part 2: the credentials the Trusted Signing client reads (Azure's
+          # DefaultAzureCredential). They stay empty unless SIGN is true.
+          AZURE_TENANT_ID: ${{ env.SIGN == 'true' && secrets.SIGNING_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ env.SIGN == 'true' && secrets.SIGNING_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ env.SIGN == 'true' && secrets.SIGNING_CLIENT_SECRET || '' }}
+        run: |
+          $pack = @{}
+          if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            # The tag's version. pack.ps1 drops the "v" and stops on anything that isn't SemVer 2.
+            $pack.Version = $env:GITHUB_REF_NAME
+          } else {
+            # A dry run packs the version in src/Directory.Build.props. It skips vpk's check that
+            # Rimlight.exe calls VelopackApp.Build().Run(), which K9 adds (HANDOFF H-011).
+            $pack.SkipVelopackAppCheck = $true
+          }
+          if ($env:SIGN -eq 'true') {
+            $pack.AzureTrustedSignFile = "$env:RUNNER_TEMP/trusted-signing.json"
+          }
+          ./build/pack.ps1 @pack
+
+      - name: Keep the packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            artifacts/releases/
+            artifacts/installers/
+          if-no-files-found: error
+          retention-days: 7
+          # Every package is a zip file already.
+          compression-level: 0
+
+  publish:
+    name: Publish the GitHub release
+    needs: pack
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the release and upload its files
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for gh
+      VPK_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for vpk upload github (its --token)
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore vpk
+        run: dotnet tool restore
+
+      - name: Download the packages
+        uses: actions/download-artifact@v4
+        with:
+          name: packages
+          path: artifacts
+
+      # The short intro in .github/release-notes-intro.md, then GitHub's generated notes: the pull
+      # requests merged since the previous release, in the sections of .github/release.yml.
+      - name: Write the release notes
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body > "$RUNNER_TEMP/generated.md"
+          {
+            cat .github/release-notes-intro.md
+            echo
+            cat "$RUNNER_TEMP/generated.md"
+          } > "$RUNNER_TEMP/notes.md"
+
+      # The release stays a draft until every file is attached, so the README's
+      # releases/latest/download/RimlightSetup.exe link never meets a half-uploaded release.
+      # A version with a hyphen (1.1.0-beta.1) becomes a prerelease, which neither that link nor the
+      # app's update check (prerelease: false) picks up.
+      - name: Create the draft release with the installers
+        run: |
+          app="$(sed -n 's:.*<AppName>\(.*\)</AppName>.*:\1:p' src/Directory.Build.props)"
+          if [[ -z "$app" ]]; then
+            echo "::error file=src/Directory.Build.props::No <AppName>."
+            exit 1
+          fi
+          version="${TAG#v}"
+          prerelease=()
+          if [[ "$version" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$TAG" --draft --verify-tag --title "$app $version" \
+            --notes-file "$RUNNER_TEMP/notes.md" "${prerelease[@]}" artifacts/installers/*
+          echo "RELEASE_NAME=$app $version" >> "$GITHUB_ENV"
+
+      # One Velopack channel per architecture. An installed copy reads only its own channel's feed
+      # (releases.win.json or releases.win-arm64.json) from the 10 newest published releases and
+      # updates to the highest version it finds. The second upload publishes the release.
+      - name: Upload the update packages and publish
+        run: |
+          for channel in win-arm64 win; do
+            publish=()
+            if [[ "$channel" == win ]]; then publish=(--publish); fi
+            dotnet vpk upload github --repoUrl "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --outputDir artifacts/releases --channel "$channel" \
+              --tag "$TAG" --releaseName "$RELEASE_NAME" --merge "${publish[@]}"
+          done
