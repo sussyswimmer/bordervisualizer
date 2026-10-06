@@ -24,6 +24,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # Only to create a label the first time it is applied (labeler README, Recommended
+      # Permissions). Without it, adding a label the repository doesn't have yet fails with 403.
+      issues: write
     steps:
       # The base branch (the default ref for pull_request_target), for .github/labeler.yml and
       # the title script. Not the pull request's head.
@@ -38,9 +41,9 @@ jobs:
 
       # feature, fix, performance, docs, build, ci and the audio/overlay/color/ui areas from the
       # Conventional Commit title. Labels are only added, never removed: after retitling a pull
-      # request, remove a stale label by hand.
+      # request, remove a stale label by hand. Runs on every event, pushes included: a newer run
+      # replaces a pending one in the concurrency group, so the last run must apply the title too.
       - name: Label by Conventional Commit title
-        if: github.event.action != 'synchronize'
         env:
           GH_TOKEN: ${{ github.token }}
           TITLE: ${{ github.event.pull_request.title }}

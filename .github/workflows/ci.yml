@@ -10,9 +10,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # A new push to a pull request cancels its older run. Runs on main always finish, so every
-  # merged commit gets a result (and the README badge never shows a cancelled run).
+  # A new push to a pull request cancels its older run. Every other run (main, manual) gets a
+  # group of its own: a shared group would let a newly queued run cancel the pending one, so a
+  # merged commit could end up with no result and the README badge with a cancelled run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -38,6 +39,15 @@ jobs:
 
       - name: Test the PR title label rules
         run: bash .github/scripts/pr-title-labels.test.sh
+
+      # The Windows job's newer MSBuild accepts forward slashes, so only this check catches them.
+      - name: Check the solution filter uses backslash paths
+        run: |
+          bad="$(jq -r '[.solution.projects[] | select(contains("/"))] | join(", ")' Rimlight.Core.slnf)"
+          if [[ -n "$bad" ]]; then
+            echo "::error file=Rimlight.Core.slnf::Write project paths with backslashes, as Visual Studio does (MSB5028 on older Windows MSBuild, H-010): $bad"
+            exit 1
+          fi
 
       - name: Set up the .NET 8 SDK
         uses: actions/setup-dotnet@v4

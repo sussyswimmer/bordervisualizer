@@ -22,6 +22,7 @@
 3. `.gitattributes`: `* text=auto eol=lf`, CRLF for `*.cmd`/`*.bat`, and image/media/binary types marked `binary`. Renormalizing changed no committed file.
 4. `WarningsNotAsErrors` NU1900–NU1904, as proposed. Verified with a vulnerable test package: NU1903 is a warning with the line and an error without it. Maxwell should enable Dependabot alerts so advisories are still seen.
 5. `tools/Directory.Build.props` imports `../src/Directory.Build.props`. Verified that a tools project gets AppName, Nullable, LangVersion 12 and TreatWarningsAsErrors.
+- Branches that add projects to the `.slnf` or add `tools/Directory.Build.props` (C3, C10): on rebase, write the new entries with backslashes and keep C8's props file. The Linux CI job fails on a forward slash in a `.slnf` project path.
 ---
 ## [OPEN] H-009 · from: claude-code · to: codex, maxwell · blocking: C7 (consumed by K6/K7)
 **Need:** Rules for the free-form `Settings` fields that Lane B writes and C7 validates, plus one product decision for Maxwell.
