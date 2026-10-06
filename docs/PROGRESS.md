@@ -71,7 +71,7 @@
 
 - [x] K0 scaffold — by Codex — effort: M (validation details below)
 - [x] K0 follow-up: Lane B fixes on Codex's K0 (tray Efficiency Mode off, Rimlight.exe, placeholder .ico, CsWin32 DPI check), HANDOFF H-003..H-005 — PR #3 — effort: S
-- [ ] K1 Overlay windows, D3D11 + DirectComposition, `Glow.hlsl`, multi-monitor/DPI, device-loss recovery, topmost re-assert
+- [x] K1 Overlay windows, D3D11 + DirectComposition, `Glow.hlsl`, multi-monitor/DPI, device-loss recovery, topmost re-assert — PR #8 — effort: L (notes below; Windows manual test pending)
 - [ ] K2 `LoopbackCapture` + lock-free ring buffer + device-change restart. Render thread drains the ring → `IAudioAnalyzer` (fake until C2 lands)
 - [ ] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale
 - [ ] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip
@@ -93,6 +93,43 @@
 - Verified with .NET SDK 8.0.425 on Linux: `dotnet build Rimlight.Core.slnf -c Release` and `dotnet build Rimlight.sln -c Release` both pass with 0 warnings / 0 errors. Both solution-filter and full-solution test runs pass: 1 passed, 0 failed, 0 skipped.
 - H.NotifyIcon.Wpf is pinned to 2.3.2 (includes .NET 8 assets); 2.4.1 targets .NET 10. No DSP accuracy or performance figures apply to K0 fakes.
 - Manual Windows check pending: run `dotnet run --project src/Rimlight.App -c Release`, verify the purple placeholder tray icon and tooltip, then choose “Quit Rimlight”; the icon and process should exit cleanly.
+
+## K1 notes
+
+- **Structure (`src/Rimlight.Platform/Overlay/`):**
+  - `OverlayHost` runs one overlay thread that owns every window and GPU object and pumps their messages. Nothing crosses threads except the settings snapshot (`Volatile`) and two request flags, so there are no locks.
+  - The thread waits on a high-resolution waitable timer, a wake event and the message queue (`MsgWaitForMultipleObjectsEx`).
+  - The app supplies each frame through `IOverlayFrameSource`: a `LightState` plus the 64-texel gradient, refilled only when the colors change. K1's `StaticGlowSource` (App) draws the default settings' manual colors. K3 replaces it with analyzer → light engine.
+- **Windows (doc 04 §1):**
+  - `WS_POPUP` with `WS_EX_NOREDIRECTIONBITMAP | LAYERED | TRANSPARENT | TOPMOST | TOOLWINDOW | NOACTIVATE`, `SetLayeredWindowAttributes(255)`, `HTTRANSPARENT` / `MA_NOACTIVATE`, `DWMWA_EXCLUDED_FROM_PEEK`, and `WDA_EXCLUDEFROMCAPTURE` when Hide from screen capture is on.
+  - Each window is created directly at its monitor's physical rectangle, so the initial placement never sends `WM_DPICHANGED`. Later `WM_DPICHANGED` messages are ignored apart from triggering a rebuild.
+  - Topmost is re-asserted on `EVENT_SYSTEM_FOREGROUND`, at most every 250 ms, with a trailing re-assert so the last change in a burst still counts.
+- **Monitors:**
+  - One overlay per selected monitor (All / PrimaryOnly / Custom by `DISPLAY_DEVICE.DeviceID`), at `rcMonitor` or, with Cover taskbar off, `rcWork`.
+  - A hidden top-level helper window receives `WM_DISPLAYCHANGE` and `WM_SETTINGCHANGE(SPI_SETWORKAREA)` (message-only windows don't get broadcasts). Overlays receive `WM_DPICHANGED`.
+  - Each of these schedules a rebuild 300 ms later. The rebuild matches overlays by GDI device name, so unchanged overlays don't flicker.
+  - DIP sizes become pixels at each monitor's `GetDpiForMonitor` effective DPI.
+- **GPU (doc 04 §2):**
+  - One D3D11 device (hardware, else WARP) and one DirectComposition device are shared by every overlay.
+  - Each overlay has a composition swap chain: B8G8R8A8_UNORM, premultiplied, FLIP_SEQUENTIAL, 2 buffers, maximum frame latency 1. Its latency object is polled without blocking, so a frame is skipped rather than queued when DWM or the display is behind.
+  - `DXGI_ERROR_DEVICE_REMOVED/RESET` from Present, resize or creation releases everything. The device and surfaces are recreated on the next frame and retried every second while that fails; the windows stay.
+  - Debug builds have a tray item, "Simulate GPU device loss (debug)", that runs the same path (doc 07 Phase 1).
+  - `Glow.hlsl` is embedded and compiled at runtime (vs_4_0 / ps_4_0, feature level 10.0+). The gradient texture is R16G16B16A16_FLOAT, which every feature level ≥ 10.0 must be able to filter (32-bit float filtering is optional there).
+- **Spec clarifications and deviations (doc 04 §3):**
+  - **Rounded glow field (deviation):** the glow's distance field has corners of radius ≥ 2 × spread. With doc 04's square field, the glows from two edges meet in a visible 45° crease (a picture-frame bevel); rounded, the light pools softly into the corners. The solid core still follows `CornerRadiusDip`.
+  - **Perimeter coordinate:** arc length along a rounded path (radius ≥ 6 × spread), starting at the top-left corner and running clockwise (H-008). It is continuous wherever the glow is visible, at most 0.0008 per pixel within 150 px of the edge. Its only seam lies ≥ 6 spreads inside, at alpha < 1/255.
+  - **Glow → spread:** doc 04 leaves the mapping to the renderer. `Glow` 0..1 maps to an e-folding reach of 2 + 148 × Glow² DIP (default 0.45 → 32 DIP).
+  - **Core at thickness 0** draws no line.
+  - **sRGB:** the gradient is linear RGB (H-008). The 8-bit swap chain is read by DWM as sRGB-encoded, so the shader encodes before premultiplying.
+  - **Dither** is ±0.5/255 interleaved gradient noise on alpha.
+  - **Visibility** multiplies alpha like Intensity (H-008).
+- **Left for later tasks:** FpsCap "native" (0) runs at 60 fps until K3 adds DwmFlush pacing. K3 also adds idle/static throttling, Half render scale and the battery cap. K5 adds fullscreen pause and power/lock watchers. Logging is `Trace` (rebuilds, GPU state) until logging lands. The tray tooltip, settings UI and live settings come in K6/K7.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes.
+  - `Glow.hlsl` compiles under DXC with warnings as errors (vs_6_0/ps_6_0, `-HV 2018`).
+  - A NumPy port of the pixel shader renders the expected look and checks perimeter continuity. Every Vortice and CsWin32 call was checked against the 3.8.3 API surface and the generated P/Invoke sources.
+  - An adversarial multi-agent review (Win32, D3D/DComp, shader, threading, monitors, spec/performance) runs on this PR; its upheld findings are fixed here before merge.
+  - Nothing has run on Windows yet: Maxwell's manual checklist is in the PR.
 
 ## Lane B notes
 

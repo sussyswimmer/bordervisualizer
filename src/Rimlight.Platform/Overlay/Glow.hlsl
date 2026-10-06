@@ -45,10 +45,11 @@ float QuarterAngle(float y, float x)
     return atan2(y, max(x, 1e-5));
 }
 
-// Perimeter coordinate in [0, 1): arc length clockwise from the top-left, along a rounded rectangle with corner
-// radius r. Inside the corner zones the position follows the arc, so it is continuous through the corners. Elsewhere
-// it is the projection onto the nearest straight edge, which is discontinuous only on the medial axis at least r
-// from every edge, where the glow has faded (the renderer keeps r >= 6 x SpreadPx).
+// Perimeter coordinate in [0, 1): arc length clockwise along a rounded rectangle with corner radius r, starting at
+// the top-left corner (the middle of its arc, which is the screen corner's diagonal; H-008). Inside the corner zones
+// the position follows the arc, so it is continuous through the corners. Elsewhere it is the projection onto the
+// nearest straight edge, which is discontinuous only on the medial axis at least r from every edge, where the glow
+// has faded (the renderer keeps r >= 6 x SpreadPx).
 float PerimeterT(float2 p, float2 size, float r)
 {
     float topLen = size.x - 2 * r;
@@ -98,7 +99,8 @@ float PerimeterT(float2 p, float2 size, float r)
         else
             s = 2 * topLen + 3 * arcLen + sideLen + (size.y - r - p.y);
     }
-    return s / total;
+    // s = 0 is where the top edge's straight part begins; shift by half an arc so t = 0 is the top-left corner.
+    return frac((s + 0.5 * arcLen) / total);
 }
 
 float3 LinearToSrgb(float3 c)
