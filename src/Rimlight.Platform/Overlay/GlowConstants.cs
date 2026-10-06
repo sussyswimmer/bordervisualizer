@@ -9,6 +9,15 @@ internal struct GlowConstants : IEquatable<GlowConstants>
 {
     public const int SizeInBytes = 64;
 
+    // Below this Visibility every pixel is transparent: alpha never exceeds Visibility, and the shader returns 0 for
+    // alpha under half a code value. Overlays whose visibility falls below it are hidden.
+    public const float MinVisibility = 0.5f / 255;
+
+    // LooksLike tolerances. Brightness-like values within half an 8-bit code value draw the same pixels (and the
+    // dither hides the rest); a phase shift of 0.0002 moves the colours by about a pixel along a 4K perimeter.
+    private const float ValueTolerance = 0.5f / 255;
+    private const float PhaseTolerance = 0.0002f;
+
     // PRD §1: "Glow: how far the light spills inward. 0 means a hairline; 100 means about 35% of the shorter screen
     // dimension." Spill is taken as three e-folding distances (the glow is down to 5% there), and the slider is
     // squared so it feels even: the default 0.45 reaches about 7% of the shorter side (25 px e-folding at 1080p).
@@ -28,7 +37,7 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     public float Visibility;
     public float ColorRadiusPx;
     public float GlowRadiusPx;
-    public float Padding0;
+    public float CoreFade;
 
     public float MeanRed;
     public float MeanGreen;
@@ -43,15 +52,19 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         return Math.Max(scale, g * g * FullSpill / EFoldingsPerSpill * shortSidePx);
     }
 
-    // Converts a frame's light state to pixels for one surface. scale = monitor DPI / 96; meanColor is the average of
-    // the gradient texels (linear RGB).
-    public static GlowConstants Create(in LightState state, int widthPx, int heightPx, float scale, float cornerRadiusDip, Rgb meanColor)
+    // Converts a frame's light state to pixels for one surface. widthPx/heightPx: the swap chain's size; dpiScale =
+    // monitor DPI / 96; renderScale: swap-chain pixels per screen pixel (1, or about 0.5 at half scale); meanColor is
+    // the average of the gradient texels (linear RGB).
+    public static GlowConstants Create(in LightState state, int widthPx, int heightPx, float dpiScale, float renderScale,
+        float cornerRadiusDip, Rgb meanColor)
     {
+        float scale = dpiScale * renderScale; // swap-chain pixels per DIP
         int shortSide = Math.Min(widthPx, heightPx);
         float minHalf = 0.5f * shortSide;
         float spreadPx = SpreadFor(state.Spread, shortSide, scale);
         float cornerPx = Math.Clamp(Finite(cornerRadiusDip) * scale, 0, minHalf);
-        float corePx = Math.Max(0, Finite(state.CoreThicknessDip)) * scale;
+        float coreDip = Math.Max(0, Finite(state.CoreThicknessDip));
+        float corePx = coreDip * scale;
         return new GlowConstants
         {
             ScreenWidthPx = widthPx,
@@ -69,6 +82,9 @@ internal struct GlowConstants : IEquatable<GlowConstants>
             ColorRadiusPx = Math.Min(Math.Max(Math.Max(cornerPx, 6 * spreadPx), 2 * corePx), minHalf),
             // Rounded glow field: no 45-degree crease where two edges' glows meet (deviation from doc 04 §3).
             GlowRadiusPx = Math.Min(Math.Max(cornerPx, 2 * spreadPx), minHalf),
+            // A core thinner than a pixel fades with its width in screen pixels, not swap-chain pixels: at half scale
+            // a 1-DIP line covers half a swap-chain pixel, stretched over two screen pixels, and keeps its light.
+            CoreFade = Math.Min(coreDip * dpiScale, 1),
             MeanRed = Finite(meanColor.R),
             MeanGreen = Finite(meanColor.G),
             MeanBlue = Finite(meanColor.B),
@@ -88,18 +104,39 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         return new Rgb(r / 64, g / 64, b / 64);
     }
 
+    // True when both draw the same picture: the same geometry, and values that differ by less than the eye or the
+    // 8-bit swap chain can tell. Smoothed values approach their targets asymptotically; without this tolerance a
+    // static glow would keep presenting for many seconds. Compared against the last presented frame, so slow drift
+    // still reaches the screen once it adds up.
+    public readonly bool LooksLike(in GlowConstants other) =>
+        ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
+        CornerRadiusPx == other.CornerRadiusPx && CoreThicknessPx == other.CoreThicknessPx && CoreFade == other.CoreFade &&
+        SpreadPx == other.SpreadPx && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
+        Near(Intensity, other.Intensity) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
+        Near(MeanRed, other.MeanRed) && Near(MeanGreen, other.MeanGreen) && Near(MeanBlue, other.MeanBlue) &&
+        PhaseNear(Phase, other.Phase);
+
     public readonly bool Equals(GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
         CornerRadiusPx == other.CornerRadiusPx && CoreThicknessPx == other.CoreThicknessPx &&
         SpreadPx == other.SpreadPx && Intensity == other.Intensity && Pulse == other.Pulse && Phase == other.Phase &&
         Visibility == other.Visibility && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
-        MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue;
+        CoreFade == other.CoreFade && MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue;
 
     public override readonly bool Equals(object? obj) => obj is GlowConstants other && Equals(other);
 
     public override readonly int GetHashCode() => HashCode.Combine(ScreenWidthPx, ScreenHeightPx, SpreadPx, Intensity, Pulse, Phase, Visibility);
 
     private static float Finite(float value) => float.IsFinite(value) ? value : 0;
+
+    private static bool Near(float a, float b) => MathF.Abs(a - b) <= ValueTolerance;
+
+    // Phase is a fraction of the loop, so 0.9999 and 0 are neighbours.
+    private static bool PhaseNear(float a, float b)
+    {
+        float d = MathF.Abs(a - b);
+        return MathF.Min(d, 1 - d) <= PhaseTolerance;
+    }
 
     private static float Clamp01(float value) => float.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
 

@@ -59,3 +59,8 @@ CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 WaitForSingleObjectEx
 CloseHandle
 WAIT_EVENT
+
+// Frame pacing and power (K3)
+GetSystemPowerStatus
+EnumDisplaySettings
+ENUM_DISPLAY_SETTINGS_MODE
