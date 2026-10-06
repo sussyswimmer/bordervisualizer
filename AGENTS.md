@@ -25,7 +25,7 @@ Every task here is precisely specified and verifiable by tests, and it builds an
   dotnet build Rimlight.Core.slnf -c Release
   dotnet test  Rimlight.Core.slnf -c Release
   dotnet run --project src/Rimlight.Bench -- --help
-  dotnet run --project tools/WavAnalyze -- path/to/song.wav --plot out.png
+  dotnet run --project tools/wav-analyze -- path/to/song.wav --plot out.png
   ```
 - The full Windows build is verified by the `windows-latest` CI job you write in C8.
 - If the setup script hasn't installed the .NET 8 SDK, install it: `curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0`.

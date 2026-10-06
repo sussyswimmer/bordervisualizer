@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Offline audio helpers shared by tools/wav-analyze, src/Rimlight.Bench and the tests: WAV I/O, the synthetic
+       track generator and the frame-by-frame analyzer feed. Pure .NET, so it builds and runs on Linux. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Rimlight.Core/Rimlight.Core.csproj" />
+  </ItemGroup>
+</Project>
