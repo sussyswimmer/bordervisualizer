@@ -88,6 +88,42 @@ public sealed class BandAndEnvelopeTests
     }
 
     [Fact]
+    public void AutoGainHoldFreezesTheFloorWhileThePeakKeepsDecaying()
+    {
+        var gain = new AutoGain();
+        var tuning = new AudioTuning();
+        gain.Update(10f, 1f / 60, tuning);
+        gain.Update(2f, 1f / 60, tuning);
+        float floor = gain.FloorDb;
+        float peak = gain.Peak;
+
+        Assert.Equal(0f, gain.Update(0f, 4, tuning));                // digital zero: one half-life
+        Assert.InRange(gain.Peak, peak * 0.5f * 0.9999f, peak * 0.5f * 1.0001f);
+        Assert.Equal(0f, gain.Update(1e-6f, 4, tuning, hold: true)); // near-silence
+        Assert.Equal(0f, gain.Update(float.NaN, 4, tuning));         // non-finite counts as 0
+        Assert.InRange(gain.Peak, peak * 0.125f * 0.9999f, peak * 0.125f * 1.0001f);
+        Assert.Equal(floor, gain.FloorDb);
+
+        gain.Update(100f, 1f / 60, tuning, hold: true);              // a loud held frame still lifts the peak
+        Assert.Equal(100f, gain.Peak);
+        Assert.Equal(floor, gain.FloorDb);
+
+        var fresh = new AutoGain();                                  // leading near-silence does not seed state
+        fresh.Update(5f, 1, tuning, hold: true);
+        Assert.Equal((0f, 0f), (fresh.Peak, fresh.FloorDb));
+    }
+
+    [Fact]
+    public void EnvelopeIgnoresNonFiniteTargets()
+    {
+        var envelope = new Envelope();
+        envelope.Update(1, 0.1f, 0.03f, 0.25f);
+        float value = envelope.Value;
+        Assert.Equal(value, envelope.Update(float.NaN, 0.1f, 0.03f, 0.25f));
+        Assert.Equal(value, envelope.Update(float.PositiveInfinity, 0.1f, 0.03f, 0.25f));
+    }
+
+    [Fact]
     public void AutoGainPeakHalvesInFourSecondsAndFloorRisesOneDbPerSecond()
     {
         var gain = new AutoGain();
