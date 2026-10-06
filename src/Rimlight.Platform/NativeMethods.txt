@@ -111,3 +111,11 @@ IsIconic
 IsZoomed
 MonitorFromWindow
 DwmGetWindowAttribute
+
+// Shell (K6): global hotkey on a message-only window, handing the foreground to the running instance, dark title bars
+RegisterHotKey
+UnregisterHotKey
+WM_HOTKEY
+HWND_MESSAGE
+GetNamedPipeServerProcessId
+AllowSetForegroundWindow
