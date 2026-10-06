@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- Rimlight icon for 16 to 32 px (tray and small shell icons); assets/icon.svg is the full version.
+       Drawn on the 16 and 32 px pixel grids: the rim covers 2..6 of 32 units, so it is exactly 2 px wide at
+       16 px and 4 px at 32 px, with a 1 px (2 px) soft halo outside. Simpler than the full icon so the rim
+       stays crisp: no bright core, a thicker rim, and the frame fills more of the square. -->
+  <defs>
+    <linearGradient id="rim" gradientUnits="userSpaceOnUse" x1="2" y1="2" x2="30" y2="30">
+      <stop offset="0" stop-color="#7C5CFF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <filter id="halo" filterUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
+      <feGaussianBlur stdDeviation="1.1"/>
+    </filter>
+    <filter id="spill" filterUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
+      <feGaussianBlur stdDeviation="2.2"/>
+    </filter>
+    <clipPath id="inside">
+      <rect x="4" y="4" width="24" height="24" rx="6"/>
+    </clipPath>
+  </defs>
+  <rect x="4" y="4" width="24" height="24" rx="6" fill="none" stroke="url(#rim)" stroke-width="4" opacity="0.6" filter="url(#halo)"/>
+  <rect x="4" y="4" width="24" height="24" rx="6" fill="#0E0D16"/>
+  <g clip-path="url(#inside)">
+    <rect x="4" y="4" width="24" height="24" rx="6" fill="none" stroke="url(#rim)" stroke-width="8" opacity="0.7" filter="url(#spill)"/>
+  </g>
+  <rect x="4" y="4" width="24" height="24" rx="6" fill="none" stroke="url(#rim)" stroke-width="4"/>
+</svg>

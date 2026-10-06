@@ -6,7 +6,9 @@
       "src\\Rimlight.Tests\\Rimlight.Tests.csproj",
       "src\\Rimlight.Bench\\Rimlight.Bench.csproj",
       "tools\\audio-tools\\Rimlight.AudioTools.csproj",
-      "tools\\wav-analyze\\Rimlight.WavAnalyze.csproj"
+      "tools\\wav-analyze\\Rimlight.WavAnalyze.csproj",
+      "tools\\icon-gen\\Rimlight.IconGen.csproj",
+      "tools\\icon-gen.Tests\\Rimlight.IconGen.Tests.csproj"
     ]
   }
 }
