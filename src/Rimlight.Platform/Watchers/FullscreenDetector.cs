@@ -34,7 +34,7 @@ internal sealed class FullscreenDetector : IDisposable
 
     public bool Enabled { get; private set; }
 
-    // Pause everywhere: a screen saver, presentation settings, or an exclusive-mode app without a window to tie it to.
+    // Pause everywhere: a screen saver, presentation settings, or an exclusive-mode app while there is no foreground window.
     public bool Everywhere { get; private set; }
 
     // GDI device names of the monitors to pause, sorted; the same instance while the set doesn't change.
@@ -73,7 +73,7 @@ internal sealed class FullscreenDetector : IDisposable
         var previous = new (FullscreenEntry, WindowFacts?)[entries.Length];
         for (int i = 0; i < entries.Length; i++) previous[i] = (entries[i], Probe((HWND)entries[i].Window));
 
-        FullscreenVerdict verdict = FullscreenRules.Decide(state, foreground, previous);
+        FullscreenVerdict verdict = FullscreenRules.Decide(state, active.IsNull, foreground, previous);
         entries = verdict.Entries;
         Update(verdict.Everywhere, [.. entries.Select(entry => entry.Monitor).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
     }

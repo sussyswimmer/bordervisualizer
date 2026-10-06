@@ -322,9 +322,10 @@
   - **Own thread and top-level window, not doc 02's message-only window:** message-only windows get no broadcasts. Keeping it off the overlay thread means shell queries and session RPCs never touch frame timing.
   - **Fullscreen pauses only its monitor (doc 07 Phase 5 over doc 04's literal `QUNS_BUSY` → pause):**
     - Doc 04's rule: the foreground window's `GetWindowRect` equals its monitor's `rcMonitor`. Maximized windows never match, because of their resize borders.
-    - With `QUNS_BUSY`, a non-maximized window that covers its monitor also counts.
-    - `QUNS_RUNNING_D3D_FULL_SCREEN` pauses the foreground window's monitor, or everything without a window to tie it to.
+    - With `QUNS_BUSY` or `QUNS_RUNNING_D3D_FULL_SCREEN`, a non-maximized window that covers its monitor also counts. An exclusive-mode window fills its output, so a real game passes.
+    - Windows' state alone never pauses a window that doesn't cover its monitor. D3D is still reported for a moment after you switch out of an exclusive-mode game, so Alt+Tab or a click on another monitor must not pause that monitor. D3D pauses everywhere only when `GetForegroundWindow` returns no window at all; an excluded foreground (desktop, taskbar) keeps only the sticky entries.
   - **Sticky (addition):** a fullscreen window keeps its monitor paused while the focus is on another monitor. This lasts until it leaves fullscreen, moves, is minimized, hidden, cloaked or closed, or another window is activated on that monitor.
+  - **Private messages:** the watcher window is top-level, so it also gets every `HWND_BROADCAST`, including other apps' `WM_APP` messages. Its stop message works only after `Dispose` has set the stopping flag; the fullscreen-setting message only re-reads its flag.
   - **Exclusions:** every window of the shell's process (desktop, taskbar, Alt+Tab, Task View; F11 File Explorer as a side effect), `Progman`/`WorkerW`, the desktop window, and every window of our process (the overlays, the future settings window).
   - **Detection runs whenever `PauseInFullscreen` is on**, even while the glow is off, so turning the glow on during a fullscreen app never flashes it. The cost is a few user32 calls every 2 s.
   - **Display off** applies only while the session is on the physical console (`WTSGetActiveConsoleSessionId`).
@@ -332,13 +333,15 @@
   - **RDP (decided):** the glow keeps working in a connected remote session and pauses while disconnected; fast user switching pauses it too. A reconnect re-checks the GPU and monitors. RDP bandwidth is K11's to measure.
   - **Do Not Disturb / Focus assist** has no documented API; only what `SHQueryUserNotificationState` reports pauses.
   - **F11-style fullscreen** (no foreground change) is found by the 2 s poll, per doc 04's cadence.
+  - **Only the foreground window is found:** at start, and when detection is turned back on, a fullscreen window on another monitor counts only after it has had the focus once. Turning detection on from the tray menu finds nothing until the video is clicked, because the menu takes the foreground.
 - **Verified here (Linux):**
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
   - Every new Win32 call, struct and constant was checked against CsWin32 0.3.346's generated sources. That includes `GUID_CONSOLE_DISPLAY_STATE`'s value, `POWERBROADCAST_SETTING`'s inline data, `WTSINFOEX_LEVEL1_W`, `QUERY_USER_NOTIFICATION_STATE`, and `WTS_CURRENT_SERVER_HANDLE` living on `HANDLE`.
-  - **Scratch harness (not committed)** linking `FullscreenRules.cs` and `SystemState.cs`, 35 checks:
-    - exact and loose cover, and maximized windows never pausing
+  - **Scratch harness (not committed)** linking `FullscreenRules.cs` and `SystemState.cs`, 44 checks:
+    - exact and loose cover, and maximized windows never pausing (also a loose entry maximized later)
     - `QUNS_BUSY` never pausing everywhere
-    - D3D with and without a window
+    - D3D: a covering window pauses its monitor, a small or maximized one doesn't, an excluded foreground pauses nothing, and no foreground window at all pauses everywhere
+    - Alt+Tab out of an exclusive game while D3D is still reported: a small or maximized window on the other monitor, or a click on the desktop, keeps only the game's monitor paused
     - screen saver and presentation mode
     - every sticky keep and drop case
     - `SystemState` equality and `PausesEverywhere`

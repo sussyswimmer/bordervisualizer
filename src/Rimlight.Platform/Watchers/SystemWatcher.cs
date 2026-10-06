@@ -277,7 +277,9 @@ public sealed class SystemWatcher : IDisposable
                 if (fullscreen is not null) ApplyFullscreenSetting();
                 return default;
             case StopMessage:
-                PInvoke.PostQuitMessage(0);
+                // WM_APP messages can also come from outside (a top-level window gets every HWND_BROADCAST), so only
+                // a Dispose stops the thread.
+                if (Volatile.Read(ref stopping) != 0) PInvoke.PostQuitMessage(0);
                 return default;
             case PInvoke.WM_CLOSE:
                 return default; // closes only with the app
