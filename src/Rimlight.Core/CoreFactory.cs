@@ -1,5 +1,6 @@
 using Rimlight.Core.Audio;
 using Rimlight.Core.Fakes;
+using Rimlight.Core.SettingsStorage;
 
 namespace Rimlight.Core;
 
@@ -49,8 +50,27 @@ public static class CoreFactory
     /// <summary>Creates a simple linear light engine until C6 lands.</summary>
     /// <returns>A new light engine.</returns>
     public static ILightEngine CreateLightEngine() => new FakeLightEngine();
-    /// <summary>Creates an in-memory settings stub until C7 lands; no file is written.</summary>
-    /// <param name="directory">Directory for the eventual settings file.</param>
+    /// <summary>Creates the JSON settings store for <c>settings.json</c> in <paramref name="directory"/> (doc 02 "Settings
+    /// storage", doc 06 §1). Nothing is read or written until the first call.</summary>
+    /// <param name="directory">The settings directory, normally <c>%APPDATA%\Rimlight</c>. It is created by the first
+    /// <see cref="ISettingsStore.Save"/>; a relative path is resolved against the current directory now.</param>
     /// <returns>A new settings store.</returns>
-    public static ISettingsStore CreateSettingsStore(string directory) => new FakeSettingsStore(directory);
+    /// <exception cref="ArgumentException"><paramref name="directory"/> is null, empty or whitespace.</exception>
+    /// <remarks>
+    /// <para><b>Load</b> never throws and always returns valid settings. A missing file gives defaults. A file that
+    /// can't be read or parsed is copied over <c>settings.bad.json</c> in the same directory and defaults are returned.
+    /// Otherwise each field is read on its own: a missing, mistyped or invalid field takes its default and the rest are
+    /// kept. Numbers are clamped to their doc 06 range (NaN/∞ give the default), <see cref="Settings.FpsCap"/> outside
+    /// {0, 30, 60, 120} gives 60, colors are stored as upper-case <c>#RRGGBB</c> (<c>#RGB</c> is expanded), and unknown
+    /// fields are ignored. <see cref="Settings.ToggleHotkey"/> is opaque (only null is replaced; an empty string means no
+    /// hotkey), and <see cref="Settings.CustomMonitorIds"/> keeps every non-empty ID, including unplugged monitors (H-009).
+    /// A file from an older version is migrated; one from a newer version is read as far as this version understands it.</para>
+    /// <para><b>Save</b> validates the same way, creates the directory, and replaces the file atomically (temporary file,
+    /// flush to disk, then a single swap), so a crash or failure leaves the previous file intact. It always writes the
+    /// current schema version, which drops fields only a newer version knows. It throws <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/> when the file can't be written; catch those and retry on the next change.</para>
+    /// <para>The format is camelCase JSON with enums as names, e.g. <c>"animation": "MusicSync"</c>. Calls on one store
+    /// are serialized internally and may come from any thread; never call them per frame.</para>
+    /// </remarks>
+    public static ISettingsStore CreateSettingsStore(string directory) => new JsonSettingsStore(directory);
 }
