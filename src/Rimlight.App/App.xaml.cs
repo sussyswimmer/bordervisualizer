@@ -24,12 +24,13 @@ public partial class App : Application
         var settings = new Settings();
 
         // System audio only, via WASAPI loopback on the default output device; the microphone is never opened.
-        capture = new LoopbackCapture();
-        capture.Start();
+        // Capture starts only once the overlay (its only reader) is running; until then the glow reads silence.
         try
         {
+            capture = new LoopbackCapture();
             overlays = new OverlayHost(new MusicGlowSource(settings, capture), settings);
             overlays.Start();
+            capture.Start();
         }
         catch (Exception exception)
         {
@@ -37,6 +38,8 @@ public partial class App : Application
             Trace.WriteLine($"[App] The overlay could not start: {exception}");
             overlays?.Dispose();
             overlays = null;
+            capture?.Dispose();
+            capture = null;
         }
     }
 
