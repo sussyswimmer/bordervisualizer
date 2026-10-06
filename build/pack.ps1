@@ -165,7 +165,9 @@ foreach ($dir in $publishRoot, $releaseDir, $installerDir) {
 $null = New-Item -ItemType Directory -Path $releaseDir, $installerDir
 
 # vpk packs for Windows natively on Windows; anywhere else it needs the [win] directive.
-$vpk = if ($IsWindows) { @('vpk') } else { @('vpk', '[win]') }
+# @() keeps a one-item result an array: a bare if-expression unrolls @('vpk') to the string 'vpk', and
+# 'vpk' + $packArgs would then concatenate everything into one argument.
+$vpk = @(if ($IsWindows) { 'vpk' } else { 'vpk', '[win]' })
 
 # dotnet looks for the tool manifest from the current directory up.
 Push-Location -LiteralPath $repoRoot
