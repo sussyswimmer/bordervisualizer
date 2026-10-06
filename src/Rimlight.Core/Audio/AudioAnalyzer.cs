@@ -8,16 +8,21 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
     // 50 ms packets landing in one frame, kicks stop standing out from the flux history. New samples are therefore
     // analyzed in equal steps of at most one 60 fps frame of audio (800 samples at 48 kHz). The newest samples
     // are always the last step, so this adds no latency, and frames up to that size are analyzed exactly as doc 03
-    // says. Shorter steps (fast render loops, small packets) are analyzed as they come: tests at 144 and 240 fps
-    // detect the same beats, and holding them back would add latency.
+    // says. Shorter steps (fast render loops, small packets) are analyzed as they come, down to MinBeatStepSeconds:
+    // tests at 144 and 240 fps detect the same beats, and holding them back would add latency.
     private const float MaxStepSeconds = 1f / 60;
+
+    // On displays faster than 240 Hz, frames shorter than 1/240 s are folded into the next beat step (Level and
+    // Bass still update every frame). That bounds the flux history at 240 entries a second, so its ring covers
+    // FluxHistorySeconds at any refresh rate, for at most ~4 ms of extra beat latency on such displays.
+    private const float MinBeatStepSeconds = 1f / 240;
 
     // More new audio than the window plus StallSteps steps (≈ 0.27 s) in one frame means the render loop stalled
     // (window drag, GPU reset, sleep). Only the newest window plus BurstSteps steps of such a burst is analyzed.
     private const int StallSteps = 16;
     private const int BurstSteps = 4;
     private const int MaxStep = 2048;
-    private const int MinWindowSize = 256;
+    private const int MinWindowSize = 1024; // 47 Hz bins at 48 kHz; at 256, 30–150 Hz falls between bins
     private const int MaxWindowSize = 16384;
     private const float MinSensitivity = 0.25f;
     private const float MaxSensitivity = 2f;
@@ -31,7 +36,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
     private float[] analysisBuffer;   // decimated samples, or zeros fed in place of missing packets
     private readonly Decimator decimator = new();
     private readonly SilenceDetector silenceDetector = new();
-    private int inputRate, analysisRate, maxStep, zerosFed;
+    private int inputRate, analysisRate, maxStep, minBeatStep, pendingBeatSamples, zerosFed;
     private float sinceData, silenceSeconds, beat;
 
     public AudioAnalyzer(AudioTuning? tuning = null)
@@ -114,7 +119,9 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
                     // The window is all zeros already, so more zeros would leave the spectrum unchanged: skip the FFT
                     // while idle. The beat detector still records the zero flux, exactly as if zeros were fed.
                     samples = default;
-                    idleZeros = true;
+                    pendingBeatSamples += (int)Math.Clamp(MathF.Round(dt * analysisRate), 0, tuning.WindowSize);
+                    idleZeros = pendingBeatSamples >= minBeatStep;
+                    if (idleZeros) pendingBeatSamples = 0;
                 }
             }
             else
@@ -138,6 +145,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
             amplitude = frontEnd.Process(samples[..fill], analysisRate, fillDt);
             beats.Restart();
             threshold = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning).Threshold;
+            pendingBeatSamples = 0;
             start = fill;
         }
         if (samples.IsEmpty)
@@ -154,7 +162,10 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
                 int end = samples.Length - length + (int)((long)length * s / steps);
                 float stepDt = secondsPerSample * (end - start);
                 amplitude = frontEnd.Process(samples[start..end], analysisRate, stepDt);
-                BeatResult result = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, stepDt, tuning);
+                pendingBeatSamples += end - start;
+                bool analyze = pendingBeatSamples >= minBeatStep;
+                if (analyze) pendingBeatSamples = 0;
+                BeatResult result = beats.Update(frontEnd.Spectrum, analyze, tuning.WindowSize, analysisRate, stepDt, tuning);
                 if (result.IsBeat) beatsFired++;
                 flux = MathF.Max(flux, result.Flux);
                 threshold = result.Threshold;
@@ -174,7 +185,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         beats.Reset();
         decimator.Reset();
         silenceDetector.Reset();
-        inputRate = zerosFed = 0;
+        inputRate = zerosFed = pendingBeatSamples = 0;
         sinceData = silenceSeconds = beat = 0;
         Array.Clear(Diagnostics.Spectrum);
         Array.Clear(Diagnostics.FluxHistory);
@@ -182,6 +193,8 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         Diagnostics.BeatCount = 0;
         Diagnostics.EstimatedBpm = 0;
     }
+
+    internal float FluxHistoryStoredSeconds => beats.StoredSeconds;
 
     // The rate the spectrum, bands and diagnostics are computed at: the input rate divided by the decimation
     // factor (Decimator.FactorFor). Public as CoreFactory.AnalysisSampleRate for mapping bins to Hz.
@@ -194,6 +207,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         decimator.Configure(sampleRate);
         analysisRate = AnalysisRate(sampleRate);
         maxStep = Math.Clamp((int)MathF.Round(analysisRate * MaxStepSeconds), 1, MaxStep);
+        minBeatStep = Math.Max(1, (int)MathF.Round(analysisRate * MinBeatStepSeconds));
     }
 
     // Returns the new samples at the analysis rate. Without decimation that is the input itself (no copy).

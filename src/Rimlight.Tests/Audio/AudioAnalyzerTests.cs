@@ -503,7 +503,7 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         foreach (AudioTuning bad in new[]
         {
             t with { Sensitivity = 0.2f }, t with { Sensitivity = 2.1f }, t with { Sensitivity = float.NaN },
-            t with { WindowSize = 128 }, t with { WindowSize = 32768 }, t with { WindowSize = 3000 },
+            t with { WindowSize = 256 }, t with { WindowSize = 512 }, t with { WindowSize = 32768 }, t with { WindowSize = 3000 },
             t with { NoPacketTimeoutSeconds = 0.02f }, t with { NoPacketTimeoutSeconds = float.PositiveInfinity },
             t with { FluxHistorySeconds = 4.1f }, t with { FluxHistorySeconds = 0 },
         })
@@ -514,7 +514,7 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         Assert.Same(t, analyzer.Tuning);
         foreach (AudioTuning good in new[]
         {
-            t with { Sensitivity = 0.25f }, t with { Sensitivity = 2 }, t with { WindowSize = 256 }, t with { WindowSize = 16384 },
+            t with { Sensitivity = 0.25f }, t with { Sensitivity = 2 }, t with { WindowSize = 1024 }, t with { WindowSize = 16384 },
             t with { NoPacketTimeoutSeconds = 0.03f }, t with { FluxHistorySeconds = 4 },
         })
         {
@@ -523,16 +523,40 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
-    public void FluxHistoryCoversFourSecondsAtAnyFrameRate()
+    [Theory]
+    [InlineData(240f, 0.01f)]
+    [InlineData(360f, 0f)]
+    [InlineData(480f, 0f)]
+    [InlineData(1000f, 0f)]
+    public void FluxHistoryCoversFourSecondsAtAnyRefreshRate(float fps, float packetSeconds)
     {
-        // FluxHistorySeconds = 4 at 240 fps with 10 ms packets: the history ring must still span the full 4 s,
-        // so the threshold doesn't silently shrink to a shorter window.
+        // FluxHistorySeconds = 4 on a 240–1000 Hz display: the history ring must still span the full 4 s, so the
+        // threshold doesn't silently shrink to a shorter window (beat steps are at least 1/240 s).
         var tuning = new AudioTuning { FluxHistorySeconds = 4 };
         var analyzer = new AudioAnalyzer(tuning);
-        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.MusicLike(48000, 20, 124), 48000, 240, 0.1f, packetSeconds: 0.01f);
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.MusicLike(48000, 20, 124), 48000, fps, 0.1f, packetSeconds: packetSeconds);
+        Assert.True(analyzer.FluxHistoryStoredSeconds >= 4, $"{analyzer.FluxHistoryStoredSeconds:F2} s stored");
         Assert.True(SyntheticAudio.HitRate(beats, 124, 20, 5) >= 0.95f);
-        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(tuning), SyntheticAudio.WhiteNoise(48000, 30, 1f, 14), 48000, 240, 0.1f, packetSeconds: 0.01f));
+        // Idle frames (no packets) at the same rate keep the full window too.
+        for (int i = 0; i < 6 * fps; i++) analyzer.Process([], 48000, 1 / fps);
+        Assert.True(analyzer.FluxHistoryStoredSeconds >= 4, $"{analyzer.FluxHistoryStoredSeconds:F2} s stored while idle");
+        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(tuning), SyntheticAudio.WhiteNoise(48000, 30, 1f, 14), 48000, fps, 0.1f, packetSeconds: packetSeconds));
+    }
+
+    [Theory]
+    [InlineData(1024, 30f, 150f)]
+    [InlineData(1024, 50f, 90f)]
+    [InlineData(2048, 40f, 45f)]
+    public void ABassBandNarrowerThanABinStillCarriesBassAndBeats(int windowSize, float bassMin, float bassMax)
+    {
+        // Small windows or narrow live-tuned edges can leave no bin inside the bass band. It then uses the bin just
+        // below its center, so Bass and beats keep working instead of going silent.
+        // The 1024-sample default band case is the smallest window the analyzer accepts.
+        var analyzer = new AudioAnalyzer(new AudioTuning { WindowSize = windowSize, BassMinHz = bassMin, BassMaxHz = bassMax });
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(48000, 20, 120, 0.8f, 0.2f), 48000, jitter: 0.2f);
+        Assert.True(analyzer.Process(SyntheticAudio.KickTrack(48000, 0.1f, 120, 0.8f, 0.2f), 48000, 0.1f).Bass > 0);
+        Assert.True(SyntheticAudio.HitRate(beats, 120, 20, 2) >= 0.95f);
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 118, 122);
     }
 
     [Fact]

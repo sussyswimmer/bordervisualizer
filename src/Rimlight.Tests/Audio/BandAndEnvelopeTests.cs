@@ -48,6 +48,23 @@ public sealed class BandAndEnvelopeTests
         Assert.Equal(default, bands);
     }
 
+    [Theory]
+    [InlineData(41f, 49f, 4)]    // 10 Hz bins: no bin in [41, 49), so the bin below the 45 Hz center
+    [InlineData(31f, 39f, 3)]
+    [InlineData(1f, 9f, 1)]      // never DC
+    public void BassBandNarrowerThanABinUsesTheBinBelowItsCenter(float low, float high, int bin)
+    {
+        var tuning = new AudioTuning { BassMinHz = low, BassMaxHz = high };
+        Assert.Equal((bin, bin + 1), BandAnalyzer.BassBins(2049, 10, tuning));
+        var spectrum = new float[2049];
+        spectrum[bin] = 2;
+        spectrum[bin + 1] = 100; // the Mid band's first bin is not shared
+        Assert.Equal(2, BandAnalyzer.Analyze(spectrum, 4096, 40960, tuning).Bass);
+        // Wide bands and bands above Nyquist are unchanged.
+        Assert.Equal((3, 15), BandAnalyzer.BassBins(2049, 10, new AudioTuning()));
+        Assert.Equal((1025, 1025), BandAnalyzer.BassBins(1025, 0.02f, new AudioTuning()));
+    }
+
     [Fact]
     public void BandAboveNyquistUsesOnlyAvailableBinsInItsRms()
     {

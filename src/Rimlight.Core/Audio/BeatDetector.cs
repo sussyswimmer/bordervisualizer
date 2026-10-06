@@ -18,7 +18,7 @@ internal sealed class BeatDetector
     // The adaptive threshold needs some history before it means anything (a quarter of FluxHistorySeconds).
     private const float WarmUpFraction = 0.25f;
 
-    private const int MaxHistory = 1024;         // ring of per-step flux values; ≥ 4 s for render loops up to 240 fps
+    private const int MaxHistory = 1024;         // per-step flux values; ≥ 4.2 s, as steps are ≥ 1/240 s (AudioAnalyzer)
     private const int IntervalCount = 16;        // beat intervals kept for the BPM median
     private const float MaxIntervalSeconds = 2f; // longer gaps (< 30 BPM) are not tempo
     private const float StaleBpmSeconds = 4f;    // no beat for this long: the tempo is unknown again
@@ -55,9 +55,7 @@ internal sealed class BeatDetector
         }
         if (!spectrumChanged) return new BeatResult(false, 0, lastThreshold);
 
-        float binHz = (float)sampleRate / windowSize;
-        int start = (int)MathF.Min(magnitudes.Length, MathF.Max(0, MathF.Ceiling(tuning.BassMinHz / binHz)));
-        int end = (int)MathF.Min(magnitudes.Length, MathF.Max(0, MathF.Ceiling(tuning.BassMaxHz / binHz)));
+        (int start, int end) = BandAnalyzer.BassBins(magnitudes.Length, (float)sampleRate / windowSize, tuning);
         float scale = 4f / windowSize;
         float flux = 0;
         for (int k = start; k < end; k++)
@@ -116,6 +114,17 @@ internal sealed class BeatDetector
             sinceBeat = 0;
         }
         return new BeatResult(isBeat, flux, lastThreshold);
+    }
+
+    // Real time covered by the stored flux history, for tests.
+    internal float StoredSeconds
+    {
+        get
+        {
+            float seconds = 0;
+            for (int i = 0; i < fluxCount; i++) seconds += fluxDurations[(fluxHead - 1 - i + MaxHistory) % MaxHistory];
+            return seconds;
+        }
     }
 
     // After a render stall: the next spectrum only seeds the comparison and the flux statistics warm up again.
