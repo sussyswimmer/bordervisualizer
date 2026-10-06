@@ -7,6 +7,11 @@
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
     <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.346" PrivateAssets="all" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DirectComposition" Version="3.8.3" />
     <AdditionalFiles Include="NativeMethods.txt" />
+    <!-- Compiled at runtime (D3DCompiler, vs_4_0 / ps_4_0) when the GPU device is created. -->
+    <EmbeddedResource Include="Overlay\Glow.hlsl" LogicalName="Rimlight.Platform.Overlay.Glow.hlsl" />
   </ItemGroup>
 </Project>

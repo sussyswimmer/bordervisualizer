@@ -7,18 +7,27 @@ using Rimlight.Platform;
 namespace Rimlight.App;
 
 /// <summary>
-/// Owns the notification-area icon. K0: placeholder icon, tooltip and a Quit item.
+/// Owns the notification-area icon. K0/K1: placeholder icon, tooltip, Quit and (Debug builds) a device-loss test item.
 /// The full menu (doc 06 §2) arrives in K6.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
     private readonly TaskbarIcon icon;
 
-    public TrayIconHost(Action onQuit)
+    public TrayIconHost(Action onQuit, Action onSimulateDeviceLoss)
     {
         var quit = new MenuItem { Header = "Quit " + AppInfo.Name };
         quit.Click += (_, _) => onQuit();
         var menu = new ContextMenu();
+#if DEBUG
+        // Debug builds only: exercises the GPU device-loss recovery path (doc 07 Phase 1).
+        var deviceLoss = new MenuItem { Header = "Simulate GPU device loss (debug)" };
+        deviceLoss.Click += (_, _) => onSimulateDeviceLoss();
+        menu.Items.Add(deviceLoss);
+        menu.Items.Add(new Separator());
+#else
+        _ = onSimulateDeviceLoss;
+#endif
         menu.Items.Add(quit);
 
         icon = new TaskbarIcon
