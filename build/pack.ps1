@@ -121,6 +121,17 @@ function Get-InstallerAlias {
     }
 }
 
+function Get-VpkArgumentList {
+    # The dotnet arguments that run the manifest's vpk with $Arguments. vpk packs for Windows
+    # natively on Windows; anywhere else it needs the [win] directive. (Built as a typed array: a
+    # one-element @('vpk') returned from an if expression unrolls to a string, and string + array
+    # then joins everything into one argument.)
+    param([Parameter(Mandatory)] [string[]] $Arguments, [Parameter(Mandatory)] [bool] $OnWindows)
+    [string[]] $list = @('vpk')
+    if (-not $OnWindows) { $list += '[win]' }
+    $list + $Arguments
+}
+
 function Invoke-Native {
     # Runs a command after echoing it, and throws if it fails. PowerShell before 7.3 doesn't stop
     # on a failing native command by itself.
@@ -164,11 +175,6 @@ foreach ($dir in $publishRoot, $releaseDir, $installerDir) {
 }
 $null = New-Item -ItemType Directory -Path $releaseDir, $installerDir
 
-# vpk packs for Windows natively on Windows; anywhere else it needs the [win] directive.
-# @() keeps a one-item result an array: a bare if-expression unrolls @('vpk') to the string 'vpk', and
-# 'vpk' + $packArgs would then concatenate everything into one argument.
-$vpk = @(if ($IsWindows) { 'vpk' } else { 'vpk', '[win]' })
-
 # dotnet looks for the tool manifest from the current directory up.
 Push-Location -LiteralPath $repoRoot
 try {
@@ -203,7 +209,7 @@ try {
             '--outputDir', $releaseDir)
         if ($AzureTrustedSignFile) { $packArgs += '--azureTrustedSignFile', $AzureTrustedSignFile }
         if ($SkipVelopackAppCheck) { $packArgs += '--skipVeloAppCheck' }
-        Invoke-Native dotnet ($vpk + $packArgs)
+        Invoke-Native dotnet (Get-VpkArgumentList -Arguments $packArgs -OnWindows $IsWindows)
 
         $setup = Join-Path $releaseDir "$appName-$channel-Setup.exe"
         if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw "vpk didn't create $setup." }

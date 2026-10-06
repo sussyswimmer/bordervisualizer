@@ -115,7 +115,7 @@ jobs:
             $pack.Version = $env:GITHUB_REF_NAME
           } else {
             # A dry run packs the version in src/Directory.Build.props. It skips vpk's check that
-            # Rimlight.exe calls VelopackApp.Build().Run(), which K9 adds (HANDOFF H-011).
+            # Rimlight.exe calls VelopackApp.Build().Run(), which K9 adds (HANDOFF H-014).
             $pack.SkipVelopackAppCheck = $true
           }
           if ($env:SIGN -eq 'true') {

@@ -97,3 +97,23 @@ Describe 'Get-PackChannel and Get-InstallerAlias' {
         { Get-InstallerAlias -AppName 'Rimlight' -Runtime 'linux-x64' } | Should -Throw "*Unsupported runtime 'linux-x64'*"
     }
 }
+
+Describe 'Get-VpkArgumentList' {
+    # The Windows branch is what the release job runs, and Linux CI can't run it any other way.
+    It 'runs vpk natively on Windows' {
+        $list = Get-VpkArgumentList -Arguments @('pack', '--packId', 'Rimlight') -OnWindows $true
+        $list.Count | Should -Be 4
+        $list -join '|' | Should -Be 'vpk|pack|--packId|Rimlight'
+    }
+
+    It 'adds the [win] directive anywhere else' {
+        $list = Get-VpkArgumentList -Arguments @('pack', '--packId', 'Rimlight') -OnWindows $false
+        $list.Count | Should -Be 5
+        $list -join '|' | Should -Be 'vpk|[win]|pack|--packId|Rimlight'
+    }
+
+    It 'keeps a single argument separate' {
+        $list = Get-VpkArgumentList -Arguments 'pack' -OnWindows $true
+        $list -join '|' | Should -Be 'vpk|pack'
+    }
+}

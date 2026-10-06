@@ -122,7 +122,7 @@
   - **vpk.** vpk 1.2.161 (MIT) is pinned in `.config/dotnet-tools.json`, and the script restores it. On Linux and macOS it cross-packs with vpk's `[win]` directive. Signing (`-AzureTrustedSignFile`) needs Windows.
   - **Clean start.** Each run first deletes its three output folders. When it can't prompt, vpk stops if the same version is already in its output folder, and a clean start also means no stale file is uploaded.
   - **Before K9.** Until K9, packing needs `-SkipVelopackAppCheck`. Without it vpk fails with "Unable to verify VelopackApp is called" (H-014).
-  - The helpers have Pester tests (`build/pack.Tests.ps1`, 28 cases), which the Linux CI job runs.
+  - The helpers have Pester tests (`build/pack.Tests.ps1`, 31 cases), which the Linux CI job runs. They include the Windows branch of the vpk command line, which Linux can't otherwise run. #21's first Windows dry run caught a bug there: a one-element `@('vpk')` returned from an `if` expression unrolled to a string, and every pack argument was joined into one.
 - **`.github/workflows/release.yml`** has two jobs.
   - **`pack` (windows-latest, read-only token).**
     - Uses exactly SDK 8, the same way as the Linux CI job.
@@ -169,7 +169,7 @@
   - **Failure paths.** A bad `-Version` fails before any folder is touched, with exit code 1. A pack without the skip fails at vpk's VelopackApp check, so a tag pushed before K9 publishes nothing.
   - **Upload options.** The `vpk upload github` options parse, and `VPK_TOKEN` satisfies `--token`. This was checked against a non-existent repo, so no release was touched.
   - **Lint.** actionlint 1.7.12 with shellcheck 0.11.0 reports 0 problems. All YAML and JSON files parse. PSScriptAnalyzer only flags `Write-Host`, which this console build script uses on purpose.
-  - **Tests and build.** Pester: 28/28. Full `.sln` Release build: 0 warnings. `dotnet test`: 165 passed.
+  - **Tests and build.** Pester: 31/31 (reverting the vpk fix fails 2). Full `.sln` Release build: 0 warnings. `dotnet test`: 165 passed.
   - **Not run here:** a native Windows pack (#21's dry run covers it), signing, and the publish job, which needs a real tag.
 - **Follow-ups:**
   - **Delta updates.** Running `vpk download github --channel <c>` into `artifacts/releases` before packing (and not wiping that folder) would make vpk build deltas. Turning that on later doesn't break existing installs.
