@@ -94,8 +94,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         {
             sinceData = 0;
             zerosFed = 0;
-            // Silence time includes the empty frames between packets (fast render loops, 10–30 ms packets).
-            isSilent = silenceDetector.Update(Rms(newSamples), silenceSeconds, tuning);
+            isSilent = UpdateSilence(newSamples, silenceSeconds);
             silenceSeconds = 0;
             samples = Decimate(newSamples, out skipped);
         }
@@ -208,6 +207,22 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         analysisRate = AnalysisRate(sampleRate);
         maxStep = Math.Clamp((int)MathF.Round(analysisRate * MaxStepSeconds), 1, MaxStep);
         minBeatStep = Math.Max(1, (int)MathF.Round(analysisRate * MinBeatStepSeconds));
+    }
+
+    // Silence time includes the empty frames between packets (fast render loops, 10–30 ms packets). The samples
+    // are measured in order, in equal chunks of at most one 60 fps frame, so the trailing silence of a burst drained
+    // after a render stall counts toward SilenceHoldMs instead of being masked by the loud audio before it.
+    private bool UpdateSilence(ReadOnlySpan<float> samples, float seconds)
+    {
+        int chunk = maxStep * decimator.Factor, chunks = (samples.Length + chunk - 1) / chunk, start = 0;
+        bool silent = silenceDetector.IsSilent;
+        for (int c = 1; c <= chunks; c++)
+        {
+            int end = (int)((long)samples.Length * c / chunks);
+            silent = silenceDetector.Update(Rms(samples[start..end]), seconds * (end - start) / samples.Length, tuning);
+            start = end;
+        }
+        return silent;
     }
 
     // Returns the new samples at the analysis rate. Without decimation that is the input itself (no copy).

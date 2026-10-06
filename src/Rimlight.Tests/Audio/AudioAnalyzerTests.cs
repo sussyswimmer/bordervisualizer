@@ -493,6 +493,26 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void TrailingSilenceInsideAStallBurstCountsTowardIsSilent()
+    {
+        // A stall drains 0.1 s of music followed by 1.9 s of zeros in one call. The newest audio has been silent for
+        // 1.9 s, so IsSilent follows about 0.1 s later, not a whole SilenceHoldMs later.
+        var analyzer = new AudioAnalyzer();
+        float[] music = SyntheticAudio.KickTrack(48000, 3, 120, 0.8f, 0.2f);
+        Feed(analyzer, music);
+        float[] burst = new float[96000];
+        music.AsSpan(0, 4800).CopyTo(burst);
+        Assert.False(analyzer.Process(burst, 48000, 2).IsSilent);
+        float t = 0;
+        var zeros = new float[800];
+        while (!analyzer.Process(zeros, 48000, 1f / 60).IsSilent && t < 3) t += 1f / 60;
+        Assert.InRange(t, 0.05f, 0.15f);
+
+        // The order matters: zeros followed by music in one burst are not silent.
+        Assert.False(analyzer.Process([.. new float[91200], .. music.AsSpan(0, 4800)], 48000, 2).IsSilent);
+    }
+
+    [Fact]
     public void SlowFrameRatesAreNotStalls()
     {
         // At 8 fps every frame carries 6000 samples; that is still analyzed in full, so no beat is lost.
