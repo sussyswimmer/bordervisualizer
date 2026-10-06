@@ -76,7 +76,7 @@
 - [x] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale — PR #14 — effort: L (notes below; Windows manual test pending)
 - [x] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip — PR #18 — effort: M (notes below; Windows manual test pending)
 - [x] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause — PR #19 — effort: M (notes below; Windows manual test pending)
-- [ ] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow
+- [x] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow — PR #22 — effort: M (notes below; Windows manual test pending)
 - [ ] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names
 - [ ] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode
 - [ ] K9 Velopack bootstrap in App (`VelopackApp.Build().Run()`), update checks, "Update ready" toast
@@ -347,6 +347,41 @@
   - **K7:** the Behavior page's "Pause in fullscreen apps" toggle (already wired through `settings.Changed`). `SystemState` can feed diagnostics.
   - **K11:** sleep/hibernate, Modern Standby, RDP (bandwidth too), TDR and hotplug on real hardware. Also check whether `QUNS_NOT_PRESENT` ever shows up spuriously, for example in a remote session.
   - **C6 (via K10):** global pauses fade over 300 ms once the real engine lands (H-008); with the fake they are instant.
+
+## K6 notes
+
+- **Structure:**
+  - `src/Rimlight.Platform/Shell/` (namespace `Rimlight.Platform.Shell`):
+    - `HotkeyGesture`: pure parser and writer for H-009's `Modifier+…+Key` (105 key names; `TryCreate` is K7's recorder seam).
+    - `GlobalHotkey`: `RegisterHotKey` + `MOD_NOREPEAT` on a message-only window on the UI thread. `Register` returns a `HotkeyStatus` (None, Registered, Invalid, InUse, Failed).
+    - `SingleInstance`: mutex `Local\Rimlight-{SID}` + a current-user pipe (`Rimlight-{SID}-{session}`). One server instance serves every start (`Disconnect`), reads at most 64 bytes with a 2 s timeout. A second start sends `show-settings` after `AllowSetForegroundWindow` for the running process; a `--background` start sends nothing. If nobody answers, the new start waits up to 5 s to take over.
+    - `StartupRegistration`: HKCU `Run` value `Rimlight` = `"<launcher>" --background`. The launcher is Velopack's stub in the install root when installed (`sq.version` + `..\Update.exe`), else `Environment.ProcessPath`. `Remove()` is for K9's uninstall hook.
+    - `SystemTheme`: light/dark app mode and the dark title bar.
+  - App:
+    - `AppController` owns the hotkey, the startup entry, the first-run flow and the hooks: `IShowSettings` (K7 sets `SettingsWindow`), `IUpdateCheck` (K9 sets `Updates`), `Hotkey` + `HotkeyChanged` (K7's inline warning), `StartupRegistered`, `IsFirstRunSession` (K7's one-time tray toast), `Tray.Notify` + `NotificationClicked` (K7/K9).
+    - `TrayIconHost`: doc 06's full menu, click/double-click commands, keyboard menu, dimmed icon, re-creation with the icon and tooltip re-applied. `TrayIconImages` builds both icons at `SM_CXSMICON`.
+    - `WelcomeWindow`: first run, and the stand-in for Settings until K7.
+    - `Logging/RollingFileLog` (a `TraceListener`) + `Logging/AppLog` (start line, unhandled exceptions, open folder).
+    - `App.xaml.cs`: claim → log → controller; exit releases the mutex last.
+- **Spec clarifications and deviations:**
+  - **Logging** is a rolling-file `TraceListener` fed by the existing `Trace` calls, not `Microsoft.Extensions.Logging` (doc 02): no package, same folder and 5 × 1 MB. Lines are queued and written 500 ms later on the pool, the file is opened per batch with full sharing, a burst rolls over line by line, lines over 32 K characters are cut, and it never traces its own failures.
+  - **Hotkey rules:** Ctrl, Alt or Win required, except F1–F24; F12 alone is reserved by Windows. Punctuation keys are named by their US position (`Plus`, `Minus`, `Backtick`, …).
+  - **Enter/Space on the focused icon open the menu** (Windows can send `NIN_KEYSELECT` twice for Enter, which would toggle twice).
+  - **The icon dims only for "Glow on" off,** not for Mode = Off.
+  - **`FirstRunComplete` is set when the welcome is shown.** A normal start (no `--background`) of a set-up app opens Settings; until K7 that is the welcome window.
+  - **The startup entry is checked at every start** (repairs a stale path). A build that isn't installed never replaces an entry pointing to an installed copy. Task Manager's `StartupApproved` switch is not touched.
+  - **Tray icon size:** both icons are built at `SM_CXSMICON` (system DPI); H.NotifyIcon's own conversion picks 16 px at every DPI.
+  - **Tooltip `&`** becomes the fullwidth `＆` (K4 follow-up): the shell can take a lone `&` as an access-key marker.
+  - **Unhandled UI exceptions** are logged and survived, so the tray stays usable.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Signatures checked against CsWin32 0.3.346's generated sources; H.NotifyIcon 2.3.2, .NET 8's Windows pipes and `System.Drawing.Icon`, and Velopack 1.2.161 (locator and vpk's stub naming) decompiled.
+  - **Scratch harness (not committed), 432 checks:** the hotkey parser (every key round-trips), the rolling log (rotation, limits, concurrency, `Trace` integration, failures), the single instance across real processes (hand-over, background start, silent and junk clients, take-over after exit and after a kill), the tooltip. It found two problems, fixed before the PR: a large batch could grow one log file past 1 MB, and re-creating the pipe between clients could make a waiting start miss it. K4's harness still passes against the new tooltip.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #22.
+- **Left for later:**
+  - **K7:** set `SettingsWindow`; the Behavior page's Launch at startup and hotkey recorder (`HotkeyGesture.TryCreate` + `KeyInterop.VirtualKeyFromKey`, warning from `AppController.Hotkey`); the one-time "still running in the tray" toast via `IsFirstRunSession` and `Tray.Notify`; the welcome then shows its "Open Settings" button; theme the tray menu.
+  - **K9:** set `Updates`; "Update ready" via `Tray.Notify` + `NotificationClicked`; call `StartupRegistration.Remove(AppInfo.Name)` from Velopack's uninstall hook; check that the stub passes `--background` through.
+  - **K10:** with C7's store, the welcome shows once and `LaunchAtStartup`/`ToggleHotkey` persist.
 
 ## Lane B notes
 
