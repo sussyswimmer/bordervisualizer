@@ -14,7 +14,7 @@ namespace Rimlight.Platform.Overlay;
 /// Runs the glow: one click-through, topmost overlay per selected monitor, drawn with Direct3D 11 through
 /// DirectComposition (doc 04 §1–3), paced as doc 02 "Frame pacing" asks. A dedicated overlay thread owns every window
 /// and GPU object and pumps their messages. Other threads only publish inputs (settings, pause, battery, paused
-/// monitors) through single fields, so there are no locks.
+/// monitors, frame requests) through single fields, so there are no locks.
 /// </summary>
 /// <remarks>
 /// Frames come at the full rate while music drives the glow (on the display's refresh when that is the cap), at
@@ -54,6 +54,7 @@ public sealed class OverlayHost : IDisposable
     private int onBattery;
     private string[] pausedMonitors = [];
     private int deviceLossRequested;
+    private int sourceChanged;
 
     // Status, written by the overlay thread and read by any thread (diagnostics only).
     private int statusPace;
@@ -174,6 +175,16 @@ public sealed class OverlayHost : IDisposable
     {
         ArgumentNullException.ThrowIfNull(deviceNames);
         Volatile.Write(ref pausedMonitors, [.. deviceNames]);
+        Wake();
+    }
+
+    /// <summary>
+    /// Draws a frame now because something the frame source reads besides these inputs changed, such as a new album
+    /// palette: a static glow draws no frames by itself. Safe to call from any thread.
+    /// </summary>
+    public void RequestFrame()
+    {
+        Interlocked.Exchange(ref sourceChanged, 1);
         Wake();
     }
 
@@ -449,6 +460,8 @@ public sealed class OverlayHost : IDisposable
             ReleaseGpu("simulated from the tray (debug)");
             changed = true;
         }
+
+        if (Interlocked.Exchange(ref sourceChanged, 0) != 0) changed = true;
 
         // Last: a rebuild above (or one run by a WM_TIMER, or a WM_PAINT) asks for a frame here.
         changed |= frameRequested;
