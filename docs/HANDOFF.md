@@ -8,7 +8,7 @@
      - Add a `[STAThread] Program.Main` that runs `VelopackApp.Build().Run()`, then `new App()`, `InitializeComponent()` and `Run()`.
      - Make `App.xaml` a `Page` instead of the `ApplicationDefinition`.
      - Without the call, vpk's entry-point check fails the pack ("Unable to verify VelopackApp is called"; reproduced on the C9 branch). A tag pushed before K9 therefore stops in the pack job, before anything is published.
-   - **Dry run.** Then delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch of `.github/workflows/release.yml`.
+   - **Dry run.** Then delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch of `.github/workflows/release.yml`. The K9 PR changes `src/Rimlight.App`, so it runs the release dry run, which then checks the entry point.
    - **Updates.** Use `new UpdateManager(new GithubSource("https://github.com/sussyswimmer/bordervisualizer", null, false))` with no explicit channel: each install reads its own channel's feed. `IsInstalled` is false in a dev run, so skip update checks there.
    - **AUMID.** `VelopackApp` already sets the process AUMID to the shortcuts' `velopack.Rimlight`.
 2. **K6:**
