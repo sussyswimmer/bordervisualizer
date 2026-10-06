@@ -12,7 +12,7 @@
 - [ ] C6 Real `LightEngine`: intensity formula, pulse, phase drift, idle breathing, silence fade, Visibility, `IsStatic`
 - [ ] C7 Settings validation/clamping, JSON store (atomic, backup on corruption), version migration scaffold, Presets
 - [x] C8 CI: `ci.yml` (Linux job: Core.slnf build+test; Windows job: full sln build+test), labeler, `.github/release.yml` — PR [#10](https://github.com/sussyswimmer/bordervisualizer/pull/10) — effort: M (made by Claude Code on Maxwell's instruction; notes below)
-- [ ] C9 Packaging: `build/pack.ps1` (Velopack, x64+ARM64, self-contained), `release.yml` on tag `v*` with `vpk upload github`, optional signing step gated on secrets
+- [x] C9 Packaging: `build/pack.ps1` (Velopack, x64+ARM64, self-contained), `release.yml` on tag `v*` with `vpk upload github`, optional signing step gated on secrets — PR [#21](https://github.com/sussyswimmer/bordervisualizer/pull/21) — effort: M (made by Claude Code on Maxwell's instruction; notes below)
 - [ ] C10 `tools/icon-gen`: SVG → multi-size `.ico` + PNGs (consumes `assets/icon.svg` from Lane B)
 - [ ] C11 Community health files + issue/PR templates + CHANGELOG
 - [ ] C12 Perf + soak harness in Bench: run analyzer + light engine for 8 simulated hours of synthetic audio, and report allocations, p99 frame cost, and memory
@@ -107,6 +107,74 @@
   - Enable Dependabot alerts (Settings → Code security), because NuGet advisories now warn instead of failing the build.
   - Optional: protect `main`, requiring the two CI checks.
   - The README CI badge is `actions/workflows/ci.yml/badge.svg?branch=main`.
+
+### C9 notes
+
+- **`build/pack.ps1` (PowerShell 7)** runs three steps for each of win-x64 and win-arm64:
+  1. `dotnet publish src/Rimlight.App` into `artifacts/publish/<rid>`: Release, self-contained, untrimmed.
+  2. `vpk pack` into `artifacts/releases`. This makes a Setup.exe, a portable zip, the full `.nupkg`, and the `releases.<channel>.json` feed that installed copies read.
+  3. The installer is copied into `artifacts/installers` as `RimlightSetup.exe` (x64) or `RimlightSetup-arm64.exe` (ARM64).
+  - **Pack identity.** packId and packTitle come from `<AppName>` in `src/Directory.Build.props`, so a rename still happens in one place. Change the packId only before the first release. Installed copies live in `%LocalAppData%\<packId>`, and a new ID strands them without updates.
+  - **Channels.** `win` for x64 (Velopack's default, which also gets the legacy `RELEASES` file) and `win-arm64`.
+  - **Trimming is off.** WPF and the WinRT projections aren't trim-safe, and doc 07 Phase 6 allows turning it off.
+  - **Shortcuts.** Velopack's default: Desktop and Start menu.
+  - **Version.** `-Version` defaults to `<Version>` in the props file and accepts a tag name such as `v1.2.0`. It is checked as SemVer 2 without build metadata before anything is built.
+  - **vpk.** vpk 1.2.161 (MIT) is pinned in `.config/dotnet-tools.json`, and the script restores it. On Linux and macOS it cross-packs with vpk's `[win]` directive. Signing (`-AzureTrustedSignFile`) needs Windows.
+  - **Clean start.** Each run first deletes its three output folders. When it can't prompt, vpk stops if the same version is already in its output folder, and a clean start also means no stale file is uploaded.
+  - **Before K9.** Until K9, packing needs `-SkipVelopackAppCheck`. Without it vpk fails with "Unable to verify VelopackApp is called" (H-014).
+  - The helpers have Pester tests (`build/pack.Tests.ps1`, 28 cases), which the Linux CI job runs.
+- **`.github/workflows/release.yml`** has two jobs.
+  - **`pack` (windows-latest, read-only token).**
+    - Uses exactly SDK 8, the same way as the Linux CI job.
+    - Builds and tests `Rimlight.sln`, runs `pack.ps1` with the tag's version, and keeps `artifacts/releases` and `artifacts/installers` as the `packages` artifact (7 days).
+  - **`publish` (ubuntu-latest, `contents: write`, tags only).** It runs no build code. In order, it:
+    1. Writes the release notes: `.github/release-notes-intro.md`, then GitHub's generated notes (the `releases/generate-notes` API with C8's `.github/release.yml` sections).
+    2. Creates a draft release titled "Rimlight <version>" with both installers (`gh release create --draft --verify-tag`).
+    3. Runs `vpk upload github --merge` for `win-arm64`.
+    4. Runs it for `win` with `--publish`.
+
+    The release is public only once all files are attached, so `releases/latest/download/RimlightSetup.exe` never meets a half-uploaded release. A version with a hyphen (`v1.1.0-beta.1`) becomes a prerelease. Neither `releases/latest` nor the app's update check (`prerelease: false`) picks it up.
+  - **Deviation: release notes.** vpk would use notes embedded in the package as the release body. Instead, `gh` creates the release with the notes and vpk merges into it. That keeps every write-token step in one job that runs no build code. The packages carry no notes.
+  - **Deviation: dry runs.** Pull requests that change the packaging files, and manual runs, are dry runs: build, test, an unsigned pack with `-SkipVelopackAppCheck`, and the artifact. Nothing is published. They test the Windows pack before any tag exists.
+  - **Signing (optional, Azure Trusted Signing).**
+    - It runs only for a tag and only when all six secrets exist: `SIGNING_ENDPOINT`, `SIGNING_ACCOUNT`, `SIGNING_PROFILE`, `SIGNING_TENANT_ID`, `SIGNING_CLIENT_ID` and `SIGNING_CLIENT_SECRET`. The client must be an app registration with the "Trusted Signing Certificate Profile Signer" role.
+    - The workflow writes the metadata JSON and passes `AZURE_*` credentials to the pack step only. vpk signs with its bundled signtool and Trusted Signing client, and skips files that are already signed (the .NET runtime).
+    - Until signing is on, the SmartScreen sentence stays in the README and in the release intro.
+- **For Maxwell:**
+  - **Repo settings: nothing has to be enabled.** The publish job asks for `contents: write` itself, which works whatever the default under Settings → Actions → General → Workflow permissions is. That default applies only to workflows that don't set `permissions`. Switching that default to "read and write" would only widen every other workflow's token. If a release ever fails with 403 "Resource not accessible by integration", check that Actions are allowed to run on the repo.
+  - **To cut a release:**
+    1. Make sure K9 is merged and `main` is green.
+    2. Run `git tag v1.0.0` on `main`, then `git push origin v1.0.0`. Push only the tag; don't create the release in the GitHub UI, or the publish job's `gh release create` fails.
+    3. Bumping `<Version>` in `src/Directory.Build.props` is optional. The tag sets the release version; the props value only sets local and dry-run packs.
+    4. The run takes about 15 minutes.
+  - **If a release run fails:**
+    - If `publish` fails, delete the draft release (keep the tag) and use "Re-run failed jobs".
+    - If `pack` fails, fix the problem, then delete and re-push the tag (`git push --delete origin v1.0.0`).
+- **How auto-update finds releases (K9 uses Velopack's `GithubSource`):**
+  1. The app lists the 10 newest releases through the GitHub API. This is unauthenticated, at 60 requests an hour per IP, and the app checks every 12 h. Drafts are invisible and prereleases are skipped.
+  2. From each release it reads its own channel's feed: `releases.win.json` for an x64 install, `releases.win-arm64.json` for ARM64. The channel is stored in the installed package.
+  3. It downloads the highest version above the installed one, then applies it on restart.
+  - There are no delta packages yet, so each update is the full package, about 75 MB.
+- **Validation (Linux, SDK 8.0.425, vpk 1.2.161, pwsh 7.4.6):**
+  - **Full pack.** `pwsh build/pack.ps1 -SkipVelopackAppCheck` took 46 s.
+    - x64 (channel `win`): `Rimlight-win-Setup.exe` (= `RimlightSetup.exe`) 82.8 MB, `Rimlight-win-Portable.zip` 75.5 MB, `Rimlight-0.1.0-full.nupkg` 75.6 MB.
+    - ARM64 (channel `win-arm64`): `Rimlight-win-arm64-Setup.exe` (= `RimlightSetup-arm64.exe`) 77.2 MB, `Rimlight-win-arm64-Portable.zip` 71.4 MB, `Rimlight-0.1.0-win-arm64-full.nupkg` 71.4 MB.
+    - Also written: both feeds, `RELEASES`, and the two `assets.*.json` files.
+    - The x64 publish folder is 186 MB.
+  - **Package contents.**
+    - The nuspec id, title, authors, channel and rid are right.
+    - The exe, `Update.exe` and Setup.exe are x86-64 or AArch64 PE images as expected.
+    - There are no `.pdb` files.
+    - FileVersion is 0.1.0.0. A `v0.2.0-beta.1` pack gives package version `0.2.0-beta.1` and FileVersion 0.2.0.0.
+  - **Failure paths.** A bad `-Version` fails before any folder is touched, with exit code 1. A pack without the skip fails at vpk's VelopackApp check, so a tag pushed before K9 publishes nothing.
+  - **Upload options.** The `vpk upload github` options parse, and `VPK_TOKEN` satisfies `--token`. This was checked against a non-existent repo, so no release was touched.
+  - **Lint.** actionlint 1.7.12 with shellcheck 0.11.0 reports 0 problems. All YAML and JSON files parse. PSScriptAnalyzer only flags `Write-Host`, which this console build script uses on purpose.
+  - **Tests and build.** Pester: 28/28. Full `.sln` Release build: 0 warnings. `dotnet test`: 165 passed.
+  - **Not run here:** a native Windows pack (#21's dry run covers it), signing, and the publish job, which needs a real tag.
+- **Follow-ups:**
+  - **Delta updates.** Running `vpk download github --channel <c>` into `artifacts/releases` before packing (and not wiping that folder) would make vpk build deltas. Turning that on later doesn't break existing installs.
+  - **K9** removes the dry run's `-SkipVelopackAppCheck` (H-014).
+  - **Action versions.** Bump to newer action majors together with C8's Node 20 follow-up.
 
 ## Lane B — Claude Code
 
