@@ -10,9 +10,9 @@ using Rimlight.Platform.Overlay;
 namespace Rimlight.App;
 
 /// <summary>
-/// The composition root: owns the settings, the tray icon, the media session reader, loopback capture and the glow
-/// overlay, wires them together and tears them down in order. Created and used on the UI thread. Later tasks add
-/// system watchers (K5), shell services (K6), the settings window (K7), the visualizer (K8) and updates (K9).
+/// The composition root: owns the settings, the tray icon, the media session reader, the system watchers, loopback
+/// capture and the glow overlay, wires them together and tears them down in order. Created and used on the UI thread.
+/// Later tasks add shell services (K6), the settings window (K7), the visualizer (K8) and updates (K9).
 /// </summary>
 internal sealed class AppController : IDisposable
 {
@@ -21,6 +21,7 @@ internal sealed class AppController : IDisposable
     private SettingsService? settings;
     private TrayIconHost? tray;
     private NowPlayingService? media;
+    private SystemPauseBridge? systemPauses;
     private LoopbackCapture? capture;
     private OverlayHost? overlays;
     private int toolTipQueued;
@@ -35,6 +36,9 @@ internal sealed class AppController : IDisposable
     /// <summary>What's playing and its album colors and art (the settings window's "Now playing" row).</summary>
     public NowPlayingService? Media => media;
 
+    /// <summary>Sleep, lock, display, battery and fullscreen state, as it reaches the overlay.</summary>
+    public SystemPauseBridge? SystemPauses => systemPauses;
+
     public void Start()
     {
         // %APPDATA%\Rimlight (doc 02 "Settings storage"). The store is in memory until C7.
@@ -48,6 +52,11 @@ internal sealed class AppController : IDisposable
         media.NowPlayingChanged += OnNowPlayingChanged;
         media.AlbumArtChanged += OnAlbumArtChanged;
 
+        // Sleep, lock, display off, battery and fullscreen apps (doc 02 "Lifetime events", doc 04 §4), watched on their
+        // own thread from before the overlay starts, so its first frame already knows about a locked session or a
+        // fullscreen app.
+        systemPauses = new SystemPauseBridge(settings.Current);
+
         // System audio only, via WASAPI loopback on the default output device; the microphone is never opened.
         // The glow opens the stream only while music sync needs it (MusicGlowSource), so Off and Idle Glow capture
         // nothing.
@@ -56,6 +65,7 @@ internal sealed class AppController : IDisposable
             Settings initial = settings.Current;
             capture = new LoopbackCapture();
             overlays = new OverlayHost(new MusicGlowSource(initial, capture, media), initial);
+            systemPauses.Attach(overlays);
             overlays.Start();
             capture.Start();
         }
@@ -63,6 +73,7 @@ internal sealed class AppController : IDisposable
         {
             // The tray keeps working without the glow; the failure is visible in the debugger output.
             Trace.WriteLine($"[App] The overlay could not start: {exception}");
+            systemPauses.Attach(null);
             overlays?.Dispose();
             overlays = null;
             capture?.Dispose();
@@ -70,7 +81,11 @@ internal sealed class AppController : IDisposable
         }
 
         // Every change reaches the overlay thread as a new snapshot, applied on its next frame.
-        settings.Changed += snapshot => overlays?.ApplySettings(snapshot);
+        settings.Changed += snapshot =>
+        {
+            overlays?.ApplySettings(snapshot);
+            systemPauses?.ApplySettings(snapshot);
+        };
         media.Start();
     }
 
@@ -80,6 +95,8 @@ internal sealed class AppController : IDisposable
     {
         media?.Dispose(); // first: no media event reaches the overlay or the tray after this
         media = null;
+        systemPauses?.Dispose(); // then no system event either
+        systemPauses = null;
         overlays?.Dispose(); // stops the render thread, the ring's only reader, before the capture goes away
         overlays = null;
         capture?.Dispose();

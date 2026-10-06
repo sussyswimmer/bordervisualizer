@@ -14,7 +14,7 @@ namespace Rimlight.Platform.Overlay;
 /// Runs the glow: one click-through, topmost overlay per selected monitor, drawn with Direct3D 11 through
 /// DirectComposition (doc 04 §1–3), paced as doc 02 "Frame pacing" asks. A dedicated overlay thread owns every window
 /// and GPU object and pumps their messages. Other threads only publish inputs (settings, pause, battery, paused
-/// monitors, frame requests) through single fields, so there are no locks.
+/// monitors, frame requests, device checks) through single fields, so there are no locks.
 /// </summary>
 /// <remarks>
 /// Frames come at the full rate while music drives the glow (on the display's refresh when that is the cap), at
@@ -54,6 +54,7 @@ public sealed class OverlayHost : IDisposable
     private int onBattery;
     private string[] pausedMonitors = [];
     private int deviceLossRequested;
+    private int recheckRequested;
     private int sourceChanged;
 
     // Status, written by the overlay thread and read by any thread (diagnostics only).
@@ -185,6 +186,17 @@ public sealed class OverlayHost : IDisposable
     public void RequestFrame()
     {
         Interlocked.Exchange(ref sourceChanged, 1);
+        Wake();
+    }
+
+    /// <summary>
+    /// Re-checks the GPU device and the monitors, as after a display change: call it when the machine wakes, the
+    /// session is unlocked or reconnected, or the display comes back on. Sleep can lose the device without a failed
+    /// Present while nothing is drawn, and displays can change while frames are paused. Safe to call from any thread.
+    /// </summary>
+    public void CheckDevices()
+    {
+        Interlocked.Exchange(ref recheckRequested, 1);
         Wake();
     }
 
@@ -425,6 +437,16 @@ public sealed class OverlayHost : IDisposable
     private bool ApplyPendingInputs(long now)
     {
         bool changed = false;
+        // Before the settings: overlays a rebuild creates (the first ones at start) begin paused and faded out on a
+        // monitor a fullscreen app already covers, instead of fading out from a visible glow.
+        string[] monitors = Volatile.Read(ref pausedMonitors);
+        if (!ReferenceEquals(monitors, appliedPausedMonitors))
+        {
+            appliedPausedMonitors = monitors;
+            foreach (Overlay overlay in overlays) overlay.Paused = IsMonitorPaused(overlay.Monitor);
+            changed = true;
+        }
+
         Settings next = Volatile.Read(ref settings);
         if (!ReferenceEquals(next, applied))
         {
@@ -447,17 +469,16 @@ public sealed class OverlayHost : IDisposable
             changed = true;
         }
 
-        string[] monitors = Volatile.Read(ref pausedMonitors);
-        if (!ReferenceEquals(monitors, appliedPausedMonitors))
-        {
-            appliedPausedMonitors = monitors;
-            foreach (Overlay overlay in overlays) overlay.Paused = IsMonitorPaused(overlay.Monitor);
-            changed = true;
-        }
-
         if (Interlocked.Exchange(ref deviceLossRequested, 0) != 0)
         {
             ReleaseGpu("simulated from the tray (debug)");
+            changed = true;
+        }
+
+        if (Interlocked.Exchange(ref recheckRequested, 0) != 0)
+        {
+            deviceCheckRequested = true; // CheckGpu asks the device on this frame
+            if (!helper.IsNull) ScheduleRebuild(); // monitors, refresh rates, a replaced adapter; debounced with WM_DISPLAYCHANGE
             changed = true;
         }
 

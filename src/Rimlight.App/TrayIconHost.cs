@@ -122,25 +122,25 @@ internal sealed class TrayIconHost : IDisposable
     }
 
 #if DEBUG
-    // "Render test (debug)": the render loop's live status, what the media session reader sees, settings without a
-    // settings window yet (K7: When silent, Override album color, FPS cap, On battery), and stand-ins for the system
-    // watchers (K5): battery, a global pause and a per-monitor pause.
+    // "Render test (debug)": the render loop's live status, what the media session reader and the system watchers
+    // see, settings without a settings window yet (K7: When silent, Override album color, FPS cap, On battery, Pause in
+    // fullscreen apps), and simulated system states on top of the real ones: battery, a global pause and a per-monitor
+    // pause.
     private sealed class DebugMenu
     {
         private readonly AppController app;
         private readonly Action<Func<Settings, Settings>> update;
         private readonly MenuItem status = new() { IsEnabled = false };
         private readonly MenuItem media = new() { IsEnabled = false };
+        private readonly MenuItem system = new() { IsEnabled = false };
         private readonly MenuItem hideWhenSilent = new() { Header = "When silent: Hide" };
         private readonly MenuItem overrideAlbum = new() { Header = "Override album color" };
         private readonly (MenuItem Item, int Cap)[] caps;
         private readonly (MenuItem Item, BatteryBehavior Behavior)[] batteryBehaviors;
+        private readonly MenuItem pauseInFullscreen = new() { Header = "Pause in fullscreen apps" };
         private readonly MenuItem onBattery = new() { Header = "Simulate running on battery" };
         private readonly MenuItem pauseAll = new() { Header = "Pause everywhere (like a locked session)" };
         private readonly MenuItem pausePrimary = new() { Header = "Pause the primary monitor (like a fullscreen video)" };
-        private bool simulatedBattery;
-        private bool pausedAll;
-        private bool pausedPrimary;
 
         public DebugMenu(AppController app, Action<Func<Settings, Settings>> update)
         {
@@ -149,6 +149,7 @@ internal sealed class TrayIconHost : IDisposable
             Root = new MenuItem { Header = "Render test (debug)" };
             Root.Items.Add(status);
             Root.Items.Add(media);
+            Root.Items.Add(system);
             Root.Items.Add(new Separator());
 
             hideWhenSilent.Click += (_, _) => update(s => s with
@@ -169,26 +170,21 @@ internal sealed class TrayIconHost : IDisposable
                 Battery(battery, "Pause", BatteryBehavior.Pause)];
             Root.Items.Add(battery);
 
-            onBattery.Click += (_, _) =>
-            {
-                simulatedBattery = !simulatedBattery;
-                app.Overlays?.SetOnBattery(simulatedBattery || PowerStatus.IsOnBattery());
-            };
+            pauseInFullscreen.Click += (_, _) => update(s => s with { PauseInFullscreen = !s.PauseInFullscreen });
+            Root.Items.Add(pauseInFullscreen);
+            Root.Items.Add(new Separator());
+
+            // Simulated on top of what the system watchers report: the glow pauses if either says so.
+            onBattery.Click += (_, _) => Simulate(s => s with { OnBattery = !s.OnBattery });
             Root.Items.Add(onBattery);
 
-            pauseAll.Click += (_, _) =>
-            {
-                pausedAll = !pausedAll;
-                app.Overlays?.SetPaused(pausedAll);
-            };
+            pauseAll.Click += (_, _) => Simulate(s => s with { PausedEverywhere = !s.PausedEverywhere });
             Root.Items.Add(pauseAll);
 
-            pausePrimary.Click += (_, _) =>
+            pausePrimary.Click += (_, _) => Simulate(s => s with
             {
-                pausedPrimary = !pausedPrimary;
-                string? primary = pausedPrimary ? DisplayMonitors.PrimaryDeviceName() : null;
-                app.Overlays?.SetPausedMonitors(primary is null ? [] : [primary]);
-            };
+                PausedMonitor = s.PausedMonitor is null ? DisplayMonitors.PrimaryDeviceName() : null,
+            });
             Root.Items.Add(pausePrimary);
             Root.Items.Add(new Separator());
 
@@ -203,13 +199,21 @@ internal sealed class TrayIconHost : IDisposable
         {
             status.Header = app.Overlays is { } overlays ? Describe(overlays.Status) : "The overlay is not running";
             media.Header = Describe(app.Media);
+            system.Header = app.SystemPauses is { } pauses ? $"System: {pauses.State}" : "System: not watched";
             hideWhenSilent.IsChecked = current.WhenSilent == SilentBehavior.Hide;
             overrideAlbum.IsChecked = current.OverrideAlbumColor;
             foreach ((MenuItem item, int cap) in caps) item.IsChecked = current.FpsCap == cap;
             foreach ((MenuItem item, BatteryBehavior behavior) in batteryBehaviors) item.IsChecked = current.OnBattery == behavior;
-            onBattery.IsChecked = simulatedBattery;
-            pauseAll.IsChecked = pausedAll;
-            pausePrimary.IsChecked = pausedPrimary;
+            pauseInFullscreen.IsChecked = current.PauseInFullscreen;
+            SimulatedSystem simulated = app.SystemPauses?.Simulated ?? default;
+            onBattery.IsChecked = simulated.OnBattery;
+            pauseAll.IsChecked = simulated.PausedEverywhere;
+            pausePrimary.IsChecked = simulated.PausedMonitor is not null;
+        }
+
+        private void Simulate(Func<SimulatedSystem, SimulatedSystem> change)
+        {
+            if (app.SystemPauses is { } pauses) pauses.Simulated = change(pauses.Simulated);
         }
 
         // e.g. "Full rate (vsync): 60 frames/s, 60 presents/s, 1 of 1 overlay shown"
