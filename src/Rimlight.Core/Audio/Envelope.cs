@@ -6,6 +6,8 @@ internal sealed class Envelope
 
     public float Update(float target, float dtSeconds, float attackSeconds, float releaseSeconds)
     {
+        // A non-finite target would latch Value forever; keep the last good value instead.
+        if (!float.IsFinite(target)) return Value;
         float tau = target > Value ? attackSeconds : releaseSeconds;
         Value += (target - Value) * (1 - MathF.Exp(-dtSeconds / tau));
         return Value;

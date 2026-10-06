@@ -14,6 +14,7 @@ internal sealed class AudioFrontEnd
     private readonly AutoGain highGain = new();
     private readonly Envelope level = new();
     private readonly Envelope bass = new();
+    private readonly float holdRms;
     private int previousSampleRate;
 
     public AudioFrontEnd(AudioTuning? tuning = null)
@@ -21,6 +22,7 @@ internal sealed class AudioFrontEnd
         this.tuning = tuning ?? new AudioTuning();
         Validate(this.tuning);
         spectrum = new SpectrumAnalyzer(this.tuning.WindowSize);
+        holdRms = HoldRms(this.tuning);
     }
 
     public ReadOnlySpan<float> Spectrum => spectrum.Magnitudes;
@@ -33,10 +35,15 @@ internal sealed class AudioFrontEnd
         previousSampleRate = sampleRate;
         spectrum.Process(samples);
         BandEnergies energies = BandAnalyzer.Analyze(spectrum.Magnitudes, tuning.WindowSize, sampleRate, tuning);
-        float bassNorm = bassGain.Update(energies.Bass, dtSeconds, tuning);
-        float midNorm = midGain.Update(energies.Mid, dtSeconds, tuning);
-        float highNorm = highGain.Update(energies.High, dtSeconds, tuning);
-        float target = tuning.LevelBassWeight * bassNorm + tuning.LevelMidWeight * midNorm + tuning.LevelHighWeight * highNorm;
+        // While any quarter of the window is near-silent (digital zeros, dither), the band magnitudes collapse.
+        // Auto-gain then freezes its floor, so a gap must not drag the floor down and pin Level/Bass near 1
+        // once music resumes. This includes the frames where a gap or the music only partly fills the window.
+        bool silent = spectrum.QuietestQuarterRms <= holdRms;
+        float bassNorm = bassGain.Update(energies.Bass, dtSeconds, tuning, silent);
+        float midNorm = midGain.Update(energies.Mid, dtSeconds, tuning, silent);
+        float highNorm = highGain.Update(energies.High, dtSeconds, tuning, silent);
+        // Weights are free-form live-tuning values (doc 03 §4), so clamp instead of requiring a sum of 1.
+        float target = Math.Clamp(tuning.LevelBassWeight * bassNorm + tuning.LevelMidWeight * midNorm + tuning.LevelHighWeight * highNorm, 0, 1);
         return new AmplitudeFeatures(
             level.Update(target, dtSeconds, tuning.LevelAttackSeconds, tuning.LevelReleaseSeconds),
             bass.Update(bassNorm, dtSeconds, tuning.BassAttackSeconds, tuning.BassReleaseSeconds));
@@ -52,6 +59,10 @@ internal sealed class AudioFrontEnd
         bass.Reset();
         previousSampleRate = 0;
     }
+
+    // The hold is for near-silence only: 20 dB below SilenceThresholdDb (-80 dBFS by default). Quiet but real music
+    // between -80 and -60 dBFS keeps adapting as doc 03 describes; doc 03's 2 s IsSilent rule is C2's concern.
+    internal static float HoldRms(AudioTuning tuning) => MathF.Pow(10, (tuning.SilenceThresholdDb - 20) / 20);
 
     private static void Validate(AudioTuning tuning)
     {
@@ -69,11 +80,10 @@ internal sealed class AudioFrontEnd
         Positive(tuning.HighMaxHz, nameof(tuning.HighMaxHz));
         if (tuning.BassMinHz >= tuning.BassMaxHz || tuning.BassMaxHz >= tuning.MidMaxHz || tuning.MidMaxHz >= tuning.HighMaxHz)
             throw new ArgumentException("Band boundaries must be strictly increasing.", nameof(tuning));
-        Nonnegative(tuning.LevelBassWeight, nameof(tuning.LevelBassWeight));
-        Nonnegative(tuning.LevelMidWeight, nameof(tuning.LevelMidWeight));
-        Nonnegative(tuning.LevelHighWeight, nameof(tuning.LevelHighWeight));
-        float sum = tuning.LevelBassWeight + tuning.LevelMidWeight + tuning.LevelHighWeight;
-        if (MathF.Abs(sum - 1) > 0.00001f) throw new ArgumentException("Level weights must sum to one.", nameof(tuning));
+        UnitInterval(tuning.LevelBassWeight, nameof(tuning.LevelBassWeight));
+        UnitInterval(tuning.LevelMidWeight, nameof(tuning.LevelMidWeight));
+        UnitInterval(tuning.LevelHighWeight, nameof(tuning.LevelHighWeight));
+        if (!float.IsFinite(tuning.SilenceThresholdDb)) throw new ArgumentOutOfRangeException(nameof(tuning.SilenceThresholdDb));
     }
 
     private static void Positive(float value, string name)
@@ -84,5 +94,10 @@ internal sealed class AudioFrontEnd
     private static void Nonnegative(float value, string name)
     {
         if (!float.IsFinite(value) || value < 0) throw new ArgumentOutOfRangeException(name);
+    }
+
+    private static void UnitInterval(float value, string name)
+    {
+        if (!float.IsFinite(value) || value < 0 || value > 1) throw new ArgumentOutOfRangeException(name);
     }
 }
