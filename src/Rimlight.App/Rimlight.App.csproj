@@ -8,11 +8,13 @@
     <AssemblyName>$(AppName)</AssemblyName>
     <RootNamespace>Rimlight.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <!-- Placeholder until the real icon is generated from assets/icon.svg (C10 / K12). -->
+    <!-- Generated from assets/icon.svg and assets/icon-small.svg by build/icons.sh (or icons.ps1); never edit by hand. -->
     <ApplicationIcon>Assets\Rimlight.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <Resource Include="Assets\Rimlight.ico" />
+    <!-- The same icon at 50 % opacity, for the tray while the glow is off (doc 06 §2, K6). -->
+    <Resource Include="Assets\Rimlight-dim.ico" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
