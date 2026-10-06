@@ -119,6 +119,7 @@
 3. **Fake engine before C6 (soft):** `FakeLightEngine` treats Idle Glow like Music Sync, ignores silence/Hide, never drifts `Phase` and has no fades. Maxwell's K6/K7 manual tests will look wrong until C6. If C6 is far off, a small stopgap would help: idle breathing, Hide→Visibility 0 and phase drift of 0.015 cycles/s.
 **Proposed:** Confirm 1–2, or correct them, in C5/C6. 3 is optional.
 **C6 (#11):** Item 2 is implemented as written and is binding: `Intensity` excludes `Visibility`, and Visibility carries pause, `Enabled = false` and `Animation = Off` (300 ms each way) and silence→Hide (1.5 s out, 150 ms back). The semantics are in the `CoreFactory.CreateLightEngine` remarks. Item 3 is obsolete because the real engine replaced the fake. Item 1 stays open for C5.
+**C5 (#20):** Item 1 is implemented as written and is binding. Texel i is the color at u = (i + 0.5) / 64 before `Phase`. Primary covers u = 0..ratio. Both boundaries, the seam between texels 63 and 0 included, are 0.08-wide smoothstep blends mixed in Oklab. Output is linear RGB, alpha 1, not premultiplied. Ratio is clamped to 0.1..0.9 (NaN → 0.6), and out-of-gamut mixes are clamped per channel. The semantics are in the `CoreFactory.CreatePaletteBlender` remarks. With C6 (#11) answering items 2–3, this entry is done once both merge.
 ---
 ## [DONE] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
 **Need:** Analyzer-side semantics for C2.
