@@ -62,10 +62,40 @@ public static class CoreFactory
     /// thumbnail at 64 × 64 to keep both small.</para>
     /// </remarks>
     public static IPaletteExtractor CreatePaletteExtractor() => new PaletteExtractor();
-    /// <summary>Creates an immediate-transition palette stub until C5 lands.</summary>
-    /// <param name="initial">Initial palette.</param>
+    /// <summary>Creates the real palette blender: Oklab crossfades with ease-in-out, and the 64-texel perimeter gradient
+    /// (doc 05 §3, doc 04 §3 steps 4–5).</summary>
+    /// <param name="initial">The palette to show first, with no fade running.</param>
     /// <returns>A new blender.</returns>
-    public static IPaletteBlender CreatePaletteBlender(Palette initial) => new FakePaletteBlender(initial);
+    /// <remarks>
+    /// <para><b>Threading.</b> Not thread-safe: call every member, <see cref="IPaletteBlender.Current"/> included, from
+    /// the render thread that owns the instance. <see cref="IPaletteBlender.Update"/> and
+    /// <see cref="IPaletteBlender.FillGradient"/> never allocate, read no clock and are deterministic;
+    /// <see cref="IPaletteBlender.SetTarget"/> allocates nothing for a palette with channels in 0..1. A null palette
+    /// throws.</para>
+    /// <para><b>Crossfade.</b> <see cref="IPaletteBlender.SetTarget"/> fades from the colors displayed at that moment
+    /// (a new target in the middle of a fade carries on from there, without a jump) to the target over the duration:
+    /// Primary to Primary and Secondary to Secondary along straight lines in Oklab, smoothstep-eased (3t² − 2t³ of the
+    /// elapsed share). Each call restarts the clock. A zero or negative duration, or a target whose colors are already
+    /// displayed, switches at once. <see cref="IPaletteBlender.IsAnimating"/> is true from SetTarget until the
+    /// <see cref="IPaletteBlender.Update"/> that reaches the duration; that Update settles exactly on the target's
+    /// colors, so refill the gradient after it too (H-006). Update ignores NaN, negative and zero steps; an infinite
+    /// step finishes the fade. Channels outside 0..1 are clamped and NaN counts as 0.</para>
+    /// <para><b>Current.</b> While idle it is the palette last passed to SetTarget (or <paramref name="initial"/>), the
+    /// same instance unless a channel had to be clamped, and reading it allocates nothing. During a fade it is the
+    /// blend, with the target's <see cref="Palette.SourceTrackId"/>: the first read after each Update or SetTarget
+    /// allocates one <see cref="Palette"/>, later reads return it. Keep it off the per-frame path (H-004).</para>
+    /// <para><b>Gradient (H-008 item 1, binding).</b> FillGradient writes 64 RGBA texels into the first 256 floats
+    /// (fewer throws <see cref="ArgumentException"/>; anything after them is left alone). Texel i is the color at
+    /// perimeter coordinate u = (i + 0.5) / 64 before the shader's <c>frac(t + Phase)</c>, sampled with WRAP addressing
+    /// and linear filtering. Primary covers u = 0..ratio, Secondary the rest; both boundaries, u = ratio and the seam
+    /// u = 0 ≡ 1 between texels 63 and 0, are smoothstep blends 0.08 wide centered on them and mixed in Oklab, so the
+    /// loop is seamless and Primary's weight over the whole loop averages exactly ratio. Away from the blends the
+    /// texels are the displayed colors exactly. Linear RGB in 0..1 (Oklab mixes that leave sRGB are clamped per
+    /// channel, as the shader's <c>saturate</c> would), alpha 1, not premultiplied. The ratio is clamped to 0.1..0.9,
+    /// where each color still has a pure middle, and NaN uses the <see cref="Settings.PrimaryRatio"/> default (0.6).
+    /// One fill took about 0.6 µs, idle or during a fade, on the Linux test machine.</para>
+    /// </remarks>
+    public static IPaletteBlender CreatePaletteBlender(Palette initial) => new PaletteBlender(initial);
     /// <summary>Creates a simple linear light engine until C6 lands.</summary>
     /// <returns>A new light engine.</returns>
     public static ILightEngine CreateLightEngine() => new FakeLightEngine();

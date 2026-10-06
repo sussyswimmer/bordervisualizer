@@ -56,6 +56,14 @@ internal readonly record struct Oklab(float L, float A, float B)
         return new OkLch(L, Chroma, hue >= 360f ? 0f : hue); // −1e-6° + 360 rounds to 360 in float
     }
 
+    /// <summary>Linear interpolation in Oklab, the perceptual straight line between two colors: x + (y − x) × t.</summary>
+    /// <param name="x">The color at t = 0.</param>
+    /// <param name="y">The color at t = 1.</param>
+    /// <param name="t">The position along the line; not clamped.</param>
+    /// <returns>The interpolated color.</returns>
+    public static Oklab Lerp(Oklab x, Oklab y, float t) =>
+        new(x.L + (y.L - x.L) * t, x.A + (y.A - x.A) * t, x.B + (y.B - x.B) * t);
+
     /// <summary>Euclidean distance in Oklab, the perceptual color difference (about 0.02 is just noticeable).</summary>
     /// <param name="x">First color.</param>
     /// <param name="y">Second color.</param>
