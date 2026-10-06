@@ -13,9 +13,9 @@ internal sealed class SettingsService : IDisposable
 
     private readonly ISettingsStore store;
     private readonly Timer saveTimer;
-    private readonly object saveGate = new(); // serializes store calls (H-004); never taken per frame
+    private readonly object saveGate = new(); // serializes store calls (H-004); never taken per frame or by Update
     private Settings current;
-    private bool savePending; // guarded by saveGate
+    private int savePending; // 1 while a change is unsaved; set by Update without the lock, so the UI never waits on I/O
 
     public SettingsService(ISettingsStore store)
     {
@@ -39,7 +39,8 @@ internal sealed class SettingsService : IDisposable
         // that only costs a redundant save.
         if (after is null || after == before) return;
         Volatile.Write(ref current, after);
-        lock (saveGate) savePending = true;
+        // A change during a running save sets the flag again and re-arms the timer, so it is saved next time.
+        Volatile.Write(ref savePending, 1);
         saveTimer.Change(SaveDelayMs, Timeout.Infinite);
         Changed?.Invoke(after);
     }
@@ -49,8 +50,7 @@ internal sealed class SettingsService : IDisposable
     {
         lock (saveGate)
         {
-            if (!savePending) return;
-            savePending = false;
+            if (Interlocked.Exchange(ref savePending, 0) == 0) return;
             try
             {
                 store.Save(Current);

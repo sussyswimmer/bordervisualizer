@@ -14,7 +14,7 @@ cbuffer Light : register(b0)
     float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Intensity
     float  ColorRadiusPx;   // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
     float  GlowRadiusPx;    // corner radius of the glow field (>= CornerRadiusPx), see PSMain step 2
-    float  _pad0;
+    float  CoreFade;        // 0..1: a core thinner than a screen pixel fades with its width in screen pixels
     float3 MeanColor;       // average of the gradient, linear RGB; the colour deep inside, see PSMain step 4
     float  _pad1;
 };
@@ -129,8 +129,10 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     // 2. Shape: an antialiased solid core plus an exponential glow; the beat pushes the glow further in.
     // The glow's distance field has rounded corners (radius >= 2 x spread): with the square field of doc 04 the two
     // edges' glows meet in a visible 45-degree crease; rounded, the light pools softly into the corners.
-    float core = (1 - smoothstep(CoreThicknessPx - 1, CoreThicknessPx + 1, d)) * saturate(CoreThicknessPx);
-    float spread = max(SpreadPx * (1 + 0.35 * Pulse), 1);
+    float core = (1 - smoothstep(CoreThicknessPx - 1, CoreThicknessPx + 1, d)) * CoreFade;
+    // SpreadPx is at least one DIP, which is half a swap-chain pixel at half render scale; the floor only guards the
+    // division and must not widen that hairline halo.
+    float spread = max(SpreadPx * (1 + 0.35 * Pulse), 0.5);
     float glowDistance = max(-SdRoundBox(p - halfSize, halfSize, GlowRadiusPx), 0);
     float glow = exp(-glowDistance / spread);
     float a = saturate(saturate(max(core, glow * 0.85)) * Intensity * (1 + 0.25 * Pulse)) * Visibility;

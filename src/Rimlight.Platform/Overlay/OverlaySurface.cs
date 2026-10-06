@@ -96,8 +96,9 @@ internal sealed class OverlaySurface : IDisposable
     // Swap chain pixels per window pixel: 1, or about 0.5 at half scale.
     public float RenderScale => Width / (float)WindowWidth;
 
-    // Consecutive frames skipped because the swap chain wasn't ready (DWM behind, display off, or a lost device).
-    public int SkippedFrames { get; private set; }
+    // Since when (Environment.TickCount64) every try to take a frame has failed: DWM is behind, the display is off,
+    // or the device is lost. Null once a frame is taken.
+    public long? SkippingSinceMs { get; private set; }
 
     // The swap chain's frame-latency object. With a maximum frame latency of 1 it is signaled once DWM has picked up
     // the previous frame, i.e. once per display refresh while frames keep coming: the overlay thread waits on it to
@@ -109,7 +110,25 @@ internal sealed class OverlaySurface : IDisposable
     public bool HoldsFrame => frameAcquired;
 
     // The overlay thread's wait took this surface's latency object.
-    public void FrameAcquired() => frameAcquired = true;
+    public void FrameAcquired()
+    {
+        frameAcquired = true;
+        SkippingSinceMs = null;
+    }
+
+    // Takes the next frame if the swap chain can take it now, without waiting. False when DWM hasn't picked up the
+    // previous frame yet (or the display is off): the frame is then skipped instead of queued.
+    public bool TryAcquireFrame()
+    {
+        if (frameAcquired) return true;
+        if (PInvoke.WaitForSingleObjectEx(frameLatency, 0, false) != WAIT_EVENT.WAIT_OBJECT_0)
+        {
+            SkippingSinceMs ??= Environment.TickCount64;
+            return false;
+        }
+        FrameAcquired();
+        return true;
+    }
 
     // The screen already shows this picture: the last present drew constants that look the same, with the same
     // palette gradient. Nothing needs presenting.
@@ -122,25 +141,17 @@ internal sealed class OverlaySurface : IDisposable
     // The window was resized. True when the composition changed and needs a commit.
     public bool Resize(int windowWidth, int windowHeight) => Reconfigure(windowWidth, windowHeight, IsHalf);
 
-    // Switches between full and half render scale. True when the composition changed and needs a commit.
-    public bool SetHalfScale(bool half) => Reconfigure(WindowWidth, WindowHeight, half);
+    // Switches between full and half render scale; the new buffers are blank and the visual transform is pending.
+    // Call it only while holding a frame (TryAcquireFrame), then Render and commit at once, so the new size, the
+    // frame drawn for it and the transform reach DWM back to back. Clears the device context's state.
+    public void SetHalfScale(bool half) => Reconfigure(WindowWidth, WindowHeight, half);
 
-    // Draws one frame if the swap chain can take it, and presents it. When the latency object isn't signaled (DWM
-    // is behind, or the display is off) the frame is skipped instead of queued. The caller has bound the shared
-    // pipeline (GpuDevice.BindPipeline). presented: false when the frame was skipped.
+    // Draws one frame if the swap chain can take it (TryAcquireFrame), and presents it. The caller has bound the
+    // shared pipeline (GpuDevice.BindPipeline). presented: false when the frame was skipped.
     public Result Render(in GlowConstants frame, int gradientVersion, out bool presented)
     {
         presented = false;
-        if (!frameAcquired)
-        {
-            if (PInvoke.WaitForSingleObjectEx(frameLatency, 0, false) != WAIT_EVENT.WAIT_OBJECT_0)
-            {
-                SkippedFrames++;
-                return Result.Ok;
-            }
-            frameAcquired = true;
-        }
-        SkippedFrames = 0;
+        if (!TryAcquireFrame()) return Result.Ok;
 
         ID3D11DeviceContext context = gpu.Context;
         if (!hasUploaded || !frame.Equals(uploaded))

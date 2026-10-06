@@ -31,6 +31,7 @@ public sealed class OverlayHost : IDisposable
     private const long GpuRetryMs = 1000;      // retry delay when the GPU can't be set up (driver update, no adapter)
     private const long HardwareProbeMs = 30_000; // while on WARP, how often to check whether hardware came back
     private const long ErrorLogIntervalMs = 5000; // repeated per-frame failures are logged at most this often
+    private const long StalledCheckMs = 1000;  // a surface that can't take a frame this long gets a device check
     private const float MonitorFadeSeconds = 0.3f; // a monitor's pause fades out and back in over 300 ms (doc 04 §4)
     private const double MaxFrameDtSeconds = 0.25; // a longer gap (nothing to draw, a stall) counts as one frame
     private const double VsyncFallbackSeconds = 0.1; // no refresh for this long (display off): draw anyway
@@ -81,6 +82,9 @@ public sealed class OverlayHost : IDisposable
     private long nextHardwareProbeMs;
     private long lastErrorLogMs = long.MinValue / 2;
     private bool deviceCheckRequested;
+    private long lastStalledCheckMs = long.MinValue / 2;
+    private bool sourceSuspended;
+    private bool waitedOnVsync;
     private bool hasGradient;
     private bool gradientUploaded;
     private int gradientVersion;
@@ -305,6 +309,7 @@ public sealed class OverlayHost : IDisposable
                 bool inputChanged = ApplyPendingInputs(now);
                 if (overlays.Count == 0)
                 {
+                    SuspendSource();
                     PublishStatus(now, 0, idle: true);
                     continue;
                 }
@@ -348,6 +353,7 @@ public sealed class OverlayHost : IDisposable
         // wait. No timer runs, so the thread costs nothing (doc 02 "CPU must be ~0%").
         if (overlays.Count == 0 || pace == Pace.Block)
         {
+            waitedOnVsync = false;
             PInvoke.MsgWaitForMultipleObjectsEx(1, handles + 1, Infinite, AllInput, InputAvailable);
             return false;
         }
@@ -355,8 +361,10 @@ public sealed class OverlayHost : IDisposable
         // Paced by the display: a swap chain's frame-latency object is signaled once DWM has taken the previous frame,
         // i.e. on each refresh while frames keep coming. Waiting here, not in DwmFlush, keeps the thread pumping
         // messages. The timer covers a display that stops refreshing (turned off, or DWM stalled).
+        // waitedOnVsync records the wait actually taken for the status, which the pacer's choice alone can't tell.
         if (pace == Pace.Full && pacer.UseVsync && VsyncSurface() is { HoldsFrame: false } vsync)
         {
+            waitedOnVsync = true;
             handles[2] = vsync.FrameLatency;
             ArmFrameTimer((long)(VsyncFallbackSeconds * Stopwatch.Frequency));
             WAIT_EVENT result = PInvoke.MsgWaitForMultipleObjectsEx(3, handles, Infinite, AllInput, InputAvailable);
@@ -368,6 +376,7 @@ public sealed class OverlayHost : IDisposable
             return result == WAIT_EVENT.WAIT_OBJECT_0;
         }
 
+        waitedOnVsync = false;
         ArmFrameTimer(nextFrame - Stopwatch.GetTimestamp());
         PInvoke.MsgWaitForMultipleObjectsEx(2, handles, Infinite, AllInput, InputAvailable);
         return Stopwatch.GetTimestamp() >= nextFrame;
@@ -483,14 +492,13 @@ public sealed class OverlayHost : IDisposable
     private void ConfigurePacer() => pacer.Configure(applied!.FpsCap, refreshHz, Reduced);
 
     // Paused everywhere: by SetPaused, by "Pause on battery", or on every monitor once their fades have finished
-    // (so the fade shows whatever the engine does with the pause). The light engine fades the glow out, and frames
-    // stop once it is static.
+    // (so the fade shows whatever the engine does with the pause), which includes having no overlay at all. The light
+    // engine fades the glow out, and frames stop once it is static.
     private bool EffectivePaused
     {
         get
         {
             if (appliedPaused || (appliedOnBattery && applied!.OnBattery == BatteryBehavior.Pause)) return true;
-            if (overlays.Count == 0) return false;
             foreach (Overlay overlay in overlays)
                 if (!overlay.Paused || overlay.Fade > 0) return false;
             return true;
@@ -680,14 +688,25 @@ public sealed class OverlayHost : IDisposable
     }
 
     // Device loss that Present can't report: DirectComposition's WM_PAINT notification, a surface whose latency object
-    // has stopped signaling for 60 frames, or (on WARP) hardware that has become available again.
+    // has stopped signaling for a second (checked at most once a second, so the 10 Hz vsync fallback and the 30 fps
+    // battery cap find it as fast as 60 fps does), or (on WARP) hardware that has become available again.
     private bool CheckGpu()
     {
         long now = Environment.TickCount64;
         bool check = deviceCheckRequested;
         deviceCheckRequested = false;
-        foreach (Overlay overlay in overlays)
-            if (overlay.Surface is { SkippedFrames: > 0 } surface && surface.SkippedFrames % 60 == 0) check = true;
+        if (now - lastStalledCheckMs >= StalledCheckMs)
+        {
+            foreach (Overlay overlay in overlays)
+            {
+                if (overlay.Surface?.SkippingSinceMs is long since && now - since >= StalledCheckMs)
+                {
+                    check = true;
+                    lastStalledCheckMs = now;
+                    break;
+                }
+            }
+        }
         if (check && !gpu!.IsHealthy)
         {
             ReleaseGpu("the device or DirectComposition reports it lost");
@@ -705,6 +724,27 @@ public sealed class OverlayHost : IDisposable
         return true;
     }
 
+    // No overlay is left: tell the source once, with a paused frame, so it lets go of what only a shown glow needs
+    // (MusicGlowSource closes the loopback stream, which also drops the audio nobody drains now). Its next frame,
+    // once an overlay exists again, gets the real pause state.
+    private void SuspendSource()
+    {
+        if (sourceSuspended) return;
+        OverlayFrame frame = source.NextFrame((float)pacer.FullInterval, applied!, EffectivePaused, gradient);
+        TakeGradient(frame.GradientChanged);
+        sourceSuspended = true;
+    }
+
+    // The source refilled the gradient: every surface draws it, and the next GPU frame uploads it.
+    private void TakeGradient(bool changed)
+    {
+        if (!changed) return;
+        hasGradient = true;
+        gradientVersion++;
+        gradientUploaded = false;
+        meanColor = GlowConstants.MeanOf(gradient);
+    }
+
     // Draws one frame on every overlay that needs it and records what it showed in `report` for the pacer. Returns
     // the number of presents. Allocates nothing.
     private int RenderFrame(float dt)
@@ -712,29 +752,22 @@ public sealed class OverlayHost : IDisposable
         EnsureGpu();
         // The source advances even when nothing can be drawn, so its time stays in step with the clock.
         OverlayFrame frame = source.NextFrame(dt, applied!, EffectivePaused, gradient);
+        sourceSuspended = false;
         LightState state = frame.State;
-        if (frame.GradientChanged)
-        {
-            hasGradient = true;
-            gradientVersion++;
-            meanColor = GlowConstants.MeanOf(gradient);
-        }
+        TakeGradient(frame.GradientChanged);
 
         bool transitioning = false;
         foreach (Overlay overlay in overlays) transitioning |= overlay.AdvanceFade(dt);
 
         int presents = 0;
-        bool anyVisible = false, allPresented = true, compositionChanged = false;
+        bool anyVisible = false, allPresented = true;
         bool gpuReady = gpu is not null && hasGradient && CheckGpu();
+        bool half = Reduced;
         try
         {
             if (gpuReady)
             {
-                // Render scale first: resizing a swap chain clears the device context's state.
-                bool half = Reduced;
-                foreach (Overlay overlay in overlays)
-                    if (overlay.Surface is { } scaled) compositionChanged |= scaled.SetHalfScale(half);
-                if (frame.GradientChanged || !gradientUploaded)
+                if (!gradientUploaded)
                 {
                     gpu!.UploadGradient(gradient);
                     gradientUploaded = true;
@@ -783,11 +816,30 @@ public sealed class OverlayHost : IDisposable
                     if (!gpuReady) allPresented = false;
                     continue;
                 }
+
+                // Render scale ("Reduce on battery") changes only on a frame this surface can present at once: its
+                // buffers are resized, drawn, presented and the new transform committed back to back, so DWM gets
+                // the new frame and transform together instead of the transform a frame or more early. Until then it
+                // keeps its old scale, retried at full rate. (Hidden overlays switch when they are next shown.)
+                bool rescaled = false;
+                if (surface.IsHalf != half)
+                {
+                    if (!surface.TryAcquireFrame())
+                    {
+                        allPresented = false;
+                        continue;
+                    }
+                    surface.SetHalfScale(half);
+                    gpu!.BindPipeline(); // the resize cleared the device context's state
+                    rescaled = true;
+                }
+
                 GlowConstants constants = Constants(state, overlay, surface, cornerRadiusDip, shown);
                 // Shown before its frame is presented: DWM may not take frames from a hidden window. Until then it
                 // shows its last frame, which is transparent (see above) or blank.
                 if (!overlay.Window.IsVisible) overlay.Window.Show();
-                if (surface.Shows(constants, gradientVersion)) continue; // static: nothing new to present (doc 02)
+                // Static: nothing new to present (doc 02). A rescaled surface always presents, so its commit follows.
+                if (!rescaled && surface.Shows(constants, gradientVersion)) continue;
 
                 Result result = surface.Render(constants, gradientVersion, out bool presented);
                 if (result.Failure)
@@ -799,9 +851,8 @@ public sealed class OverlayHost : IDisposable
                 }
                 if (presented) presents++;
                 else allPresented = false;
+                if (rescaled) CommitComposition();
             }
-            // A render-scale change applies its visual transform together with the frame that uses it.
-            if (compositionChanged && gpu is not null) CommitComposition();
         }
         catch (Exception exception) when (exception is SharpGenException or COMException)
         {
@@ -814,11 +865,11 @@ public sealed class OverlayHost : IDisposable
     }
 
     // One overlay's constants for this frame. At half scale the swap chain's pixels are twice as large, so every
-    // pixel measure is converted at the surface's render scale and the shader's arithmetic stays the same.
+    // pixel measure is converted at the surface's render scale; only the thin-core fade stays in screen pixels.
     private GlowConstants Constants(in LightState state, Overlay overlay, OverlaySurface surface, float cornerRadiusDip, float visibility)
     {
-        GlowConstants constants = GlowConstants.Create(state, surface.Width, surface.Height,
-            overlay.Monitor.Scale * surface.RenderScale, cornerRadiusDip, meanColor);
+        GlowConstants constants = GlowConstants.Create(state, surface.Width, surface.Height, overlay.Monitor.Scale,
+            surface.RenderScale, cornerRadiusDip, meanColor);
         constants.Visibility = visibility;
         return constants;
     }
@@ -828,7 +879,7 @@ public sealed class OverlayHost : IDisposable
     {
         int paceIndex = idle ? 4 : pace switch
         {
-            Pace.Full => pacer.UseVsync ? 0 : 1,
+            Pace.Full => waitedOnVsync ? 0 : 1,
             Pace.Slow => 2,
             _ => 3,
         };

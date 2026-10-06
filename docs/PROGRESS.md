@@ -169,7 +169,8 @@
   - **App:**
     - `AppController` is the composition root; `App.xaml.cs` only creates and disposes it.
     - `SettingsService` holds the immutable snapshot. `Update` runs on the UI thread and raises `Changed`. Saves go through `ISettingsStore` with a 500 ms debounce, serialized, and are flushed on exit.
-    - The tray has "Glow on" and "Mode". Debug builds add "Render test (debug)": the live status plus stand-ins for K5/K7 (When silent, FPS cap, On battery, simulated battery, pause everywhere, pause primary, device loss).
+    - `Update` never waits on a save: the pending flag is lock-free, and only `Flush` takes the save lock, around the store call.
+    - The tray has "Glow on" and "Mode", both checkable so screen readers hear their state. Debug builds add "Render test (debug)": the live status plus stand-ins for K5/K7 (When silent, FPS cap, On battery, simulated battery, pause everywhere, pause primary, device loss). The status names the wait the loop actually took (vsync or timer).
 - **Pacing (doc 02):**
   - The full rate is FpsCap (0 = the primary monitor's refresh, from `EnumDisplaySettings`). It never exceeds that refresh, and is at most 30 fps under "Reduce on battery".
   - Source motion picks the pace:
@@ -185,11 +186,15 @@
   - **Hidden:** an overlay whose visibility drops below 0.5/255 presents one transparent frame, then hides its window. DWM then composes nothing of ours, and fullscreen apps below can flip directly. The window is shown again, topmost, just before its next visible frame; windows are created hidden.
   - **Time:** a gap over 0.25 s, or a frame that an input brought forward, gets one full-rate frame of dt. There are no dt spikes, and fades start on the frame after the input.
   - **Capture** is closed whenever audio can't change the glow: Off, `Enabled = false`, Idle Glow, and paused. The analyzer then hears silence. With When silent = Hide, a static invisible glow keeps listening at 10 Hz.
+  - **No overlay** (Custom monitors unplugged or none selected): the source gets one paused frame, so the capture closes and no stale audio piles up, and then no calls until an overlay exists again.
+  - **Palette crossfades** run in the blender, outside the engine, so they count as motion even while `IsStatic` is true; their gradient refills keep the full rate until the fade ends.
+  - **Device check:** a surface that hasn't been able to take a frame for 1 s gets a device-health check, at most once a second. K1 counted 60 skipped frames, which takes 6 s at the 10 Hz vsync fallback.
 - **Battery and render scale (PRD §5, doc 04 §2):**
   - "Reduce" caps the rate at 30 fps and renders at half scale.
     - Each swap chain is half the window's size, rounded up. Its DirectComposition visual is stretched back by `SetTransform` (an exact window/buffer ratio), with linear interpolation and hard borders so the edge-hugging core stays solid.
-    - Constants are computed in swap-chain pixels (DPI scale × render scale), so every pixel measure halves and `Glow.hlsl` is unchanged.
-    - The scale change resizes buffers before the pipeline is bound, because a resize clears the context state. The transform is committed right after that frame's presents.
+    - Constants are computed in swap-chain pixels (DPI scale × render scale), so every pixel measure halves. Only the thin-core fade (`CoreFade`, in the former padding slot) stays in screen pixels, so a 1-DIP core keeps its brightness and its light at half scale. The shader's spread floor is 0.5 px, which is one DIP at half scale.
+    - A surface switches scale only on a frame where it can present at once (its frame-latency object is signaled). It then resizes, rebinds the pipeline (a resize clears the context state), draws, presents and commits the new transform back to back. A surface that can't present yet keeps its old scale, with matching constants, and retries at the full rate. Hidden overlays switch when they are next shown.
+    - Swap-chain presents are not part of the DirectComposition transaction, so the switch is not strictly atomic. A refresh composed between the present and the commit, or before the GPU finishes that frame, could still show one mismatched frame. A fully atomic switch would need a second swap chain (or `SetSourceSize` + `SetMatrixTransform`), which can't be tested here.
   - "Pause" counts as paused.
 - **Per-monitor pause (doc 04 §4):** each overlay fades its own visibility multiplier over 300 ms. Once every overlay is paused and fully faded, the engine also gets `paused`, so it goes static and the loop stops.
 - **Spec clarifications and deviations:**
@@ -213,7 +218,7 @@
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
   - Signatures were checked against CsWin32 0.3.346's generated sources (`EnumDisplaySettings`/`DEVMODEW`, `GetSystemPowerStatus`, `MsgWaitForMultipleObjectsEx`, `SWP_HIDEWINDOW`), decompiled Vortice 3.8.3 (`IDCompositionVisual.SetTransform(Matrix3x2)`, `SetBitmapInterpolationMode`, `SetBorderMode`) and H.NotifyIcon 2.3.2 (the WPF `ContextMenu` opens with `IsOpen`, so `Opened` fires).
   - **Scratch harness 1 (not committed; Lane B has no test project)** links `FramePacer.cs` and `GlowConstants.cs`.
-    - It checks 14 cap/refresh/battery combinations, every pace decision, the change-rate threshold, the `LooksLike` tolerances, and that half scale halves every pixel measure.
+    - It checks 14 cap/refresh/battery combinations, every pace decision, the change-rate threshold, the `LooksLike` tolerances, and that half scale halves every pixel measure except `CoreFade`, which matches full scale (and the old `saturate(CoreThicknessPx)` there) for 0–6 DIP at 100–200 % DPI.
     - Pacer + constants allocate 0 bytes over 100,000 frames.
     - An 85 s timeline with a C6-like engine reaches these steady states:
       - music: 60 frames and presents/s
@@ -232,6 +237,7 @@
     - the half-scale resize cleared the bound pipeline
     - fades jumped up to 100 ms ahead when an input arrived between 10 fps frames
     - vsync on a faster secondary monitor could exceed the cap
+  - Review fixes (two adversarial reviews, Windows-runtime and spec): render-scale switch gated on a frame that can present; one paused source call when the last overlay goes away; a time-based device check; screen-pixel `CoreFade`; crossfades count as motion; a lock-free save flag; checkable tray items; the status shows the wait actually taken.
   - Nothing has run on Windows yet: Maxwell's checklist, with CPU measurement steps, is in #14.
 
 ## Lane B notes

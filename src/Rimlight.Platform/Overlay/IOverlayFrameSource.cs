@@ -17,6 +17,8 @@ public interface IOverlayFrameSource
     /// <param name="paused">
     /// True while the glow should be paused: <see cref="OverlayHost.SetPaused"/>, "Pause on battery", or every overlay
     /// paused on its monitor (<see cref="OverlayHost.SetPausedMonitors"/>). Pass it to <see cref="ILightEngine.Update"/>.
+    /// Also true for the one call made when the last overlay goes away (no monitor selected or connected); no calls
+    /// follow until an overlay exists again, so release whatever only a shown glow needs, such as audio capture.
     /// </param>
     /// <param name="gradient">
     /// 64 linear RGBA texels (256 floats), as <see cref="IPaletteBlender.FillGradient"/> writes them. The buffer keeps
