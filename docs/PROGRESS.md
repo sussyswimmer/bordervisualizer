@@ -358,7 +358,7 @@
     - `StartupRegistration`: HKCU `Run` value `Rimlight` = `"<launcher>" --background`. The launcher is Velopack's stub in the install root when installed (`sq.version` + `..\Update.exe`), else `Environment.ProcessPath`. `Remove()` is for K9's uninstall hook.
     - `SystemTheme`: light/dark app mode and the dark title bar.
   - App:
-    - `AppController` owns the hotkey, the startup entry, the first-run flow and the hooks: `IShowSettings` (K7 sets `SettingsWindow`), `IUpdateCheck` (K9 sets `Updates`), `Hotkey` + `HotkeyChanged` (K7's inline warning), `StartupRegistered`, `IsFirstRunSession` (K7's one-time tray toast), `Tray.Notify` + `NotificationClicked` (K7/K9).
+    - `AppController` owns the hotkey, the startup entry, the first-run flow and the hooks: `IShowSettings` (K7 sets `SettingsWindow`), `IUpdateCheck` (K9 sets `Updates`), `Hotkey` + `HotkeyChanged` (K7's inline warning), `StartupRegistered`, `IsFirstRunSession` (K7's one-time tray toast), `Tray.Notify(title, message, userInitiated, onClick)` (K7/K9).
     - `TrayIconHost`: doc 06's full menu, click/double-click commands, keyboard menu, dimmed icon, re-creation with the icon and tooltip re-applied. `TrayIconImages` builds both icons at `SM_CXSMICON`.
     - `WelcomeWindow`: first run, and the stand-in for Settings until K7.
     - `Logging/RollingFileLog` (a `TraceListener`) + `Logging/AppLog` (start line, unhandled exceptions, open folder).
@@ -368,6 +368,8 @@
   - **Hotkey rules:** Ctrl, Alt or Win required, except F1–F24; F12 alone is reserved by Windows. Punctuation keys are named by their US position (`Plus`, `Minus`, `Backtick`, …).
   - **Enter/Space on the focused icon open the menu** (Windows can send `NIN_KEYSELECT` twice for Enter, which would toggle twice).
   - **The icon dims only for "Glow on" off,** not for Mode = Off.
+  - **Colors ▸ From album art also turns Override album color off,** which every preset turns on (H-009), so it is the tray's way back from a preset. It is checked only while album colors show (`AlbumArt` and no Override); Manual is checked otherwise.
+  - **A notification's click action belongs to that notification:** `Notify(…, onClick)` replaces the previous action, and a timeout or close clears it, so a click on an older or timed-out notification does nothing. The action runs guarded, because H.NotifyIcon raises the click inside its window procedure, out of the dispatcher's reach.
   - **`FirstRunComplete` is set when the welcome is shown.** A normal start (no `--background`) of a set-up app opens Settings; until K7 that is the welcome window.
   - **The startup entry is checked at every start** (repairs a stale path). A build that isn't installed never replaces an entry pointing to an installed copy. Task Manager's `StartupApproved` switch is not touched.
   - **Tray icon size:** both icons are built at `SM_CXSMICON` (system DPI); H.NotifyIcon's own conversion picks 16 px at every DPI.
@@ -376,11 +378,16 @@
 - **Verified here (Linux):**
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
   - Signatures checked against CsWin32 0.3.346's generated sources; H.NotifyIcon 2.3.2, .NET 8's Windows pipes and `System.Drawing.Icon`, and Velopack 1.2.161 (locator and vpk's stub naming) decompiled.
-  - **Scratch harness (not committed), 432 checks:** the hotkey parser (every key round-trips), the rolling log (rotation, limits, concurrency, `Trace` integration, failures), the single instance across real processes (hand-over, background start, silent and junk clients, take-over after exit and after a kill), the tooltip. It found two problems, fixed before the PR: a large batch could grow one log file past 1 MB, and re-creating the pipe between clients could make a waiting start miss it. K4's harness still passes against the new tooltip.
+  - **Scratch harness (not committed), 435 checks:** the hotkey parser (every key round-trips), the rolling log (rotation, limits, concurrency, `Trace` integration, failures), the single instance across real processes (hand-over, background start, silent and junk clients, take-over after exit and after a kill, a start during the exit teardown), the tooltip. It found two problems, fixed before the PR: a large batch could grow one log file past 1 MB, and re-creating the pipe between clients could make a waiting start miss it. K4's harness still passes against the new tooltip.
   - Nothing has run on Windows yet: Maxwell's checklist is in #22.
+- **Review fixes (#22):**
+  - **Right-click no longer moves the menu to the taskbar corner.** H.NotifyIcon uses `NOTIFYICON_VERSION_4`, where the shell also sends `WM_CONTEXTMENU` after a mouse right-click; the keyboard handler opened the already open menu again at the notification area. It now does nothing while the menu is open.
+  - **A failed re-add after an Explorer restart is retried.** H.NotifyIcon swallows the failure, and `Removed` isn't raised because the new Explorer refuses to delete an icon it doesn't know; our own `TaskbarCreated` handler, which runs after H.NotifyIcon's, starts the retry when the icon isn't back.
+  - **Single instance:** the pipe listens right after the settings load, before the slow start-up (a later start waits only 3 s for it), and `OnExit` stops listening first (`SingleInstance.StopListening`), so a start during the exit teardown takes over instead of handing its request to a process that drops it.
+  - **Shortcut window missing:** an empty `ToggleHotkey` still reports `None`, and the welcome names the setting's text when there is no parsed gesture.
 - **Left for later:**
   - **K7:** set `SettingsWindow`; the Behavior page's Launch at startup and hotkey recorder (`HotkeyGesture.TryCreate` + `KeyInterop.VirtualKeyFromKey`, warning from `AppController.Hotkey`); the one-time "still running in the tray" toast via `IsFirstRunSession` and `Tray.Notify`; the welcome then shows its "Open Settings" button; theme the tray menu.
-  - **K9:** set `Updates`; "Update ready" via `Tray.Notify` + `NotificationClicked`; call `StartupRegistration.Remove(AppInfo.Name)` from Velopack's uninstall hook; check that the stub passes `--background` through.
+  - **K9:** set `Updates`; "Update ready" via `Tray.Notify(…, onClick: restart)`, with the restart also offered somewhere else (a click from the notification center does nothing); call `StartupRegistration.Remove(AppInfo.Name)` from Velopack's uninstall hook; check that the stub passes `--background` through.
   - **K10:** with C7's store, the welcome shows once and `LaunchAtStartup`/`ToggleHotkey` persist.
 
 ## Lane B notes
