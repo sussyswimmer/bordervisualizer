@@ -1,5 +1,32 @@
 # Handoff
 
+## [OPEN] H-014 · from: claude-code (C9) · to: claude-code (Lane B: K9, K6, logging, K12) · blocking: K9 (the first release)
+**Need:** What the app must do now that `build/pack.ps1` packs it with Velopack. The setup is vpk 1.2.161, packId `Rimlight`, install root `%LocalAppData%\Rimlight`, and channels `win` (x64) and `win-arm64`.
+1. **K9, required before the first tag:**
+   - **Package.** Add the `Velopack` NuGet package at 1.2.161, the vpk version in `.config/dotnet-tools.json` (MIT). vpk warns when the two differ.
+   - **Entry point.** `VelopackApp.Build().Run()` must be the first statement of `Main`. WPF generates `Main` from `App.xaml`, so:
+     - Add a `[STAThread] Program.Main` that runs `VelopackApp.Build().Run()`, then `new App()`, `InitializeComponent()` and `Run()`.
+     - Make `App.xaml` a `Page` instead of the `ApplicationDefinition`.
+     - Without the call, vpk's entry-point check fails the pack ("Unable to verify VelopackApp is called"; reproduced on the C9 branch). A tag pushed before K9 therefore stops in the pack job, before anything is published.
+   - **Dry run.** Then delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch of `.github/workflows/release.yml`. The K9 PR changes `src/Rimlight.App`, so it runs the release dry run, which then checks the entry point.
+   - **Updates.** Use `new UpdateManager(new GithubSource("https://github.com/sussyswimmer/bordervisualizer", null, false))` with no explicit channel: each install reads its own channel's feed. `IsInstalled` is false in a dev run, so skip update checks there.
+   - **AUMID.** `VelopackApp` already sets the process AUMID to the shortcuts' `velopack.Rimlight`.
+2. **K6:**
+   - **Run order.** Velopack starts `Rimlight.exe` with hook arguments on install, update and uninstall. `VelopackApp.Run()` handles those and exits, so it must run before the single-instance mutex and the tray icon exist.
+   - **Startup entry.** Velopack removes only its own shortcuts and uninstall key. Remove the HKCU `Run` startup value in `OnBeforeUninstallFastCallback` (30 s limit).
+   - **Startup path.** Point the `Run` value at `%LocalAppData%\Rimlight\Rimlight.exe`, Velopack's stable launcher, not `current\Rimlight.exe` (doc 06 §4).
+3. **Logging (answers C11's H-013 item 4):** Velopack owns `%LocalAppData%\Rimlight`.
+   - Uninstall deletes that folder: `Update.exe` logs "Removing directory" and "Scheduling removal of install directory".
+   - Setup shows its overwrite/repair dialog when the folder already exists.
+   - Doc 02's `%LOCALAPPDATA%\Rimlight\logs\` is inside it. Logs would therefore be deleted on uninstall, although doc 07 Phase 6 says they stay. A dev run before the first install would also trigger that dialog.
+   - **Proposed:** `%APPDATA%\Rimlight\logs`, next to `settings.json`. Update doc 02, `CONTRIBUTING.md` and the bug form in the same PR.
+4. **K12:**
+   - **Asset names** on every release: `RimlightSetup.exe`, `RimlightSetup-arm64.exe`, `Rimlight-win-Portable.zip` and `Rimlight-win-arm64-Portable.zip`. Link them as `releases/latest/download/<name>`.
+   - **Release notes** start with `.github/release-notes-intro.md`. Put the demo GIF at its top, with an absolute URL (doc 08 §5).
+   - **Signing.** When signing is turned on, drop the SmartScreen sentence there and in the README.
+**Repro:** On the current app, `pwsh build/pack.ps1 -Runtimes win-x64` without `-SkipVelopackAppCheck` fails at vpk's check.
+**Proposed:** K9 does item 1 and the hook wiring in item 2, K6 the `Run` value, the logging task item 3, and K12 item 4. Mark this DONE in the K9 PR.
+---
 ## [DONE] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**

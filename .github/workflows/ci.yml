@@ -40,6 +40,17 @@ jobs:
       - name: Test the PR title label rules
         run: bash .github/scripts/pr-title-labels.test.sh
 
+      # build/pack.Tests.ps1, with the Pester 5 that the runner image ships.
+      - name: Test the packaging script helpers
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'build'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
       # The Windows job's newer MSBuild accepts forward slashes, so only this check catches them.
       - name: Check the solution filter uses backslash paths
         run: |
