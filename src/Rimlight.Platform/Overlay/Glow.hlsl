@@ -134,8 +134,10 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float glowDistance = max(-SdRoundBox(p - halfSize, halfSize, GlowRadiusPx), 0);
     float glow = exp(-glowDistance / spread);
     float a = saturate(saturate(max(core, glow * 0.85)) * Intensity * (1 + 0.25 * Pulse)) * Visibility;
-    if (a <= 1e-5)
-        return 0; // far inside: nothing visible even after dithering
+    // Far inside: below half a code value. The test is on the undithered alpha so whole waves skip together; the
+    // only output lost is a sparse speckle of dithered 1/255 pixels.
+    [branch] if (a < 0.5 / 255)
+        return 0;
 
     // 3-5. Colour around the perimeter from the Oklab-blended gradient (built on the CPU when the palette changes).
     float u = frac(PerimeterT(p, ScreenPx, ColorRadiusPx) + Phase);
@@ -146,8 +148,9 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float depth = min(min(p.x, p.y), min(ScreenPx.x - p.x, ScreenPx.y - p.y));
     rgb = lerp(rgb, MeanColor, smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth));
 
-    // 6. Dither, then 7. output premultiplied. The swap chain is 8-bit UNORM, which DWM reads as sRGB-encoded,
-    // so the linear gradient colour is encoded here before it is multiplied by alpha.
-    a = saturate(a + (InterleavedGradientNoise(p) - 0.5) / 255);
-    return float4(LinearToSrgb(saturate(rgb)) * a, a);
+    // 7. Premultiplied output, then 6. the dither. The swap chain is 8-bit UNORM, which DWM reads as sRGB-encoded,
+    // so the linear gradient colour is encoded here before it is multiplied by alpha. The same noise goes on all
+    // four channels, so every colour channel gets the full +-0.5 LSB, and colour stays <= alpha (valid premultiplied).
+    float noise = (InterleavedGradientNoise(p) - 0.5) / 255;
+    return saturate(float4(LinearToSrgb(saturate(rgb)) * a, a) + noise);
 }
