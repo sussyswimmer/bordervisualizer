@@ -1,0 +1,39 @@
+# Path labels for pull requests, applied by .github/workflows/labeler.yml (actions/labeler v5).
+# The same workflow also labels the Conventional Commit type and scope of the PR title
+# (feature, fix, audio, ...); .github/release.yml turns all of these into release-note sections.
+
+# Lane ownership, as in docs/09-WORK-SPLIT.md §2.
+lane-a:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/Rimlight.Core/**
+          - src/Rimlight.Tests/**
+          - src/Rimlight.Bench/**
+          - tools/**
+          - build/**
+          - .config/**
+          - .github/**
+          - CONTRIBUTING.md
+          - SECURITY.md
+          - CODE_OF_CONDUCT.md
+          - CHANGELOG.md
+
+lane-b:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/Rimlight.Platform/**
+          - src/Rimlight.App/**
+          - assets/**
+          - README.md
+
+# Any docs/ file or Markdown file except the two shared logs that nearly every PR appends to.
+docs:
+  - changed-files:
+      - all-globs-to-any-file:
+          - '{docs/**,**/*.md}'
+          - '!docs/PROGRESS.md'
+          - '!docs/HANDOFF.md'
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file: .github/**

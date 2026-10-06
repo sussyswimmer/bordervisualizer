@@ -1,6 +1,33 @@
 # Handoff
 
-## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
+## [OPEN] H-014 · from: claude-code (C9) · to: claude-code (Lane B: K9, K6, logging, K12) · blocking: K9 (the first release)
+**Need:** What the app must do now that `build/pack.ps1` packs it with Velopack. The setup is vpk 1.2.161, packId `Rimlight`, install root `%LocalAppData%\Rimlight`, and channels `win` (x64) and `win-arm64`.
+1. **K9, required before the first tag:**
+   - **Package.** Add the `Velopack` NuGet package at 1.2.161, the vpk version in `.config/dotnet-tools.json` (MIT). vpk warns when the two differ.
+   - **Entry point.** `VelopackApp.Build().Run()` must be the first statement of `Main`. WPF generates `Main` from `App.xaml`, so:
+     - Add a `[STAThread] Program.Main` that runs `VelopackApp.Build().Run()`, then `new App()`, `InitializeComponent()` and `Run()`.
+     - Make `App.xaml` a `Page` instead of the `ApplicationDefinition`.
+     - Without the call, vpk's entry-point check fails the pack ("Unable to verify VelopackApp is called"; reproduced on the C9 branch). A tag pushed before K9 therefore stops in the pack job, before anything is published.
+   - **Dry run.** Then delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch of `.github/workflows/release.yml`. The K9 PR changes `src/Rimlight.App`, so it runs the release dry run, which then checks the entry point.
+   - **Updates.** Use `new UpdateManager(new GithubSource("https://github.com/sussyswimmer/bordervisualizer", null, false))` with no explicit channel: each install reads its own channel's feed. `IsInstalled` is false in a dev run, so skip update checks there.
+   - **AUMID.** `VelopackApp` already sets the process AUMID to the shortcuts' `velopack.Rimlight`.
+2. **K6:**
+   - **Run order.** Velopack starts `Rimlight.exe` with hook arguments on install, update and uninstall. `VelopackApp.Run()` handles those and exits, so it must run before the single-instance mutex and the tray icon exist.
+   - **Startup entry.** Velopack removes only its own shortcuts and uninstall key. Remove the HKCU `Run` startup value in `OnBeforeUninstallFastCallback` (30 s limit).
+   - **Startup path.** Point the `Run` value at `%LocalAppData%\Rimlight\Rimlight.exe`, Velopack's stable launcher, not `current\Rimlight.exe` (doc 06 §4).
+3. **Logging (answers C11's H-013 item 4):** Velopack owns `%LocalAppData%\Rimlight`.
+   - Uninstall deletes that folder: `Update.exe` logs "Removing directory" and "Scheduling removal of install directory".
+   - Setup shows its overwrite/repair dialog when the folder already exists.
+   - Doc 02's `%LOCALAPPDATA%\Rimlight\logs\` is inside it. Logs would therefore be deleted on uninstall, although doc 07 Phase 6 says they stay. A dev run before the first install would also trigger that dialog.
+   - **Proposed:** `%APPDATA%\Rimlight\logs`, next to `settings.json`. Update doc 02, `CONTRIBUTING.md` and the bug form in the same PR.
+4. **K12:**
+   - **Asset names** on every release: `RimlightSetup.exe`, `RimlightSetup-arm64.exe`, `Rimlight-win-Portable.zip` and `Rimlight-win-arm64-Portable.zip`. Link them as `releases/latest/download/<name>`.
+   - **Release notes** start with `.github/release-notes-intro.md`. Put the demo GIF at its top, with an absolute URL (doc 08 §5).
+   - **Signing.** When signing is turned on, drop the SmartScreen sentence there and in the README.
+**Repro:** On the current app, `pwsh build/pack.ps1 -Runtimes win-x64` without `-SkipVelopackAppCheck` fails at vpk's check.
+**Proposed:** K9 does item 1 and the hook wiring in item 2, K6 the `Run` value, the logging task item 3, and K12 item 4. Mark this DONE in the K9 PR.
+---
+## [DONE] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
 1. No `global.json`, so `LangVersion=latest` means C# 12 on the .NET 8 SDK (Codex) but C# 13/14 on a .NET 9/10 SDK (a typical Visual Studio install). Code can compile on one machine and fail on the other, and newer SDKs bring new analyzer warnings, which `TreatWarningsAsErrors` turns into errors.
@@ -14,6 +41,15 @@
 3. Add `* text=auto eol=lf` (plus `*.ico binary`) in `.gitattributes`.
 4. Add `<WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>` in `Directory.Build.props`.
 5. Add a `tools/Directory.Build.props` that imports the `src` one.
+**Resolved (C8, PR [#10](https://github.com/sussyswimmer/bordervisualizer/pull/10)):**
+1. `global.json` sets SDK `8.0.100` as the minimum with `rollForward: latestMajor` and `allowPrerelease: false`, instead of the proposed `latestFeature`. Maxwell's newer Visual Studio SDK builds without installing SDK 8.
+   - To make builds SDK-independent, `src/Directory.Build.props` pins `LangVersion` 12 and `AnalysisLevel` 8.0. A .NET 9/10 SDK then compiles the same C# with the same analyzer rules and warning wave. On SDK 8 nothing changes: `EffectiveAnalysisLevel` 8.0 and `WarningLevel` 8, before and after.
+   - CI covers both ends: the Linux job uses exactly SDK 8, and the Windows job uses the runner's newest SDK.
+2. `Rimlight.Core.slnf` uses backslash paths. `dotnet build` and `dotnet test` of it work on Linux (0 warnings, 165 tests), and the Windows CI job built it with Windows MSBuild (SDK 10.0.401) with 0 warnings on #10.
+3. `.gitattributes`: `* text=auto eol=lf`, CRLF for `*.cmd`/`*.bat`, and image/media/binary types marked `binary`. Renormalizing changed no committed file.
+4. `WarningsNotAsErrors` NU1900–NU1904, as proposed. Verified with a vulnerable test package: NU1903 is a warning with the line and an error without it. Maxwell should enable Dependabot alerts so advisories are still seen.
+5. `tools/Directory.Build.props` imports `../src/Directory.Build.props`. Verified that a tools project gets AppName, Nullable, LangVersion 12 and TreatWarningsAsErrors.
+- Branches that add projects to the `.slnf` or add `tools/Directory.Build.props` (C3, C10): on rebase, write the new entries with backslashes and keep C8's props file. The Linux CI job fails on a forward slash in a `.slnf` project path.
 ---
 ## [OPEN] H-009 · from: claude-code · to: codex, maxwell · blocking: C7 (consumed by K6/K7)
 **Need:** Rules for the free-form `Settings` fields that Lane B writes and C7 validates, plus one product decision for Maxwell.

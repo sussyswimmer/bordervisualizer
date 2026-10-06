@@ -1,0 +1,34 @@
+# Sections for GitHub's generated release notes (the "Generate release notes" button on a new
+# release, or `generate_release_notes` in the releases API). A merged pull request is listed
+# once, under the first section whose labels it has, so features and fixes come first and the
+# area sections collect the rest (refactors, tests, chores) of that area.
+# .github/workflows/labeler.yml sets the labels from the Conventional Commit title of the pull
+# request (type and scope) and from its changed paths.
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+    authors:
+      - dependabot
+      - dependabot[bot]
+  categories:
+    - title: ✨ Features
+      labels: [feature, enhancement]
+    - title: 🐛 Fixes
+      labels: [fix, bug]
+    - title: ⚡ Performance
+      labels: [performance]
+    - title: 🔊 Audio
+      labels: [audio]
+    - title: 💡 Overlay
+      labels: [overlay]
+    - title: 🎨 Color
+      labels: [color]
+    - title: 🎛️ UI
+      labels: [ui]
+    - title: 🏗️ Build & CI
+      labels: [build, ci]
+    - title: 📚 Docs
+      labels: [docs, documentation]
+    - title: 🧹 Other changes
+      labels: ['*']
