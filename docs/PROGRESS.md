@@ -239,8 +239,9 @@
 - **Structure:**
   - `NowPlayingService` (`src/Rimlight.Platform/Media/`) reads Windows' media sessions on the thread pool.
     - `RequestAsync` runs once. If it throws, `IsAvailable` is false and the glow keeps the manual colors for the session.
-    - Manager events (`CurrentSessionChanged`, `SessionsChanged`) and every session's `MediaPropertiesChanged` and `PlaybackInfoChanged` only schedule a refresh. `RefreshScheduler` debounces them: 250 ms after the last event, and at least once a second under a stream of events. One refresh runs at a time.
-    - A refresh picks the playing session (Windows' current one if several play, or if none plays) and reads its properties. The track ID is `app|artist|title`. The thumbnail is decoded and passed to `IPaletteExtractor`.
+    - Manager events (`CurrentSessionChanged`, `SessionsChanged`) and every session's `MediaPropertiesChanged` and `PlaybackInfoChanged` only schedule a refresh. `RefreshScheduler` debounces them: 250 ms after the last event, and at least once a second under a stream of events. Retry and reconnect deadlines (`RequestBy`) are kept as given; the 1 s cap applies to event bursts only. Without any event a refresh still runs every 30 s. One refresh runs at a time.
+    - A refresh picks the playing session (Windows' current one if several play, or if none plays) and reads its properties. The track ID is `app|artist|title`.
+    - The thumbnail is read for a new track and again after every `MediaPropertiesChanged` (or session/list change), never after a play/pause alone. Those events set a flag that the next refresh claims. A picture that is already shown is not extracted again; any other picture is decoded and passed to `IPaletteExtractor`. So a session that first shows the previous track's cover or a placeholder gets the real colors when the real cover arrives.
   - Published, immutable and by reference: `Current` (`NowPlaying`), `AlbumPalette` (null = manual colors), `Art` (≤ 64×64 straight-alpha BGRA8, for K7's "Now playing" row). `NowPlayingChanged` and `AlbumArtChanged` fire on the pool only on real changes.
   - `AlbumArtDecoder`: `BitmapDecoder` with a `BitmapTransform` (Fant, ≤ 64 px on the long side, aspect kept, never enlarged), `Bgra8`/`Straight`, EXIF and color profile ignored. Rows are repacked to exactly width × height × 4 bytes, which the real extractor (C4) requires.
   - `MusicGlowSource` reads `AlbumPalette` once per frame.
@@ -248,7 +249,10 @@
     - `SetTarget` gets 800 ms for album changes and album/manual switches, 200 ms for manual edits. It reports `Full` motion while the blender animates.
   - `OverlayHost.RequestFrame()` wakes a static glow for a new palette.
   - `TrayToolTip` builds the tooltip, and `AppController` marshals it to the UI thread (coalesced) and disposes the service first.
+    - `SetNowPlaying` compares with `TrayIcon.ToolTip`, the text the shell last accepted. After a refused update the `ToolTipText` property already holds the new text, so the icon is then updated directly.
+    - On `TaskbarCreated` (Explorer restarted; H.NotifyIcon has already re-added the icon with its last accepted text) the tray re-applies the current tooltip and calls `NowPlayingService.Refresh()`.
   - The tray menu gains doc 06's "Colors ▸". Debug builds add a media status line and an "Override album color" toggle.
+    - "From album art" also clears `OverrideAlbumColor`, because H-009 presets set it, so the item always brings the album colors back. The check marks show the colors actually in use: with Override on, "Manual" is checked even in Album Art mode.
 - **Spec clarifications and deviations (doc 05 §1, §3; doc 06 §2):**
   - **`BitmapAlphaMode.Straight`** (doc 05 says "premultiplied-ignore"): the extractor reads straight color and skips alpha < 128, and `Ignore` leaves the alpha byte undefined.
   - **The tooltip names the track only while it plays**; paused reads "Waiting for music". Doc 05 exposes `IsPlaying` for the tooltip.
@@ -256,13 +260,13 @@
     - It is cut to 127 UTF-16 units (NOTIFYICONDATA.szTip) between whole text elements, with "…". The title gives way before the artist.
     - Control characters become spaces.
     - A failed `Shell_NotifyIcon` update is caught (H.NotifyIcon throws).
-  - **No art → manual colors** (doc 05 also allows keeping the previous palette). While a new track's art is read (up to about 1 s, including the 750 ms retry), the previous colors stay, so tracks never flash the manual colors in between. A track without a palette is read again on its later events, because some apps send a generic icon first and the cover later.
+  - **No art → manual colors** (doc 05 also allows keeping the previous palette). A missing thumbnail, one that won't decode and a generic app icon (the extractor's "no art") are treated alike. The previous colors stay, the track is read once more 750 ms after it first had no cover, and only then do the manual colors show. Tracks therefore never flash the manual colors when the cover arrives late.
   - **200 ms only for a manual edit while manual colors show**; every switch between album and manual colors uses 800 ms.
   - **Robustness additions:**
     - All sessions are subscribed, so a session that starts playing is noticed even if Windows keeps another one current.
     - The debounce waits at most 1 s.
     - Properties and decodes are bounded at 5 s.
-    - A session manager whose process died (RPC disconnected, e.g. an Explorer restart) is requested again every 5 s.
+    - A session manager whose process died (e.g. an Explorer restart) is dropped and requested again every 5 s. A dead manager raises no events, so it is noticed in three ways: any WinRT call in a refresh failing with an RPC "disconnected" error while the manager itself no longer answers (a closing session alone doesn't count), the 30 s idle refresh, and `Refresh()`, which the tray calls on `TaskbarCreated`.
   - `NowPlaying.SourceApp` is the raw `SourceAppUserModelId`. Track text is never logged.
 - **Verified here (Linux):**
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
@@ -280,10 +284,18 @@
     - the unavailable path on Linux
     - `MusicGlowSource`'s full palette-selection matrix with a recording blender, including 0 bytes per frame
   - The harness found one scheduler bug, fixed before the PR: a compare-and-swap claim could spin forever under a stream of events.
+  - **Review fixes** (an adversarial review with a Windows-runtime lens and a spec lens). A second scratch harness with 27 checks links `NowPlayingService` with a stand-in decoder and extractor and drives the art logic through reflection. It covers:
+    - the stale previous cover replaced by the real one
+    - a generic icon followed by the cover 400 ms later, going straight from one track's colors to the next
+    - an icon or missing thumbnail that stays: manual colors after 750 ms
+    - no thumbnail read on play/pause, and no extraction of a picture already shown
+    - a decode failure
+    - the scheduler: `RequestBy(+5 s)` fires after 5 s (it fired after 1 s before the fix), a burst is still capped at 1 s while a far deadline is pending, the idle refresh, and cancellation.
+    - The first harness's 73 checks still pass.
   - Nothing has run on Windows yet: Maxwell's checklist is in #18.
 - **Left for later:**
   - **K6:**
-    - Re-apply the tooltip after `TaskbarCreated` (Explorer restart). A tooltip update refused by the shell is otherwise retried only on the next track.
+    - The tooltip is re-applied on `TaskbarCreated`. `TrayIconHost` subscribes after `ForceCreate`, so its handler runs after H.NotifyIcon's own one re-adds the icon. K6's `ForceCreate` retry on `TaskbarCreated` must also run before it.
     - Check whether a single `&` shows in the tooltip.
   - **K7:**
     - The "Now playing" row reads `Current` and `Art` (compare `Art.TrackId` with `Current.TrackId` to hide stale art), with swatches via `SrgbHex.Format`.

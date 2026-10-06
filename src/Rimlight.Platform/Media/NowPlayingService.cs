@@ -14,10 +14,13 @@ namespace Rimlight.Platform.Media;
 /// <remarks>
 /// <para>Everything runs on the thread pool. Session events only schedule a refresh, and one refresh runs at a time,
 /// 250 ms after the last event (a track change fires two or three). A refresh picks the session to show (the playing
-/// one; if several play, Windows' current one), reads its title, artist and thumbnail, decodes the thumbnail to at most
-/// 64×64 and extracts the palette. A track without a thumbnail keeps the previous colors and is read once more after
-/// 750 ms; if it still has none, or the extractor calls it "no art" (a generic app icon), <see cref="AlbumPalette"/>
-/// becomes null. If the session manager's process goes away (an Explorer restart), it is requested again every 5 s.</para>
+/// one; if several play, Windows' current one) and reads its title and artist. Its thumbnail is read for a new track
+/// and again whenever the properties change (the cover can arrive after the title), not on play/pause: decoded to at
+/// most 64×64, and a picture not shown yet goes to the extractor. Without a usable cover (no thumbnail, or one the
+/// extractor calls "no art", a generic app icon) the previous colors stay and the track is read once more after
+/// 750 ms; if it still has none, <see cref="AlbumPalette"/> becomes null. Without events a refresh still runs every
+/// 30 s, so a session manager whose process went away (an Explorer restart) is noticed; it is then requested again
+/// every 5 s.</para>
 /// <para>Results are immutable and published by reference, so any thread may read <see cref="Current"/>,
 /// <see cref="AlbumPalette"/> and <see cref="Art"/>. The change events are raised on a thread-pool thread: handlers
 /// must return quickly and must not touch UI objects there.</para>
@@ -30,10 +33,11 @@ public sealed class NowPlayingService : IDisposable
     private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(5);            // a hung media app can't stall us
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);         // after the media service went away
+    private static readonly TimeSpan IdleCheck = TimeSpan.FromSeconds(30);             // a dead manager raises no events
     private const long ErrorLogIntervalMs = 5000;
 
     private readonly IPaletteExtractor extractor;
-    private readonly RefreshScheduler scheduler = new(Debounce, MaxDebounce);
+    private readonly RefreshScheduler scheduler = new(Debounce, MaxDebounce, IdleCheck);
     private readonly CancellationTokenSource stop = new(); // never disposed: late WinRT event handlers still read it
     // One delegate instance each, so every -= removes exactly what += added.
     private readonly TypedEventHandler<GlobalSystemMediaTransportControlsSessionManager, CurrentSessionChangedEventArgs> onCurrentSessionChanged;
@@ -48,13 +52,14 @@ public sealed class NowPlayingService : IDisposable
     private Palette? albumPalette;
     private AlbumArt? art;
     private volatile bool unavailable;
+    private int propertiesDirty; // 1: properties changed since the last refresh began (set on WinRT event threads)
 
     // Owned by the refresh loop (one refresh at a time).
     private GlobalSystemMediaTransportControlsSessionManager? manager;
     private readonly List<GlobalSystemMediaTransportControlsSession> subscribed = [];
-    private string? artTrackId;   // the track the art below belongs to
-    private bool artFound;        // its palette is extracted: nothing more to read for it
-    private long artMissingSince; // Stopwatch timestamp when it first had no usable thumbnail; 0 = not yet
+    private string? artTrackId;   // the track the art state below belongs to
+    private bool artSettled;      // its thumbnail was read, no retry pending: read again when its properties change
+    private long artMissingSince; // Stopwatch timestamp when it first had no usable cover; 0 = it has one
     private long lastErrorLogMs = long.MinValue / 2;
 
     /// <summary>Creates the service. Call <see cref="Start"/> to begin reading media sessions.</summary>
@@ -63,9 +68,9 @@ public sealed class NowPlayingService : IDisposable
     {
         ArgumentNullException.ThrowIfNull(extractor);
         this.extractor = extractor;
-        onCurrentSessionChanged = (_, _) => OnSessionEvent();
-        onSessionsChanged = (_, _) => OnSessionEvent();
-        onMediaPropertiesChanged = (_, _) => OnSessionEvent();
+        onCurrentSessionChanged = (_, _) => OnPropertiesEvent();
+        onSessionsChanged = (_, _) => OnPropertiesEvent();
+        onMediaPropertiesChanged = (_, _) => OnPropertiesEvent();
         onPlaybackInfoChanged = (_, _) => OnSessionEvent();
     }
 
@@ -102,6 +107,12 @@ public sealed class NowPlayingService : IDisposable
         loop = Task.Run(() => RunAsync(token));
     }
 
+    /// <summary>
+    /// Reads the media sessions again shortly. Call it after Explorer restarted (the taskbar's TaskbarCreated): a
+    /// session manager that went away with it is then noticed at once instead of at the next 30 s check. Any thread.
+    /// </summary>
+    public void Refresh() => OnSessionEvent();
+
     /// <summary>Stops reading and unsubscribes from every session, waiting up to 2 s. Raises no events afterwards.</summary>
     public void Dispose()
     {
@@ -126,6 +137,13 @@ public sealed class NowPlayingService : IDisposable
     private void OnSessionEvent()
     {
         if (!stop.IsCancellationRequested) scheduler.Request();
+    }
+
+    // New properties, or another session: that refresh reads the thumbnail too. Set before the request it goes with.
+    private void OnPropertiesEvent()
+    {
+        Volatile.Write(ref propertiesDirty, 1);
+        OnSessionEvent();
     }
 
     private async Task RunAsync(CancellationToken token)
@@ -191,34 +209,22 @@ public sealed class NowPlayingService : IDisposable
             // Session events still work; only new or closed sessions go unnoticed until one of them fires.
             Trace.WriteLine($"[NowPlaying] Can't follow the session list: {exception.Message}");
         }
+        Volatile.Write(ref propertiesDirty, 1); // a new manager: read the thumbnail again too
         return true;
     }
 
     private async Task RefreshAsync(CancellationToken token)
     {
+        // Claimed first: properties that change from here on schedule another refresh that reads them.
+        bool propertiesChanged = Interlocked.Exchange(ref propertiesDirty, 0) != 0;
         try
         {
-            IReadOnlyList<GlobalSystemMediaTransportControlsSession> list;
-            try
-            {
-                list = manager!.GetSessions();
-            }
-            catch (Exception exception) when (IsDisconnected(exception))
-            {
-                // The process behind the session manager ended (an Explorer restart, an update). Its events are gone
-                // with it, so drop it and connect again shortly.
-                Trace.WriteLine($"[NowPlaying] The media session manager went away; reconnecting: {exception.Message}");
-                Disconnect();
-                scheduler.RequestBy(Stopwatch.GetTimestamp() + Ticks(ReconnectDelay));
-                return;
-            }
-
-            (GlobalSystemMediaTransportControlsSession? session, bool playing) = SyncSessions(list);
+            (GlobalSystemMediaTransportControlsSession? session, bool playing) = SyncSessions(manager!.GetSessions());
             if (session is null)
             {
                 Publish(null);
                 artTrackId = null;
-                artFound = false;
+                artSettled = false;
                 artMissingSince = 0;
                 PublishArt(null, null); // manual colors
                 return;
@@ -231,13 +237,38 @@ public sealed class NowPlayingService : IDisposable
             string? artist = Clean(properties?.Artist);
             string trackId = $"{app}|{artist}|{title}"; // doc 05 §1
             Publish(new NowPlaying(title, artist, app.Length > 0 ? app : null, playing, trackId));
-            await UpdateArtAsync(trackId, properties?.Thumbnail, token).ConfigureAwait(false);
+            await UpdateArtAsync(trackId, properties?.Thumbnail, propertiesChanged, token).ConfigureAwait(false);
         }
         catch (Exception exception) when (!token.IsCancellationRequested)
         {
+            if (propertiesChanged) Volatile.Write(ref propertiesDirty, 1); // not read yet: the next refresh reads them
+            // The process behind the session manager ended (an Explorer restart, an update). Its events are gone with
+            // it, so drop it and connect again shortly; what is shown stays until then. A session that just closed
+            // fails the same way, so the manager itself is asked.
+            if (IsDisconnected(exception) && !ManagerAnswers())
+            {
+                Trace.WriteLine($"[NowPlaying] The media session manager went away; reconnecting: {exception.Message}");
+                Disconnect();
+                scheduler.RequestBy(Stopwatch.GetTimestamp() + Ticks(ReconnectDelay));
+                return;
+            }
             // The session closed mid-call, or the app answered with an error or not at all. What is shown stays; the
             // session events that follow (a closed session changes the list) read again.
             LogThrottled($"[NowPlaying] Reading the media session failed: {exception.Message}");
+        }
+    }
+
+    // After a call failed as if its server were gone: false when the session manager is gone, not just a session.
+    private bool ManagerAnswers()
+    {
+        try
+        {
+            _ = manager!.GetSessions();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            return !IsDisconnected(exception);
         }
     }
 
@@ -300,17 +331,23 @@ public sealed class NowPlayingService : IDisposable
         return playing.Length > 0 ? 0 : -1;
     }
 
-    private async Task UpdateArtAsync(string trackId, IRandomAccessStreamReference? thumbnail, CancellationToken token)
+    // Reads the cover of a new track, and again whenever its properties change: the cover often arrives after the
+    // title, and at first the session may still hold the previous track's cover or a generic icon (doc 05 §1). A
+    // play/pause alone reads nothing, unless a missing cover is being retried.
+    private async Task UpdateArtAsync(string trackId, IRandomAccessStreamReference? thumbnail, bool propertiesChanged,
+        CancellationToken token)
     {
         if (!string.Equals(trackId, artTrackId, StringComparison.Ordinal))
         {
             artTrackId = trackId;
-            artFound = false;
+            artSettled = false;
             artMissingSince = 0;
         }
-        // Settled for this track. Without a palette yet (no art so far), every refresh looks again: some apps send a
-        // generic icon first and the cover later, with the same title.
-        if (artFound) return;
+        else if (propertiesChanged)
+        {
+            artSettled = false;
+        }
+        if (artSettled) return;
 
         AlbumArt? decoded = null;
         if (thumbnail is not null)
@@ -325,10 +362,20 @@ public sealed class NowPlayingService : IDisposable
             }
         }
 
-        if (decoded is null)
+        // The picture already shown for this track (an event that changed something else): its colors stand.
+        if (decoded is not null && AlbumArt.SameImage(Volatile.Read(ref art), decoded))
         {
-            // No usable thumbnail. It often arrives late (doc 05 §1): keep the previous colors and read once more 750 ms
-            // after first seeing none. After that the track has no art, and the manual colors show.
+            artSettled = true;
+            artMissingSince = 0;
+            return;
+        }
+
+        Palette? palette = decoded is null ? null : Extract(decoded);
+        if (palette is null)
+        {
+            // No usable cover: no thumbnail, one that won't decode, or a generic app icon (the extractor's "no art").
+            // The cover often arrives late (doc 05 §1): keep the previous colors and read once more 750 ms after first
+            // finding none. After that the track has no art, and the manual colors show.
             long now = Stopwatch.GetTimestamp();
             if (artMissingSince == 0) artMissingSince = now;
             long retryAt = artMissingSince + Ticks(ThumbnailRetry);
@@ -337,13 +384,14 @@ public sealed class NowPlayingService : IDisposable
                 scheduler.RequestBy(retryAt);
                 return;
             }
-            PublishArt(null, null);
+            PublishArt(null, decoded); // the icon, if any, is still the track's art
+            artSettled = true;
             return;
         }
 
-        Palette? palette = Extract(decoded);
-        PublishArt(palette, decoded); // a null palette ("no art", e.g. a generic app icon) shows the manual colors
-        artFound = palette is not null;
+        PublishArt(palette, decoded);
+        artSettled = true;
+        artMissingSince = 0;
     }
 
     // On the thread pool, one call at a time (H-004).
