@@ -29,6 +29,8 @@ public sealed class IconGenCliTests
     [InlineData("bogus", "out.ico")]
     [InlineData("ico")]
     [InlineData("ico", "out.ico")]
+    [InlineData("ico", "", "--svg", "a.svg")]
+    [InlineData("png", " ", "--svg", "a.svg", "--size", "16")]
     [InlineData("ico", "out.ico", "--svg")]
     [InlineData("ico", "out.ico", "--svg", "a.svg", "extra.ico")]
     [InlineData("ico", "out.ico", "--svg", "a.svg", "--sizes", "16,16")]

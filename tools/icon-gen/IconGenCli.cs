@@ -156,7 +156,7 @@ internal static class IconGenCli
             }
         }
 
-        if (outputPath is null)
+        if (string.IsNullOrWhiteSpace(outputPath))
         {
             throw new UsageException($"give the output file: icon-gen {command} <out.{command}> --svg <file>.");
         }
