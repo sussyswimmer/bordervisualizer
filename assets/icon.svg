@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Rimlight app icon, 40 px and up: a dark screen whose rim glows violet to cyan, with light spilling
+       onto the screen and a soft halo around it. assets/icon-small.svg is the version for 16 to 32 px.
+       build/icons.sh (or icons.ps1) renders both into the app's .ico files and the README PNGs. -->
+  <defs>
+    <linearGradient id="rim" gradientUnits="userSpaceOnUse" x1="24" y1="24" x2="232" y2="232">
+      <stop offset="0" stop-color="#7C5CFF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="core" gradientUnits="userSpaceOnUse" x1="24" y1="24" x2="232" y2="232">
+      <stop offset="0" stop-color="#C7B8FF"/>
+      <stop offset="1" stop-color="#B4F3FC"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16141F"/>
+      <stop offset="1" stop-color="#0A0A0F"/>
+    </linearGradient>
+    <filter id="halo" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <filter id="spill" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+    <filter id="soft" filterUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <feGaussianBlur stdDeviation="2.5"/>
+    </filter>
+    <clipPath id="inside">
+      <rect x="36" y="36" width="184" height="184" rx="46"/>
+    </clipPath>
+  </defs>
+  <!-- Halo outside the frame. -->
+  <rect x="36" y="36" width="184" height="184" rx="46" fill="none" stroke="url(#rim)" stroke-width="22" opacity="0.7" filter="url(#halo)"/>
+  <!-- The screen. -->
+  <rect x="36" y="36" width="184" height="184" rx="46" fill="url(#screen)"/>
+  <!-- Light spilling inward from the rim. -->
+  <g clip-path="url(#inside)">
+    <rect x="36" y="36" width="184" height="184" rx="46" fill="none" stroke="url(#rim)" stroke-width="56" opacity="0.6" filter="url(#spill)"/>
+  </g>
+  <!-- The rim, with a soft bright core. -->
+  <rect x="36" y="36" width="184" height="184" rx="46" fill="none" stroke="url(#rim)" stroke-width="22"/>
+  <rect x="36" y="36" width="184" height="184" rx="46" fill="none" stroke="url(#core)" stroke-width="6" opacity="0.8" filter="url(#soft)"/>
+</svg>

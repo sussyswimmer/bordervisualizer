@@ -1,5 +1,19 @@
 # Handoff
 
+## [OPEN] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
+**Need:** Use the icons C10 generated (PR #15).
+1. **K6, tray while the glow is off (doc 06 §2):** `src/Rimlight.App/Assets/Rimlight-dim.ico` is the app icon at 50 % opacity and is already a WPF `Resource`.
+   - When `Enabled` changes, swap `TaskbarIcon.IconSource` between `pack://application:,,,/Assets/Rimlight.ico` and `…/Rimlight-dim.ico`.
+   - Create both `BitmapImage`s once, after the `Application` exists. Deriving the dim icon at runtime also works, but the file needs no code.
+   - H.NotifyIcon converts `IconSource` with `System.Drawing.Icon` at the DPI-scaled small-icon size, so the tray shows the 16/20/24/32 px images (from `assets/icon-small.svg`).
+   - Also drop "placeholder icon" from the `TrayIconHost` summary. C10 left that file alone because the K1/K3 branches edit the same line.
+2. **K12:**
+   - `assets/icon-512.png` is doc 08's `icon.png (512)`, and `icon-256.png` is also available.
+   - The banner can reuse `assets/icon.svg`'s recipe: the gradient `#7C5CFF`→`#22D3EE` from top left to bottom right, the screen colors `#16141F`→`#0A0A0F`, and the rim, halo and inward spill.
+   - After editing either SVG, run `build/icons.sh` (or `icons.ps1`). `CommittedIconsTests` fails until the icons are regenerated.
+**Repro:** n/a.
+**Proposed:** K6 and K12 pick these up. Mark this DONE once the tray uses the dim icon.
+---
 ## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
