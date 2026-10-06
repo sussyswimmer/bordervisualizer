@@ -17,6 +17,7 @@ internal static class NativeWindowClass
     private static readonly object Gate = new();
     private static WNDPROC? procedure;
     private static HINSTANCE instance;
+    private static bool registered;
 
     public static HINSTANCE Instance => instance;
 
@@ -24,11 +25,12 @@ internal static class NativeWindowClass
     {
         lock (Gate)
         {
-            if (procedure is not null) return;
+            if (registered) return;
             instance = PInvoke.GetModuleHandle(default(PCWSTR));
-            procedure = windowProcedure;
+            procedure ??= windowProcedure; // the first delegate stays alive for the process
             RegisterClass(OverlayWindow.ClassName);
             RegisterClass(HelperClassName);
+            registered = true; // only once both exist, so a failed attempt is retried
         }
     }
 

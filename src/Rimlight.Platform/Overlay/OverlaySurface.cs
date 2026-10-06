@@ -70,6 +70,9 @@ internal sealed class OverlaySurface : IDisposable
     public int Width { get; private set; }
     public int Height { get; private set; }
 
+    // Consecutive frames skipped because the swap chain wasn't ready (DWM behind, display off, or a lost device).
+    public int SkippedFrames { get; private set; }
+
     public void Resize(int width, int height)
     {
         if (width == Width && height == Height) return;
@@ -90,7 +93,12 @@ internal sealed class OverlaySurface : IDisposable
     // skipped instead of queued. The caller has bound the shared pipeline (GpuDevice.BindPipeline).
     public Result Render(in GlowConstants frame)
     {
-        if (PInvoke.WaitForSingleObjectEx(frameLatency, 0, false) != WAIT_EVENT.WAIT_OBJECT_0) return Result.Ok;
+        if (PInvoke.WaitForSingleObjectEx(frameLatency, 0, false) != WAIT_EVENT.WAIT_OBJECT_0)
+        {
+            SkippedFrames++;
+            return Result.Ok;
+        }
+        SkippedFrames = 0;
 
         ID3D11DeviceContext context = gpu.Context;
         if (!hasUploaded || !frame.Equals(uploaded))

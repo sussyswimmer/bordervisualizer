@@ -22,6 +22,8 @@ public sealed class OverlayHost : IDisposable
     private const uint RebuildDelayMs = 300;   // display changes are debounced (doc 02)
     private const long TopmostThrottleMs = 250; // re-assert topmost at most this often (doc 04 §1)
     private const long GpuRetryMs = 1000;      // retry delay when the GPU can't be set up (driver update, no adapter)
+    private const long HardwareProbeMs = 30_000; // while on WARP, how often to check whether hardware came back
+    private const long ErrorLogIntervalMs = 5000; // repeated per-frame failures are logged at most this often
     private const int DefaultFrameRate = 60;
     private const uint Infinite = 0xFFFFFFFF;
     private const uint TimerAllAccess = 0x1F0003;
@@ -44,6 +46,10 @@ public sealed class OverlayHost : IDisposable
     private Settings? applied;
     private GpuDevice? gpu;
     private long gpuRetryAtMs;
+    private long lastGpuReleaseMs = long.MinValue / 2;
+    private long nextHardwareProbeMs;
+    private long lastErrorLogMs = long.MinValue / 2;
+    private bool deviceCheckRequested;
     private bool hasGradient;
     private bool gradientUploaded;
     private long frameTicks = Stopwatch.Frequency / DefaultFrameRate;
@@ -213,16 +219,29 @@ public sealed class OverlayHost : IDisposable
                 MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
             if (!PumpMessages() || stopping) break;
 
-            ApplyPendingSettings();
-            if (Interlocked.Exchange(ref deviceLossRequested, 0) != 0) ReleaseGpu("simulated from the tray (debug)");
-
             long now = Stopwatch.GetTimestamp();
-            if (now < nextFrame) continue;
-            float dt = (float)((now - previous) / (double)Stopwatch.Frequency);
-            previous = now;
-            // Keep a steady cadence; after a stall, restart it from now instead of rendering a burst of frames.
-            nextFrame = now - nextFrame >= frameTicks ? now + frameTicks : nextFrame + frameTicks;
-            RenderFrame(dt);
+            bool frameDue = now >= nextFrame;
+            if (frameDue)
+            {
+                // Keep a steady cadence; after a stall, restart it from now instead of rendering a burst of frames.
+                nextFrame = now - nextFrame >= frameTicks ? now + frameTicks : nextFrame + frameTicks;
+            }
+
+            // One bad frame or rebuild must never end the overlay thread: log it and start the GPU over.
+            try
+            {
+                ApplyPendingSettings();
+                if (Interlocked.Exchange(ref deviceLossRequested, 0) != 0) ReleaseGpu("simulated from the tray (debug)");
+                if (!frameDue) continue;
+                float dt = (float)((now - previous) / (double)Stopwatch.Frequency);
+                previous = now;
+                RenderFrame(dt);
+            }
+            catch (Exception exception)
+            {
+                LogThrottled($"[OverlayHost] Frame failed: {exception}");
+                ReleaseGpu("frame failed");
+            }
         }
     }
 
@@ -280,6 +299,8 @@ public sealed class OverlayHost : IDisposable
         PInvoke.KillTimer(helper, RebuildTimer);
         Settings current = applied!;
         List<DisplayMonitor> monitors = DisplayMonitors.Enumerate();
+        // A display change can also mean a GPU was added or removed: then the device must be recreated.
+        if (gpu is not null && gpu.IsStale) ReleaseGpu("the adapters changed");
 
         for (int i = overlays.Count - 1; i >= 0; i--)
         {
@@ -334,7 +355,17 @@ public sealed class OverlayHost : IDisposable
             }
         }
 
-        if (gpu is not null) CommitComposition();
+        if (gpu is not null)
+        {
+            try
+            {
+                CommitComposition();
+            }
+            catch (Exception exception) when (exception is SharpGenException or COMException)
+            {
+                ReleaseGpu($"commit failed: {exception.Message}");
+            }
+        }
         Trace.WriteLine($"[OverlayHost] {overlays.Count} overlay(s) on {monitors.Count} monitor(s).");
     }
 
@@ -358,6 +389,7 @@ public sealed class OverlayHost : IDisposable
                 overlay.Surface = new OverlaySurface(gpu, overlay.Window.Handle, overlay.Window.Width, overlay.Window.Height);
             CommitComposition();
             gradientUploaded = false;
+            nextHardwareProbeMs = Environment.TickCount64 + HardwareProbeMs;
             Trace.WriteLine($"[OverlayHost] GPU ready ({(gpu.IsSoftware ? "WARP" : "hardware")}).");
         }
         catch (Exception exception) when (exception is SharpGenException or COMException or InvalidOperationException)
@@ -371,14 +403,51 @@ public sealed class OverlayHost : IDisposable
     private void CommitComposition() => gpu!.Composition.Commit().CheckError();
 
     // Drops every GPU object after a device loss (or a failed setup); EnsureGpu rebuilds them on the next frame.
-    // The windows stay, so nothing moves or flashes on screen except one or two missing frames.
+    // The windows stay, so nothing moves or flashes on screen except one or two missing frames. A second release
+    // within GpuRetryMs (a reset still in progress, or an error that recurs every frame) waits GpuRetryMs instead.
     private void ReleaseGpu(string? reason)
     {
         if (reason is not null && gpu is not null) Trace.WriteLine($"[OverlayHost] GPU device lost ({reason}); recreating.");
         foreach (Overlay overlay in overlays) overlay.ReleaseSurface();
         gpu?.Dispose();
         gpu = null;
-        gpuRetryAtMs = 0;
+        long now = Environment.TickCount64;
+        gpuRetryAtMs = now - lastGpuReleaseMs < GpuRetryMs ? now + GpuRetryMs : 0;
+        lastGpuReleaseMs = now;
+    }
+
+    private void LogThrottled(string message)
+    {
+        long now = Environment.TickCount64;
+        if (now - lastErrorLogMs < ErrorLogIntervalMs) return;
+        lastErrorLogMs = now;
+        Trace.WriteLine(message);
+    }
+
+    // Device loss that Present can't report: DirectComposition's WM_PAINT notification, a surface whose latency object
+    // has stopped signaling for a second, or (on WARP) hardware that has become available again.
+    private bool CheckGpu()
+    {
+        long now = Environment.TickCount64;
+        bool check = deviceCheckRequested;
+        deviceCheckRequested = false;
+        foreach (Overlay overlay in overlays)
+            if (overlay.Surface is { SkippedFrames: > 0 } surface && surface.SkippedFrames % 60 == 0) check = true;
+        if (check && !gpu!.IsHealthy)
+        {
+            ReleaseGpu("the device or DirectComposition reports it lost");
+            return false;
+        }
+        if (gpu!.IsSoftware && now >= nextHardwareProbeMs)
+        {
+            nextHardwareProbeMs = now + HardwareProbeMs;
+            if (GpuDevice.HardwareAvailable())
+            {
+                ReleaseGpu("hardware rendering is available again");
+                return false;
+            }
+        }
+        return true;
     }
 
     private void RenderFrame(float dt)
@@ -387,7 +456,7 @@ public sealed class OverlayHost : IDisposable
         // The source advances even when nothing can be drawn, so its time stays in step with the clock.
         LightState state = source.NextFrame(dt, gradient, out bool gradientChanged);
         if (gradientChanged) hasGradient = true;
-        if (gpu is null || !hasGradient) return;
+        if (gpu is null || !hasGradient || !CheckGpu()) return;
 
         try
         {
@@ -403,14 +472,15 @@ public sealed class OverlayHost : IDisposable
                 if (overlay.Surface is not { } surface) continue;
                 var constants = GlowConstants.Create(state, surface.Width, surface.Height, overlay.Monitor.Scale, cornerRadiusDip);
                 Result result = surface.Render(constants);
-                if (GpuDevice.IsDeviceLost(result))
+                if (result.Failure)
                 {
+                    // DEVICE_REMOVED/RESET, or any other failure: start the GPU over (with backoff if it recurs).
                     ReleaseGpu($"Present returned {result}, removed reason {gpu.RemovedReason}");
                     return;
                 }
             }
         }
-        catch (Exception exception) when (GpuDevice.IsDeviceLost(exception))
+        catch (Exception exception) when (exception is SharpGenException or COMException)
         {
             ReleaseGpu(exception.Message);
         }
@@ -488,6 +558,11 @@ public sealed class OverlayHost : IDisposable
                     return default;
                 case PInvoke.WM_DISPLAYCHANGE:
                     current?.ScheduleRebuild();
+                    break;
+                case PInvoke.WM_PAINT:
+                    // DirectComposition signals device loss with WM_PAINT to its target windows; DefWindowProc
+                    // validates the window so it isn't sent again.
+                    if (current is not null) current.deviceCheckRequested = true;
                     break;
                 case PInvoke.WM_SETTINGCHANGE:
                     if (wParam.Value == (nuint)SYSTEM_PARAMETERS_INFO_ACTION.SPI_SETWORKAREA) current?.ScheduleRebuild();

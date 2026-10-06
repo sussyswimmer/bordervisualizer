@@ -1,6 +1,6 @@
-// Rimlight edge glow (doc 04 §3). One full-screen triangle per overlay; every pixel is computed from the
+// Rimlight edge glow (doc 04 section 3). One full-screen triangle per overlay; every pixel is computed from the
 // constant buffer and the 64-texel palette gradient. Compiled at runtime as vs_4_0 / ps_4_0 (feature level 10.0+).
-// The C# mirror of this constant buffer is GlowConstants.cs: keep the two in sync.
+// The C# mirror of this constant buffer is GlowConstants.cs: keep the two in sync. Keep this file ASCII-only.
 
 cbuffer Light : register(b0)
 {

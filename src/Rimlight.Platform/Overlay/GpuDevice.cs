@@ -69,19 +69,36 @@ internal sealed class GpuDevice : IDisposable
     public IDCompositionDevice Composition { get; } = null!;
     public bool IsSoftware { get; }
 
-    // A hardware device, or WARP (CPU rendering) when no hardware device is available, e.g. a basic display driver.
+    // A hardware device, or WARP (CPU rendering) only when no adapter supports feature level 10.0. Any other hardware
+    // failure (a TDR or driver update still in progress) is rethrown, so the caller retries hardware later.
     public static GpuDevice Create()
     {
         try
         {
             return new GpuDevice(DriverType.Hardware);
         }
-        catch (Exception hardware) when (hardware is SharpGenException or COMException)
+        catch (SharpGenException hardware) when (hardware.ResultCode == Vortice.DXGI.ResultCode.Unsupported)
         {
-            Trace.WriteLine($"[{nameof(GpuDevice)}] No hardware D3D11 device ({hardware.Message}); using WARP.");
+            Trace.WriteLine($"[{nameof(GpuDevice)}] No feature level 10.0 hardware ({hardware.Message}); using WARP.");
             return new GpuDevice(DriverType.Warp);
         }
     }
+
+    // Cheap probe used while running on WARP: can a hardware device be created now?
+    public static bool HardwareAvailable()
+    {
+        Result result = D3D11.D3D11CreateDevice(null, DriverType.Hardware, DeviceCreationFlags.None, FeatureLevels, out ID3D11Device? device);
+        device?.Dispose();
+        return result.Success;
+    }
+
+    // False once the D3D device was removed or DirectComposition reports its device invalid (doc 02 device loss).
+    // Used when Present can't report it: a surface whose latency object stopped signaling, or DComp's WM_PAINT.
+    public bool IsHealthy =>
+        Device.DeviceRemovedReason.Success && Composition.CheckDeviceState(out RawBool valid).Success && valid;
+
+    // The adapter set changed (a GPU was added, removed or its driver replaced): the device should be recreated.
+    public bool IsStale => !Factory.IsCurrent;
 
     // The device is gone (driver update, TDR, adapter removed): everything must be recreated (doc 02).
     public static bool IsDeviceLost(Result result) =>
@@ -131,25 +148,28 @@ internal sealed class GpuDevice : IDisposable
     {
         if (vertexBytecode is null || pixelBytecode is null)
         {
-            string source = LoadShaderSource();
+            byte[] source = LoadShaderSource();
             vertexBytecode = Compile(source, "VSMain", "vs_4_0");
             pixelBytecode = Compile(source, "PSMain", "ps_4_0");
         }
         return (vertexBytecode, pixelBytecode);
     }
 
-    private static string LoadShaderSource()
+    // The source is passed to D3DCompile as bytes with their true length (Vortice's string overloads convert to the
+    // ANSI code page but pass the UTF-16 length, which would truncate a non-ASCII source on some code pages).
+    private static byte[] LoadShaderSource()
     {
         const string name = "Rimlight.Platform.Overlay.Glow.hlsl";
         using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(name)
             ?? throw new InvalidOperationException($"Missing embedded shader {name}.");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return bytes.ToArray();
     }
 
-    private static byte[] Compile(string source, string entryPoint, string profile)
+    private static byte[] Compile(byte[] source, string entryPoint, string profile)
     {
-        Result result = Compiler.Compile(source, null!, null!, entryPoint, "Glow.hlsl", profile,
+        Result result = Compiler.Compile((ReadOnlySpan<byte>)source, null!, null!, entryPoint, "Glow.hlsl", profile,
             ShaderFlags.OptimizationLevel3, out Blob blob, out Blob errors);
         try
         {
