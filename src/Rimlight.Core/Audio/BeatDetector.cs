@@ -12,34 +12,47 @@ internal sealed class BeatDetector
     // heavy-tailed), while doc 03 §5 requires no beats on constant white noise. A beat must also stand out from
     // the recent *median* flux: flux > median × MedianOnsetRatio. Kicks and note onsets sit far above the median
     // (×16 under heavy noise, ×hundreds in music) because they are sparse, while white noise peaks around ×7.4
-    // over 5 minutes. Sensitivity relaxes the ratio toward 1 the same way it relaxes k.
+    // over 5 minutes.
     internal const float MedianOnsetRatio = 10f;
 
     // The adaptive threshold needs some history before it means anything (a quarter of FluxHistorySeconds).
     private const float WarmUpFraction = 0.25f;
 
-    private const int MaxHistory = 1024;   // 1 s at up to ~1 kHz frame rates
-    private const int IntervalCount = 16;  // beat intervals kept for the BPM median
+    private const int MaxHistory = 1024;         // ring of per-step flux values; ≥ 4 s for render loops up to 240 fps
+    private const int IntervalCount = 16;        // beat intervals kept for the BPM median
     private const float MaxIntervalSeconds = 2f; // longer gaps (< 30 BPM) are not tempo
+    private const float StaleBpmSeconds = 4f;    // no beat for this long: the tempo is unknown again
 
     private readonly float[] previous;
     private readonly float[] fluxValues = new float[MaxHistory];
     private readonly float[] fluxDurations = new float[MaxHistory];
-    private readonly float[] sortedFlux = new float[MaxHistory];
+    private readonly float[] selection = new float[MaxHistory];
     private readonly float[] intervals = new float[IntervalCount];
-    private readonly float[] scratch = new float[IntervalCount];
-    private int fluxHead, fluxCount, intervalHead, intervalCount;
-    private bool hasPrevious, hasBeat;
-    private float sinceBeat, lastThreshold;
+    private readonly float[] sortedIntervals = new float[IntervalCount];
+    private int fluxHead, fluxCount, intervalHead, intervalCount, seededStart, seededEnd;
+    private bool hasBeat;
+    private float sinceBeat, sinceFlux, lastThreshold;
 
     public BeatDetector(int spectrumLength) => previous = new float[spectrumLength];
 
     public float EstimatedBpm { get; private set; }
 
-    // spectrumChanged: false when no new samples arrived; such frames carry no flux information.
+    // Sensitivity relaxes both beat criteria. Doc 03 says it "scales the multiplier 1.5 inversely"; a plain 1/s makes
+    // k = 6 at Sensitivity 0.25, which is above typical kick flux once kicks are 5–7 % of frames, i.e. beats off.
+    // 1/√s keeps the same direction with endpoints that still work: k = 3 at 0.25, 1.06 at 2.
+    internal static float SensitivityScale(float sensitivity) => 1 / MathF.Sqrt(sensitivity);
+
+    // spectrumChanged: false when no new samples arrived; such frames carry no flux information, but their time
+    // still counts toward the history window, the refractory period and BPM staleness.
     public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning)
     {
         sinceBeat += dtSeconds;
+        sinceFlux += dtSeconds;
+        if (hasBeat && sinceBeat > StaleBpmSeconds)
+        {
+            intervalHead = intervalCount = 0;
+            EstimatedBpm = 0;
+        }
         if (!spectrumChanged) return new BeatResult(false, 0, lastThreshold);
 
         float binHz = (float)sampleRate / windowSize;
@@ -50,16 +63,20 @@ internal sealed class BeatDetector
         for (int k = start; k < end; k++)
         {
             float magnitude = magnitudes[k] * scale;
-            if (hasPrevious) flux += MathF.Max(0, magnitude - previous[k]);
+            // Bins that just entered the band (first frame, or live-tuned band edges) only seed their history:
+            // their whole magnitude is not an onset.
+            if (k >= seededStart && k < seededEnd) flux += MathF.Max(0, magnitude - previous[k]);
             previous[k] = magnitude;
         }
-        if (!hasPrevious)
-        {
-            hasPrevious = true;
-            return new BeatResult(false, 0, lastThreshold);
-        }
+        bool seeded = seededEnd > seededStart;
+        seededStart = start;
+        seededEnd = end;
+        // A seed-only update adds no history entry; its time goes to the next one.
+        if (!seeded) return new BeatResult(false, 0, lastThreshold);
+        float entryDuration = sinceFlux;
+        sinceFlux = 0;
 
-        // Statistics over the flux history covering the last FluxHistorySeconds (current frame excluded).
+        // Statistics over the flux history covering the last FluxHistorySeconds (current step excluded).
         float sum = 0, sumSquares = 0, covered = 0;
         int used = 0;
         for (int i = 0; i < fluxCount && covered < tuning.FluxHistorySeconds; i++)
@@ -72,20 +89,23 @@ internal sealed class BeatDetector
             used++;
         }
 
-        float sensitivity = Math.Clamp(tuning.Sensitivity, 0.25f, 2f);
+        float relax = SensitivityScale(tuning.Sensitivity);
         float mean = used > 0 ? sum / used : 0;
         float stdDev = used > 1 ? MathF.Sqrt(MathF.Max(0, sumSquares / used - mean * mean)) : 0;
-        float threshold = mean + tuning.FluxThresholdMultiplier / sensitivity * stdDev;
-        float onsetFloor = Median(used) * (1 + (MedianOnsetRatio - 1) / sensitivity);
-        lastThreshold = MathF.Max(threshold, onsetFloor);
+        // The effective threshold, as the debug visualizer plots it: the larger of doc 03's mean + k·σ and the
+        // median onset guard. Quickselect keeps the median cheap (≈ 60 values per step at the defaults).
+        lastThreshold = MathF.Max(
+            mean + tuning.FluxThresholdMultiplier * relax * stdDev,
+            Median(used) * (1 + (MedianOnsetRatio - 1) * relax));
 
-        bool isBeat = covered >= tuning.FluxHistorySeconds * WarmUpFraction
+        bool warm = covered >= tuning.FluxHistorySeconds * WarmUpFraction || fluxCount == MaxHistory;
+        bool isBeat = warm
             && flux > lastThreshold
             && flux > tuning.MinFlux
             && (!hasBeat || sinceBeat >= tuning.BeatRefractorySeconds);
 
         fluxValues[fluxHead] = flux;
-        fluxDurations[fluxHead] = dtSeconds;
+        fluxDurations[fluxHead] = entryDuration;
         fluxHead = (fluxHead + 1) % MaxHistory;
         fluxCount = Math.Min(fluxCount + 1, MaxHistory);
 
@@ -98,24 +118,64 @@ internal sealed class BeatDetector
         return new BeatResult(isBeat, flux, lastThreshold);
     }
 
+    // After a render stall: the next spectrum only seeds the comparison and the flux statistics warm up again.
+    // The tempo estimate is kept (it goes stale on its own).
+    public void Restart()
+    {
+        fluxHead = fluxCount = seededStart = seededEnd = 0;
+        sinceFlux = 0;
+    }
+
     public void Reset()
     {
         Array.Clear(previous);
-        fluxHead = fluxCount = intervalHead = intervalCount = 0;
-        hasPrevious = hasBeat = false;
-        sinceBeat = lastThreshold = 0;
+        fluxHead = fluxCount = intervalHead = intervalCount = seededStart = seededEnd = 0;
+        hasBeat = false;
+        sinceBeat = sinceFlux = lastThreshold = 0;
         EstimatedBpm = 0;
     }
 
-    // Median of the newest `count` flux values, sorted in a preallocated scratch buffer.
+    // Median of the newest `count` flux values by quickselect in a preallocated buffer (no sort, no allocation).
     private float Median(int count)
     {
         if (count == 0) return 0;
-        Span<float> values = sortedFlux.AsSpan(0, count);
+        Span<float> values = selection.AsSpan(0, count);
         for (int i = 0; i < count; i++) values[i] = fluxValues[(fluxHead - 1 - i + MaxHistory) % MaxHistory];
-        values.Sort();
-        return count % 2 == 1 ? values[count / 2] : 0.5f * (values[count / 2 - 1] + values[count / 2]);
+        float upper = Select(values, count / 2);
+        if (count % 2 == 1) return upper;
+        // After selection everything left of count/2 is ≤ upper; the lower middle is the largest of those.
+        float lower = values[0];
+        for (int i = 1; i < count / 2; i++) lower = MathF.Max(lower, values[i]);
+        return 0.5f * (lower + upper);
     }
+
+    // Hoare quickselect: afterwards values[k] is the k-th smallest and everything before it is ≤ it.
+    internal static float Select(Span<float> values, int k)
+    {
+        int left = 0, right = values.Length - 1;
+        while (left < right)
+        {
+            float pivot = MedianOfThree(values[left], values[(left + right) / 2], values[right]);
+            int i = left, j = right;
+            while (i <= j)
+            {
+                while (values[i] < pivot) i++;
+                while (values[j] > pivot) j--;
+                if (i <= j)
+                {
+                    (values[i], values[j]) = (values[j], values[i]);
+                    i++;
+                    j--;
+                }
+            }
+            if (k <= j) right = j;
+            else if (k >= i) left = i;
+            else break;
+        }
+        return values[k];
+    }
+
+    private static float MedianOfThree(float a, float b, float c) => MathF.Max(MathF.Min(a, b), MathF.Min(MathF.Max(a, b), c));
 
     // Tempo from the median of recent beat intervals (doc 03 §4), without allocating.
     private void AddInterval(float seconds)
@@ -125,9 +185,15 @@ internal sealed class BeatDetector
         intervalCount = Math.Min(intervalCount + 1, IntervalCount);
         if (intervalCount < 3) return;
 
-        Span<float> sorted = scratch.AsSpan(0, intervalCount);
-        intervals.AsSpan(0, intervalCount).CopyTo(sorted);
-        sorted.Sort();
+        // Insertion sort of at most 16 values.
+        Span<float> sorted = sortedIntervals.AsSpan(0, intervalCount);
+        for (int i = 0; i < intervalCount; i++)
+        {
+            float value = intervals[i];
+            int j = i - 1;
+            for (; j >= 0 && sorted[j] > value; j--) sorted[j + 1] = sorted[j];
+            sorted[j + 1] = value;
+        }
         float median = intervalCount % 2 == 1
             ? sorted[intervalCount / 2]
             : 0.5f * (sorted[intervalCount / 2 - 1] + sorted[intervalCount / 2]);

@@ -32,9 +32,7 @@ internal sealed class SilenceDetector
         return IsSilent;
     }
 
-    public void Reset()
-    {
-        IsSilent = false;
-        belowSeconds = 0;
-    }
+    // Device changes reset the analyzer while nothing may be playing: keep the current IsSilent (so a hidden glow
+    // doesn't flash on for 2 s) and only restart the timer. The exit hysteresis still clears it on real audio.
+    public void Reset() => belowSeconds = 0;
 }

@@ -2,8 +2,7 @@ namespace Rimlight.Core.Audio;
 
 internal readonly record struct AmplitudeFeatures(float Level, float Bass);
 
-// C1 building block, deliberately not IAudioAnalyzer: C2 adds flux, beats,
-// silence and diagnostics before replacing CoreFactory's FakeAnalyzer.
+// C1 building block for Level and Bass. AudioAnalyzer (C2) wraps it with beats, silence and diagnostics.
 // One instance belongs to one render thread. All storage is allocated up front.
 internal sealed class AudioFrontEnd
 {

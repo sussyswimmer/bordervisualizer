@@ -52,24 +52,49 @@ internal static class SyntheticAudio
         return samples;
     }
 
-    // Feeds a buffer through an analyzer in render-frame-sized chunks and returns beat times (seconds).
-    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4)
+    // Feeds a buffer through an analyzer like the render loop does and returns beat times (seconds, frame end).
+    // Frame times jitter by ±jitter. Audio arrives continuously, or in whole packets of packetSeconds (WASAPI
+    // delivers 10–20 ms packets; Bluetooth and some drivers deliver larger ones), so frames can be empty.
+    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0)
     {
         var random = new Random(seed);
         var beats = new List<float>();
+        int packet = packetSeconds > 0 ? Math.Max(1, (int)MathF.Round(packetSeconds * sampleRate)) : 1;
         int position = 0;
-        float time = 0, previousBeat = 0;
-        while (position < samples.Length)
+        double time = 0, end = samples.Length / (double)sampleRate;
+        float previousBeat = 0;
+        while (time < end)
         {
             float dt = 1 / fps * (1 + jitter * (float)(random.NextDouble() * 2 - 1));
-            int count = Math.Min(samples.Length - position, (int)MathF.Round(dt * sampleRate));
+            time += dt;
+            long arrived = Math.Min(samples.Length, (long)(time * sampleRate) / packet * packet);
+            int count = (int)Math.Max(0, arrived - position);
             var features = analyzer.Process(samples.AsSpan(position, count), sampleRate, dt);
             position += count;
-            time += dt;
-            if (features.Beat >= 0.999f && previousBeat < 0.999f) beats.Add(time);
+            if (features.Beat >= 0.999f && previousBeat < 0.999f) beats.Add((float)time);
             previousBeat = features.Beat;
         }
         return beats;
+    }
+
+    // Fraction of the kicks at or after skipSeconds that were followed by a detected beat within maxDelay.
+    public static float HitRate(IReadOnlyList<float> beats, float bpm, float seconds, float skipSeconds, float maxDelay = 0.1f)
+    {
+        float interval = 60f / bpm;
+        int kicks = 0, hits = 0;
+        for (float kick = MathF.Ceiling(skipSeconds / interval) * interval; kick + maxDelay < seconds; kick += interval)
+        {
+            kicks++;
+            if (beats.Any(t => t >= kick && t <= kick + maxDelay)) hits++;
+        }
+        return kicks == 0 ? 0 : hits / (float)kicks;
+    }
+
+    // Beats at or after skipSeconds that don't follow a kick within maxDelay.
+    public static int FalseBeats(IReadOnlyList<float> beats, float bpm, float skipSeconds, float maxDelay = 0.1f)
+    {
+        float interval = 60f / bpm;
+        return beats.Count(t => t >= skipSeconds && (t % interval) > maxDelay);
     }
 
     public static float BpmFromBeats(IReadOnlyList<float> beats, float skipSeconds)
