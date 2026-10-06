@@ -125,6 +125,10 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(2, Cli(wav, "--fsp", "30").Code);
         Assert.Equal(2, Cli(wav, "--fps", "0").Code);
         Assert.Equal(2, Cli(wav, "--range", "5:2").Code);
+        (code, _, error) = Cli(wav, "--range", "30:45", "--out", directory); // x.wav is 1 s long
+        Assert.Equal(2, code);
+        Assert.Contains("--range starts at 30 s but x.wav is only 1.00 s long.", error);
+        Assert.False(File.Exists(Path.Combine(directory, "x.png")));
         Assert.Equal(2, Cli().Code);
         Assert.Equal(0, Cli("--help").Code);
     }

@@ -116,6 +116,8 @@ internal static class WavAnalyzeCli
 
         WavAudio audio = WavReader.ReadMono(path);
         if (audio.Mono.Length == 0) throw new InvalidDataException($"{path} has no audio frames.");
+        if (range is { } r && r.From >= audio.Info.Seconds) // the plot would clamp to an empty sliver past the end
+            throw new UsageException($"--range starts at {r.From.ToString("0.###", C)} s but {Path.GetFileName(path)} is only {audio.Info.Seconds.ToString("F2", C)} s long.");
         AnalysisResult result = OfflineAnalysis.Run(audio.Mono, audio.Info.SampleRate, feed, tuning);
 
         string name = Path.GetFileNameWithoutExtension(path);

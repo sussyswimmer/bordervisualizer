@@ -74,7 +74,7 @@
   - `tools/wav-analyze` holds the CLI and the SkiaSharp plot. `src/Rimlight.Bench` is the console.
   - All three are in `Rimlight.sln` (a new `tools` folder) and `Rimlight.Core.slnf` (forward-slash style kept). The tests are in `src/Rimlight.Tests/Tools`.
   - `tools/Directory.Build.props` imports the `src` props (H-010 item 5).
-  - The path is `tools/wav-analyze` (doc 09), not AGENTS.md's `tools/WavAnalyze`. AGENTS.md's `--plot out.png` works.
+  - The path is `tools/wav-analyze` (doc 09). AGENTS.md said `tools/WavAnalyze`, so its command now uses the real path. Its `--plot out.png` works.
 - **wav-analyze, usage** (`--help` lists every option):
   ```bash
   dotnet run -c Release --project tools/wav-analyze -- song.wav [--out dir] [--fps 60] [--jitter 0.2] [--packet-ms 10] [--tuning tuned.json] [--range 30:45]
@@ -85,6 +85,7 @@
   - **Analyze:** prints the beat times and the tempo, then writes `<name>.csv` and `<name>.png`.
     - The CSV has one row per render frame: `time,level,bass,beat,isSilent,flux,threshold,bpm`.
     - The PNG has four panels on one time axis: Level+Bass, the Beat pulse, flux against the threshold with the detected beats, and the tempo estimate. `IsSilent` is shaded.
+    - `--range` is clamped to the audio, but a range that starts at or past the end exits with code 2, because the plot would be empty.
   - **Input:** 8/16/24/32-bit PCM, 32/64-bit float, `WAVE_FORMAT_EXTENSIBLE` and RF64, at any rate and channel count (averaged to mono).
 - **Tuning JSON:** this is the format of K8's "Copy params as JSON" (H-011).
   - It is one flat object of `AudioTuning` property names, e.g. `{ "Sensitivity": 1.25, "FluxThresholdMultiplier": 1.8 }`. Any subset works, and the rest keep their defaults.
@@ -130,14 +131,14 @@
 
     | Case | Kicks found | False beats | Tempo | Analyzer |
     |---|---|---|---|---|
-    | 120 BPM, 60 fps ±20 % | 56/56 | 0 | 120.1 | 120.2 |
-    | 128 BPM full mix, 44.1 kHz, 144 fps, 10 ms packets | 59/59 | 0 | 127.7 | 127.7 |
+    | 120 BPM, 60 fps ±20 % | 56/56 | 0 | 120.0 | 120.2 |
+    | 128 BPM full mix, 44.1 kHz, 144 fps, 10 ms packets | 59/59 | 0 | 128.0 | 127.7 |
     | 120 BPM full mix at −40 dB, 30 fps | 56/56 | 0 | 120.0 | 119.8 |
-    | 174 BPM, 96 kHz, 20 ms packets | 81/81 | 0 | 174.6 | 175.1 |
+    | 174 BPM, 96 kHz, 20 ms packets | 81/81 | 0 | 174.1 | 175.1 |
 
     White noise alone gave 0 beats. The median kick-to-beat latency was 21–32 ms.
   - End-to-end test: generated 120 BPM, 20 s, written as a 16-bit stereo WAV and read back, at 60 fps ±20 %.
-    - Tempo 120.2; the analyzer read 119.95 BPM.
+    - Tempo 120.0; the analyzer read 119.95 BPM.
     - 39 beats in total (the kick at 0 s falls inside the 0.25 s warm-up), and 36/36 kicks after 2 s with 0 false beats.
     - Median latency 21.5 ms.
   - ffmpeg-encoded s16, s24 6-ch, s32, f32 4-ch, f64 and u8 files all decode, and they give identical beats.
