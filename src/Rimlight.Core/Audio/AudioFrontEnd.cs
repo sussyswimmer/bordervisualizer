@@ -26,6 +26,9 @@ internal sealed class AudioFrontEnd
 
     public ReadOnlySpan<float> Spectrum => spectrum.Magnitudes;
 
+    // Time-domain RMS of the current analysis window.
+    public float WindowRms => spectrum.WindowRms;
+
     // Live tuning (doc 03 §4). WindowSize is fixed per instance; the analyzer rebuilds the front end to change it.
     public AudioTuning Tuning
     {

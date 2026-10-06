@@ -144,14 +144,14 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
             float fillDt = secondsPerSample * (skipped + fill);
             amplitude = frontEnd.Process(samples[..fill], analysisRate, fillDt);
             beats.Restart();
-            threshold = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning).Threshold;
+            threshold = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning, frontEnd.WindowRms).Threshold;
             pendingBeatSamples = 0;
             start = fill;
         }
         if (samples.IsEmpty)
         {
             amplitude = frontEnd.Process(samples, analysisRate, dt);
-            threshold = beats.Update(frontEnd.Spectrum, idleZeros, tuning.WindowSize, analysisRate, dt, tuning).Threshold;
+            threshold = beats.Update(frontEnd.Spectrum, idleZeros, tuning.WindowSize, analysisRate, dt, tuning, frontEnd.WindowRms).Threshold;
         }
         else
         {
@@ -165,7 +165,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
                 pendingBeatSamples += end - start;
                 bool analyze = pendingBeatSamples >= minBeatStep;
                 if (analyze) pendingBeatSamples = 0;
-                BeatResult result = beats.Update(frontEnd.Spectrum, analyze, tuning.WindowSize, analysisRate, stepDt, tuning);
+                BeatResult result = beats.Update(frontEnd.Spectrum, analyze, tuning.WindowSize, analysisRate, stepDt, tuning, frontEnd.WindowRms);
                 if (result.IsBeat) beatsFired++;
                 flux = MathF.Max(flux, result.Flux);
                 threshold = result.Threshold;

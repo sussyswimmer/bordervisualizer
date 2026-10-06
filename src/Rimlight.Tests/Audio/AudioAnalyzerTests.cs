@@ -151,19 +151,42 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         Assert.True(rates[^1] >= 0.95f);
     }
 
-    [Fact]
-    public void QuietMusicNeedsALowerMinFluxThanTheProvisionalDefault()
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(-20f)]
+    [InlineData(-40f)]
+    [InlineData(-60f)]
+    public void BeatsAreDetectedAtAnyPlaybackVolume(float db)
     {
-        // H-005: −40 dB music (a low in-app player volume) has kick flux below the provisional MinFlux = 0.01,
-        // so no beats fire. 0.0003 detects it and stays quiet on −70 and −50 dBFS noise.
-        float[] quiet = SyntheticAudio.MusicLike(48000, 20, 124).Select(x => x * 0.01f).ToArray();
-        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(), quiet, 48000, jitter: 0.2f));
+        // An absolute MinFlux of 0.01 dropped every beat at −40 dB (a player's own volume at about 10 %). MinFlux is
+        // relative to the window's RMS, so the same music gives the same beats at any level above near-silence.
+        float gain = MathF.Pow(10, db / 20);
+        float[] music = SyntheticAudio.MusicLike(48000, 20, 124).Select(x => x * gain).ToArray();
+        var analyzer = new AudioAnalyzer();
+        var beats = SyntheticAudio.Run(analyzer, music, 48000, jitter: 0.2f);
+        Assert.True(SyntheticAudio.HitRate(beats, 124, 20, 2) >= 0.95f, $"{SyntheticAudio.HitRate(beats, 124, 20, 2):P0}");
+        Assert.Equal(0, SyntheticAudio.FalseBeats(beats, 124, 2));
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 122, 126);
+    }
 
-        var tuning = new AudioTuning { MinFlux = 0.0003f };
-        var beats = SyntheticAudio.Run(new AudioAnalyzer(tuning), quiet, 48000, jitter: 0.2f);
-        Assert.True(SyntheticAudio.HitRate(beats, 124, 20, 2) >= 0.95f);
-        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(tuning), SyntheticAudio.WhiteNoise(48000, 60, 0.0005f, 7), 48000, jitter: 0.2f));
-        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(tuning), SyntheticAudio.WhiteNoise(48000, 60, 0.005f, 8), 48000, jitter: 0.2f));
+    [Fact]
+    public void MinFluxIsRelativeToTheLevelAndNearSilenceFiresNothing()
+    {
+        // A high MinFlux trims the same weak onsets at 0 and −40 dB.
+        float[] weak = SyntheticAudio.KickTrack(48000, 30, 120, 0.2f, 0.5f, seed: 21);
+        float Rate(float minFlux, float gain) => SyntheticAudio.HitRate(
+            SyntheticAudio.Run(new AudioAnalyzer(new AudioTuning { MinFlux = minFlux, Sensitivity = 2 }), weak.Select(x => x * gain).ToArray(), 48000, jitter: 0.2f), 120, 30, 2);
+        Assert.True(Rate(0.01f, 1) >= 0.95f);
+        float loud = Rate(0.6f, 1), quiet = Rate(0.6f, 0.01f);
+        Assert.True(loud <= 0.5f, $"{loud:P0}");
+        Assert.InRange(quiet, loud - 0.05f, loud + 0.05f);
+
+        // At or below the near-silence level (−80 dBFS window RMS) no beat fires, not even from clear kicks.
+        float[] faintKicks = SyntheticAudio.KickTrack(48000, 10, 120, 0.8f, 0.2f).Select(x => x * 3e-5f).ToArray();
+        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(), faintKicks, 48000));
+        // Noise (hiss, dither) fires nothing at −70 or −95 dBFS.
+        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(), SyntheticAudio.WhiteNoise(48000, 60, 0.00055f, 7), 48000, jitter: 0.2f));
+        Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(), SyntheticAudio.WhiteNoise(48000, 60, 0.00003f, 8), 48000, jitter: 0.2f));
     }
 
     [Fact]

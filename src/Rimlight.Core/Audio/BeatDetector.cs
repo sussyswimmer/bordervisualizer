@@ -4,7 +4,12 @@ internal readonly record struct BeatResult(bool IsBeat, float Flux, float Thresh
 
 // Spectral-flux beat detection on the bass band (doc 03 §2). All storage is allocated up front.
 // Flux is measured in amplitude units: magnitudes are scaled by 4/N, so a full-scale sine centered
-// on a bin reads 1.0 (Hann coherent gain 0.5 × one-sided N/2). MinFlux is in the same units.
+// on a bin reads 1.0 (Hann coherent gain 0.5 × one-sided N/2).
+//
+// Spec clarification: doc 03's minFlux exists "to avoid noise during silence", and an absolute floor also drops
+// every beat of quiet playback (−40 dB in-app volume puts kick flux below 0.01), against PRD's rule that volume must
+// not change the light. So MinFlux is relative to the level: a beat needs flux > MinFlux × the window's RMS, and no
+// beat fires while that RMS is at or below the near-silence level (SilenceThresholdDb − 20 dB, as for auto-gain).
 internal sealed class BeatDetector
 {
     // Spec clarification (doc 03 leaves this open): with only mean + k·stddev, stationary noise crosses the
@@ -44,7 +49,8 @@ internal sealed class BeatDetector
 
     // spectrumChanged: false when no new samples arrived; such frames carry no flux information, but their time
     // still counts toward the history window, the refractory period and BPM staleness.
-    public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning)
+    // windowRms: time-domain RMS of the window the magnitudes come from.
+    public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning, float windowRms)
     {
         sinceBeat += dtSeconds;
         sinceFlux += dtSeconds;
@@ -90,16 +96,16 @@ internal sealed class BeatDetector
         float relax = SensitivityScale(tuning.Sensitivity);
         float mean = used > 0 ? sum / used : 0;
         float stdDev = used > 1 ? MathF.Sqrt(MathF.Max(0, sumSquares / used - mean * mean)) : 0;
-        // The effective threshold, as the debug visualizer plots it: the larger of doc 03's mean + k·σ and the
-        // median onset guard. Quickselect keeps the median cheap (≈ 60 values per step at the defaults).
+        // The effective threshold, as the debug visualizer plots it: the largest of doc 03's mean + k·σ, the median
+        // onset guard and the level-relative MinFlux. Quickselect keeps the median cheap (≈ 60 values per step).
         lastThreshold = MathF.Max(
-            mean + tuning.FluxThresholdMultiplier * relax * stdDev,
-            Median(used) * (1 + (MedianOnsetRatio - 1) * relax));
+            MathF.Max(mean + tuning.FluxThresholdMultiplier * relax * stdDev, Median(used) * (1 + (MedianOnsetRatio - 1) * relax)),
+            tuning.MinFlux * windowRms);
 
         bool warm = covered >= tuning.FluxHistorySeconds * WarmUpFraction || fluxCount == MaxHistory;
         bool isBeat = warm
             && flux > lastThreshold
-            && flux > tuning.MinFlux
+            && windowRms > AudioFrontEnd.HoldRms(tuning)
             && (!hasBeat || sinceBeat >= tuning.BeatRefractorySeconds);
 
         fluxValues[fluxHead] = flux;

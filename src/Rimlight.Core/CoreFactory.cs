@@ -13,6 +13,8 @@ public static class CoreFactory
     /// <para>Call every member from the render thread. <see cref="IAudioAnalyzer.Process"/> takes any span length,
     /// including empty spans while no packets arrive, and never allocates. After
     /// <see cref="AudioTuning.NoPacketTimeoutSeconds"/> without packets the gap counts as digital silence.</para>
+    /// <para><see cref="AudioTuning.MinFlux"/> is relative to the analysis window's RMS, so beats don't depend on playback
+    /// volume; below the near-silence level (<see cref="AudioTuning.SilenceThresholdDb"/> − 20 dB) no beat fires.</para>
     /// <para>Sensitivity is applied here once: it scales <see cref="AudioFeatures.Level"/> and lowers the beat threshold.
     /// The light engine must not apply it again. Setting <see cref="IAudioAnalyzer.Tuning"/> validates the value
     /// (invalid tuning throws and keeps the previous one); a <see cref="AudioTuning.WindowSize"/> change allocates,
