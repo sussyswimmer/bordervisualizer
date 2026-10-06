@@ -1,23 +1,28 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using H.NotifyIcon;
+using Rimlight.App.Overlay;
 using Rimlight.Core;
 using Rimlight.Platform;
+using Rimlight.Platform.Media;
 using Rimlight.Platform.Overlay;
 
 namespace Rimlight.App;
 
 /// <summary>
-/// Owns the notification-area icon: placeholder icon, tooltip, "Glow on", "Mode" and Quit, plus a test submenu in
-/// Debug builds. The full menu (doc 06 §2) arrives in K6.
+/// Owns the notification-area icon: placeholder icon, the now-playing tooltip, "Glow on", "Mode", "Colors" and Quit,
+/// plus a test submenu in Debug builds. The full menu (doc 06 §2) arrives in K6. Use it on the UI thread only.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
     private readonly AppController app;
     private readonly TaskbarIcon icon;
+    private readonly string toolTipSuffix;
     private readonly MenuItem glowOn;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
+    private readonly (MenuItem Item, ColorMode Mode)[] colorModes;
 #if DEBUG
     private readonly DebugMenu debug;
 #endif
@@ -25,6 +30,8 @@ internal sealed class TrayIconHost : IDisposable
     public TrayIconHost(AppController app)
     {
         this.app = app;
+        // Visible check that the manifest took effect; without Per-Monitor V2 the overlay is misplaced on mixed-DPI setups.
+        toolTipSuffix = DpiAwareness.IsPerMonitorV2() ? "" : " (warning: not Per-Monitor V2 DPI aware)";
         var menu = new ContextMenu();
 
         glowOn = new MenuItem { Header = "Glow on" };
@@ -34,6 +41,10 @@ internal sealed class TrayIconHost : IDisposable
         var mode = new MenuItem { Header = "Mode" };
         modes = [Choice(mode, "Music Sync", AnimationMode.MusicSync), Choice(mode, "Idle Glow", AnimationMode.IdleGlow), Choice(mode, "Off", AnimationMode.Off)];
         menu.Items.Add(mode);
+
+        var colors = new MenuItem { Header = "Colors" };
+        colorModes = [ColorChoice(colors, "From album art", ColorMode.AlbumArt), ColorChoice(colors, "Manual", ColorMode.Manual)];
+        menu.Items.Add(colors);
         menu.Items.Add(new Separator());
 
 #if DEBUG
@@ -52,7 +63,7 @@ internal sealed class TrayIconHost : IDisposable
         {
             // Built here rather than in a static field: the pack: scheme only parses once the WPF Application exists.
             IconSource = new BitmapImage(new Uri("pack://application:,,,/Assets/Rimlight.ico", UriKind.Absolute)),
-            ToolTipText = BuildToolTip(),
+            ToolTipText = TrayToolTip.Build(null, toolTipSuffix),
             ContextMenu = menu,
         };
 
@@ -64,10 +75,34 @@ internal sealed class TrayIconHost : IDisposable
 
     public void Dispose() => icon.Dispose();
 
+    /// <summary>Shows the playing track in the tooltip ("Rimlight — Title · Artist"); otherwise "Waiting for music".</summary>
+    public void SetNowPlaying(NowPlaying? track)
+    {
+        string text = TrayToolTip.Build(track, toolTipSuffix);
+        if (text == icon.ToolTipText) return;
+        try
+        {
+            icon.ToolTipText = text;
+        }
+        catch (InvalidOperationException exception)
+        {
+            // H.NotifyIcon throws when Shell_NotifyIcon refuses the change (Explorer restarting); the next track retries.
+            Trace.WriteLine($"[Tray] Updating the tooltip failed: {exception.Message}");
+        }
+    }
+
     private (MenuItem, AnimationMode) Choice(MenuItem parent, string header, AnimationMode mode)
     {
         var item = new MenuItem { Header = header };
         item.Click += (_, _) => Update(s => s with { Animation = mode });
+        parent.Items.Add(item);
+        return (item, mode);
+    }
+
+    private (MenuItem, ColorMode) ColorChoice(MenuItem parent, string header, ColorMode mode)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => Update(s => s with { ColorMode = mode });
         parent.Items.Add(item);
         return (item, mode);
     }
@@ -80,28 +115,24 @@ internal sealed class TrayIconHost : IDisposable
         Settings current = app.SettingsService.Current;
         glowOn.IsChecked = current.Enabled;
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
+        foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
 #if DEBUG
         debug.Refresh(current);
 #endif
     }
 
-    private static string BuildToolTip()
-    {
-        string text = AppInfo.Name + " — Waiting for music";
-
-        // Visible check that the manifest took effect; without Per-Monitor V2 the overlay is misplaced on mixed-DPI setups.
-        return DpiAwareness.IsPerMonitorV2() ? text : text + " (warning: not Per-Monitor V2 DPI aware)";
-    }
-
 #if DEBUG
-    // "Render test (debug)": the render loop's live status, settings without a settings window yet (K7), and stand-ins
-    // for the system watchers (K5): battery, a global pause and a per-monitor pause.
+    // "Render test (debug)": the render loop's live status, what the media session reader sees, settings without a
+    // settings window yet (K7: When silent, Override album color, FPS cap, On battery), and stand-ins for the system
+    // watchers (K5): battery, a global pause and a per-monitor pause.
     private sealed class DebugMenu
     {
         private readonly AppController app;
         private readonly Action<Func<Settings, Settings>> update;
         private readonly MenuItem status = new() { IsEnabled = false };
+        private readonly MenuItem media = new() { IsEnabled = false };
         private readonly MenuItem hideWhenSilent = new() { Header = "When silent: Hide" };
+        private readonly MenuItem overrideAlbum = new() { Header = "Override album color" };
         private readonly (MenuItem Item, int Cap)[] caps;
         private readonly (MenuItem Item, BatteryBehavior Behavior)[] batteryBehaviors;
         private readonly MenuItem onBattery = new() { Header = "Simulate running on battery" };
@@ -117,6 +148,7 @@ internal sealed class TrayIconHost : IDisposable
             this.update = update;
             Root = new MenuItem { Header = "Render test (debug)" };
             Root.Items.Add(status);
+            Root.Items.Add(media);
             Root.Items.Add(new Separator());
 
             hideWhenSilent.Click += (_, _) => update(s => s with
@@ -124,6 +156,9 @@ internal sealed class TrayIconHost : IDisposable
                 WhenSilent = s.WhenSilent == SilentBehavior.Hide ? SilentBehavior.IdleGlow : SilentBehavior.Hide,
             });
             Root.Items.Add(hideWhenSilent);
+
+            overrideAlbum.Click += (_, _) => update(s => s with { OverrideAlbumColor = !s.OverrideAlbumColor });
+            Root.Items.Add(overrideAlbum);
 
             var fps = new MenuItem { Header = "FPS cap" };
             caps = [Cap(fps, "30", 30), Cap(fps, "60", 60), Cap(fps, "120", 120), Cap(fps, "Native (display refresh)", 0)];
@@ -167,7 +202,9 @@ internal sealed class TrayIconHost : IDisposable
         public void Refresh(Settings current)
         {
             status.Header = app.Overlays is { } overlays ? Describe(overlays.Status) : "The overlay is not running";
+            media.Header = Describe(app.Media);
             hideWhenSilent.IsChecked = current.WhenSilent == SilentBehavior.Hide;
+            overrideAlbum.IsChecked = current.OverrideAlbumColor;
             foreach ((MenuItem item, int cap) in caps) item.IsChecked = current.FpsCap == cap;
             foreach ((MenuItem item, BatteryBehavior behavior) in batteryBehaviors) item.IsChecked = current.OnBattery == behavior;
             onBattery.IsChecked = simulatedBattery;
@@ -180,6 +217,22 @@ internal sealed class TrayIconHost : IDisposable
             "{0}: {1:0} frames/s, {2:0} presents/s, {3} of {4} overlay(s) shown{5}",
             status.Pace, status.FramesPerSecond, status.PresentsPerSecond, status.VisibleOverlays, status.Overlays,
             status.HalfScale ? ", half scale" : "");
+
+        // e.g. "Media: Spotify.exe, playing, art 64×64, album colors #E0503C / #3C78E0". The title stays out of it; the
+        // tooltip shows it.
+        private static string Describe(NowPlayingService? media)
+        {
+            if (media is null) return "Media: not running";
+            if (!media.IsAvailable) return "Media: unavailable (manual colors only)";
+            if (media.Current is not { } track) return "Media: no session (manual colors)";
+            string art = media.Art is { } image ? $"art {image.Width}×{image.Height}" : "no art";
+            string colors = media.AlbumPalette is { } palette
+                ? $"album colors {SrgbHex.Format(palette.Primary)} / {SrgbHex.Format(palette.Secondary)}"
+                : "no album colors (manual colors)";
+            // App IDs contain underscores, which a menu header would take as access keys.
+            string app = (track.SourceApp ?? "unknown app").Replace("_", "__", StringComparison.Ordinal);
+            return $"Media: {app}, {(track.IsPlaying ? "playing" : "not playing")}, {art}, {colors}";
+        }
 
         private (MenuItem, int) Cap(MenuItem parent, string header, int cap)
         {

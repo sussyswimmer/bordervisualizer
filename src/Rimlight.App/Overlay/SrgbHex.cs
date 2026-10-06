@@ -22,6 +22,17 @@ internal static class SrgbHex
         return true;
     }
 
+    /// <summary>Formats linear RGB as "#RRGGBB" in sRGB (doc 05 §2 step 7: hex for the UI).</summary>
+    public static string Format(Rgb linear) =>
+        string.Create(CultureInfo.InvariantCulture, $"#{ToByte(linear.R):X2}{ToByte(linear.G):X2}{ToByte(linear.B):X2}");
+
+    private static byte ToByte(float linear)
+    {
+        float c = float.IsFinite(linear) ? Math.Clamp(linear, 0f, 1f) : 0f;
+        float encoded = c <= 0.0031308f ? c * 12.92f : 1.055f * MathF.Pow(c, 1f / 2.4f) - 0.055f;
+        return (byte)Math.Clamp(MathF.Round(encoded * 255f), 0f, 255f);
+    }
+
     private static float ToLinear(byte channel)
     {
         float c = channel / 255f;
