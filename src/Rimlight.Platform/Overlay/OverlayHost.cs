@@ -215,12 +215,16 @@ public sealed class OverlayHost : IDisposable
 
         while (!stopping)
         {
-            ArmFrameTimer(nextFrame - Stopwatch.GetTimestamp());
-            PInvoke.MsgWaitForMultipleObjectsEx(2, handles, Infinite, QUEUE_STATUS_FLAGS.QS_ALLINPUT,
-                MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
+            // With no overlay (no selected monitor present) nothing can be drawn: only messages (a display change)
+            // and the wake event (settings, stop) end the wait, and the frame cadence starts fresh afterwards.
+            bool idle = overlays.Count == 0;
+            if (!idle) ArmFrameTimer(nextFrame - Stopwatch.GetTimestamp());
+            PInvoke.MsgWaitForMultipleObjectsEx(idle ? 1u : 2u, idle ? handles + 1 : handles, Infinite,
+                QUEUE_STATUS_FLAGS.QS_ALLINPUT, MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
             if (!PumpMessages() || stopping) break;
 
             long now = Stopwatch.GetTimestamp();
+            if (idle) previous = nextFrame = now;
             bool frameDue = now >= nextFrame;
             if (frameDue)
             {
@@ -233,7 +237,7 @@ public sealed class OverlayHost : IDisposable
             {
                 ApplyPendingSettings();
                 if (Interlocked.Exchange(ref deviceLossRequested, 0) != 0) ReleaseGpu("simulated from the tray (debug)");
-                if (!frameDue) continue;
+                if (!frameDue || overlays.Count == 0) continue;
                 float dt = (float)((now - previous) / (double)Stopwatch.Frequency);
                 previous = now;
                 RenderFrame(dt);
@@ -332,7 +336,9 @@ public sealed class OverlayHost : IDisposable
                 else
                 {
                     overlay.Monitor = monitor;
-                    if (!SameRect(overlay.Window.Bounds, bounds)) overlay.Window.Move(bounds);
+                    // Always re-placed: Windows may have moved the window itself (a monitor that dropped out and
+                    // came back within the debounce leaves it on another monitor at an unchanged cached rect).
+                    overlay.Window.Move(bounds);
                     overlay.Window.SetCaptureExclusion(current.HideFromScreenCapture);
                 }
             }
@@ -358,6 +364,8 @@ public sealed class OverlayHost : IDisposable
             }
         }
 
+        // Nothing to show: hold no GPU device; the first frame with an overlay creates it again.
+        if (overlays.Count == 0 && gpu is not null) ReleaseGpu(null);
         if (gpu is not null)
         {
             try
@@ -378,8 +386,6 @@ public sealed class OverlayHost : IDisposable
         MonitorSelection.Custom => settings.CustomMonitorIds.Contains(monitor.StableId, StringComparer.Ordinal),
         _ => true,
     };
-
-    private static bool SameRect(RECT a, RECT b) => a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
 
     // Creates the GPU device and every overlay's surface; on failure, retries after GpuRetryMs.
     private void EnsureGpu()

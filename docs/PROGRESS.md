@@ -108,6 +108,7 @@
   - One overlay per selected monitor (All / PrimaryOnly / Custom by `DISPLAY_DEVICE.DeviceID`), at `rcMonitor` or, with Cover taskbar off, `rcWork`.
   - A hidden top-level helper window receives `WM_DISPLAYCHANGE` and `WM_SETTINGCHANGE(SPI_SETWORKAREA)` (message-only windows don't get broadcasts). Overlays receive `WM_DPICHANGED`.
   - Each of these schedules a rebuild 300 ms later. The rebuild matches overlays by GDI device name, so unchanged overlays don't flicker.
+  - With no overlay (no selected monitor present) the loop stops its frame timer and releases the GPU until a display or settings change brings one back.
   - DIP sizes become pixels at each monitor's `GetDpiForMonitor` effective DPI.
 - **GPU (doc 04 §2):**
   - One D3D11 device (hardware, else WARP) and one DirectComposition device are shared by every overlay.
@@ -121,7 +122,7 @@
   - **Glow → spread (PRD §1):** "0 means a hairline; 100 means about 35% of the shorter screen dimension". Spill is taken as three e-folding distances, with a squared slider so it feels even. The e-folding distance is max(1 DIP, Glow² × 0.35 / 3 × shorter side); the default 0.45 gives about 25 px at 1080p.
   - **Core at thickness 0** draws no line.
   - **sRGB:** the gradient is linear RGB (H-008). The 8-bit swap chain is read by DWM as sRGB-encoded, so the shader encodes before premultiplying.
-  - **Dither** is ±0.5/255 interleaved gradient noise on alpha.
+  - **Dither** is ±0.5/255 interleaved gradient noise, added to all four premultiplied channels so every colour channel gets the full half LSB. Pixels whose alpha is below half a code value return early ("cost almost nothing").
   - **Visibility** multiplies alpha like Intensity (H-008).
 - **Left for later tasks:** FpsCap "native" (0) runs at 60 fps until K3 adds DwmFlush pacing. K3 also adds idle/static throttling, Half render scale and the battery cap. K5 adds fullscreen pause and power/lock watchers. Logging is `Trace` (rebuilds, GPU state) until logging lands. The tray tooltip, settings UI and live settings come in K6/K7.
 - **Verified here (Linux):**
