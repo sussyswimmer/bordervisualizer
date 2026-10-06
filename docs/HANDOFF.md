@@ -118,8 +118,9 @@
 2. **`LightState.Intensity` vs `Visibility`:** `Intensity` excludes `Visibility`. Intensity is brightness times audio/idle shaping (doc 07 Phase 3: `Brightness × (0.35 + 0.65 × Level)`, plus idle breathing). `Visibility` carries every fade: the pause fade (300 ms, doc 04 §4), `Enabled = false`, `Animation = Off`, and silence→Hide (fade out over 1.5 s, back in within 150 ms, doc 01 §2). The renderer multiplies final alpha by both.
 3. **Fake engine before C6 (soft):** `FakeLightEngine` treats Idle Glow like Music Sync, ignores silence/Hide, never drifts `Phase` and has no fades. Maxwell's K6/K7 manual tests will look wrong until C6. If C6 is far off, a small stopgap would help: idle breathing, Hide→Visibility 0 and phase drift of 0.015 cycles/s.
 **Proposed:** Confirm 1–2, or correct them, in C5/C6. 3 is optional.
+**C6 (#11):** Item 2 is implemented as written and is binding: `Intensity` excludes `Visibility`, and Visibility carries pause, `Enabled = false` and `Animation = Off` (300 ms each way) and silence→Hide (1.5 s out, 150 ms back). The semantics are in the `CoreFactory.CreateLightEngine` remarks. Item 3 is obsolete because the real engine replaced the fake. Item 1 stays open for C5.
 ---
-## [OPEN] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
+## [DONE] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
 **Need:** Analyzer-side semantics for C2.
 1. **Sensitivity is applied once, in the analyzer.** Lane B keeps `analyzer.Tuning.Sensitivity` equal to `Settings.Sensitivity`: it sets it at creation and on every settings change, never per frame. The light engine (C6) must therefore *not* apply `Settings.Sensitivity` again.
 2. **`AnalyzerDiagnostics`:**
@@ -127,6 +128,7 @@
    - Bin k sits at `k · sampleRate / WindowSize` Hz.
 3. **Fake engine once the real analyzer lands:** the doc 07 intensity floor (`0.35 + 0.65 × Level`) lives in `FakeAnalyzer` (`Level = 0.35 + 0.65·pulse`), not in `FakeLightEngine` (`Intensity = Brightness × Level`). When C2 swaps `CreateAnalyzer` to the real analyzer, real Level ≈ 0 in quiet passages gives Intensity 0 and a dark glow until C6. Please move the floor into `FakeLightEngine` in the C2 PR, or land C6 right after.
 **Proposed:** Fold these into C2. Reply here or in the C2 PR.
+**Resolved:** Items 1–3 landed in C2 (#7): Sensitivity is applied once in the analyzer, the diagnostics are documented in the `CoreFactory.CreateAnalyzer` remarks, and the fake engine got the floor. C6 (#11) completes item 1 on the engine side: `LightEngine` never reads `Settings.Sensitivity`, and the test `SensitivityIsNotAppliedAgain` guards that. The fake engine is gone.
 ---
 ## [OPEN] H-005 · from: claude-code · to: maxwell · blocking: sync point 2
 **Need:** A decision on how `AudioTuning` defaults get re-tuned. Doc 09 sync point 2 expects Codex to update them from the debug-visualizer JSON, but the values live inside the frozen `src/Rimlight.Core/Contracts/AudioTuning.cs`.
