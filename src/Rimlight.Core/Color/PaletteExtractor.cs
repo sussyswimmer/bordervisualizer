@@ -9,21 +9,27 @@ namespace Rimlight.Core.Color;
 /// sampled on a regular grid (every 2nd, 3rd, … pixel in both directions), so a 512×512 image is used whole and
 /// larger ones cost no more than it.</para>
 /// <para><b>Clusters.</b> k-means with k = <see cref="ClusterCount"/> in Oklab, k-means++ seeded from the fixed
-/// <see cref="Seed"/>, at most <see cref="MaxIterations"/> rounds. Each cluster scores
+/// <see cref="Seed"/>, at most <see cref="MaxIterations"/> rounds. Clusters closer than <see cref="MergeDistance"/>
+/// (Oklab distance between centroids, directly or through a chain of such clusters) are then merged into one group
+/// with the summed population and the population-weighted centroid: k-means splits a textured or shaded area into
+/// several clusters, and the area should score as the one region it is. Each group scores
 /// share^<see cref="PopulationExponent"/> × (<see cref="ChromaBias"/> + chroma) × <see cref="LightnessFitness"/>(L),
-/// where share is the cluster's fraction of the used pixels. Primary is the best score. Secondary is the best score
-/// among clusters at least <see cref="SecondaryMinDistance"/> (Oklab distance) from Primary; without one, Secondary
+/// where share is the group's fraction of the used pixels. Primary is the best score. Secondary is the best score
+/// among groups at least <see cref="SecondaryMinDistance"/> (Oklab distance) from Primary; without one, Secondary
 /// is Primary turned <see cref="DerivedHueShift"/>° in hue and <see cref="DerivedLightnessShift"/> lighter. Both are
 /// then glow-ified (<see cref="Glow"/>).</para>
 /// <para><b>No art</b> (doc 05 §1: a player's generic app icon instead of a cover). The result is null when the
 /// palette is nearly grayscale, meaning the Primary and Secondary sources are both below
 /// <see cref="NoArtMaxChroma"/> chroma, <i>and</i> the image is mostly one flat color, meaning at least
 /// <see cref="MinFlatShare"/> of the used pixels lie within <see cref="FlatTolerance"/> (Oklab distance) of the
-/// largest cluster's centroid. A grayscale photo or gradient is not flat, so it still gives a soft-white palette, and
-/// a colorful flat image is not grayscale, so it still gives its color. An image with no pixel at alpha
-/// <see cref="MinAlpha"/> or above is also no art.</para>
+/// largest k-means cluster's centroid (before merging, so near shades don't pull the flat color off-center). A
+/// grayscale photo or gradient is not flat, so it still gives a soft-white palette, and a colorful flat image is not
+/// grayscale, so it still gives its color. An image with no pixel at alpha <see cref="MinAlpha"/> or above is also
+/// no art.</para>
 /// <para>The same input always gives the same output. The instance holds no state (scratch buffers come from
-/// <see cref="ArrayPool{T}.Shared"/> per call), so concurrent calls are safe.</para>
+/// <see cref="ArrayPool{T}.Shared"/> per call), so concurrent calls are safe. The pool keeps returned buffers per
+/// thread, so the first call on each thread allocates its scratch (about 85 KB at 64 × 64) and later calls on that
+/// thread allocate only the small result arrays.</para>
 /// </remarks>
 internal sealed class PaletteExtractor : IPaletteExtractor
 {
@@ -48,7 +54,10 @@ internal sealed class PaletteExtractor : IPaletteExtractor
     /// <summary>Added to chroma in the score, so neutral clusters still score by size and lightness.</summary>
     public const float ChromaBias = 0.25f;
 
-    /// <summary>The smallest Oklab distance from Primary for a cluster to become Secondary.</summary>
+    /// <summary>k-means clusters whose centroids are closer than this (Oklab distance) are merged before scoring.</summary>
+    public const float MergeDistance = 0.05f;
+
+    /// <summary>The smallest Oklab distance from Primary for a group to become Secondary.</summary>
     public const float SecondaryMinDistance = 0.12f;
 
     /// <summary>The hue rotation, in degrees, of a derived Secondary.</summary>
@@ -191,43 +200,104 @@ internal sealed class PaletteExtractor : IPaletteExtractor
 
     private static PaletteAnalysis Analyze(ReadOnlySpan<Oklab> points, Span<int> assignments, Span<float> scratch)
     {
-        var centers = new Oklab[ClusterCount];
-        var populations = new int[ClusterCount];
-        int clusters = OklabKMeans.Cluster(points, ClusterCount, MaxIterations, Seed, centers, populations, assignments, scratch);
-        Array.Resize(ref centers, clusters);
-        Array.Resize(ref populations, clusters);
+        var clusterCenters = new Oklab[ClusterCount];
+        var clusterPopulations = new int[ClusterCount];
+        int clusters = OklabKMeans.Cluster(points, ClusterCount, MaxIterations, Seed, clusterCenters, clusterPopulations, assignments, scratch);
+        Array.Resize(ref clusterCenters, clusters);
+        Array.Resize(ref clusterPopulations, clusters);
+        var clusterShares = new float[clusters];
+        for (int c = 0; c < clusters; c++) clusterShares[c] = clusterPopulations[c] / (float)points.Length;
 
-        var shares = new float[clusters];
-        var scores = new float[clusters];
-        int primary = -1;
+        // Score the merged groups, not the raw clusters: a textured region split four ways would otherwise lose to a
+        // flat minority (doc 05 §4's 70/30 case with any grain on the blue).
+        Span<int> groupOf = stackalloc int[clusters];
+        int groups = GroupNearClusters(clusterCenters, clusterPopulations, groupOf);
+        Span<double> sums = stackalloc double[groups * 3];
+        Span<int> populations = stackalloc int[groups];
+        sums.Clear();
+        populations.Clear();
         for (int c = 0; c < clusters; c++)
         {
-            shares[c] = populations[c] / (float)points.Length;
-            scores[c] = populations[c] > 0 ? Score(shares[c], centers[c]) : float.NegativeInfinity;
-            if (primary < 0 || scores[c] > scores[primary]) primary = c;
+            int g = groupOf[c];
+            if (g < 0) continue;
+            int n = clusterPopulations[c];
+            sums[g * 3] += (double)clusterCenters[c].L * n;
+            sums[g * 3 + 1] += (double)clusterCenters[c].A * n;
+            sums[g * 3 + 2] += (double)clusterCenters[c].B * n;
+            populations[g] += n;
+        }
+
+        var centers = new Oklab[groups];
+        var shares = new float[groups];
+        var scores = new float[groups];
+        int primary = 0;
+        for (int g = 0; g < groups; g++)
+        {
+            double n = populations[g];
+            centers[g] = new Oklab((float)(sums[g * 3] / n), (float)(sums[g * 3 + 1] / n), (float)(sums[g * 3 + 2] / n));
+            shares[g] = populations[g] / (float)points.Length;
+            scores[g] = Score(shares[g], centers[g]);
+            if (scores[g] > scores[primary]) primary = g;
         }
 
         int secondary = -1;
-        for (int c = 0; c < clusters; c++)
+        for (int g = 0; g < groups; g++)
         {
-            if (c == primary || populations[c] == 0) continue;
-            if (Oklab.Distance(centers[c], centers[primary]) < SecondaryMinDistance) continue;
-            if (secondary < 0 || scores[c] > scores[secondary]) secondary = c;
+            if (g == primary) continue;
+            if (Oklab.Distance(centers[g], centers[primary]) < SecondaryMinDistance) continue;
+            if (secondary < 0 || scores[g] > scores[secondary]) secondary = g;
         }
 
         Oklab primarySource = centers[primary];
         Oklab secondarySource = secondary >= 0 ? centers[secondary] : DeriveSecondary(primarySource);
 
         int dominant = 0;
-        for (int c = 1; c < clusters; c++) if (populations[c] > populations[dominant]) dominant = c;
+        for (int c = 1; c < clusters; c++) if (clusterPopulations[c] > clusterPopulations[dominant]) dominant = c;
         float toleranceSquared = FlatTolerance * FlatTolerance;
         int flat = 0;
-        foreach (Oklab point in points) if (Oklab.DistanceSquared(point, centers[dominant]) <= toleranceSquared) flat++;
+        foreach (Oklab point in points) if (Oklab.DistanceSquared(point, clusterCenters[dominant]) <= toleranceSquared) flat++;
         float flatShare = flat / (float)points.Length;
 
         bool grayscale = primarySource.Chroma < NoArtMaxChroma && secondarySource.Chroma < NoArtMaxChroma;
         return new PaletteAnalysis(centers, shares, scores, primary, secondary, primarySource, secondarySource,
-            flatShare, grayscale && flatShare >= MinFlatShare, points.Length);
+            flatShare, grayscale && flatShare >= MinFlatShare, points.Length, clusterCenters, clusterShares);
+    }
+
+    /// <summary>Single-linkage grouping: clusters closer than <see cref="MergeDistance"/>, directly or through a chain
+    /// of such clusters, share a group. Empty clusters join none.</summary>
+    /// <param name="centers">The k-means centroids.</param>
+    /// <param name="populations">The k-means populations.</param>
+    /// <param name="groupOf">Receives each cluster's group, numbered in order of each group's first cluster, or −1 for
+    /// an empty cluster.</param>
+    /// <returns>The number of groups, at least 1 (some cluster always holds a pixel).</returns>
+    private static int GroupNearClusters(ReadOnlySpan<Oklab> centers, ReadOnlySpan<int> populations, Span<int> groupOf)
+    {
+        int clusters = centers.Length;
+        for (int c = 0; c < clusters; c++) groupOf[c] = populations[c] > 0 ? c : -1;
+        // Each label is its group's lowest cluster index. Relabeling the whole group on every merge makes one pass
+        // over the pairs enough: a merge never splits a group, so every close pair ends up sharing a label.
+        for (int i = 0; i < clusters; i++)
+        {
+            for (int j = i + 1; j < clusters; j++)
+            {
+                int a = groupOf[i], b = groupOf[j];
+                if (a < 0 || b < 0 || a == b || Oklab.Distance(centers[i], centers[j]) >= MergeDistance) continue;
+                int keep = Math.Min(a, b), drop = Math.Max(a, b);
+                for (int c = 0; c < clusters; c++) if (groupOf[c] == drop) groupOf[c] = keep;
+            }
+        }
+
+        Span<int> number = stackalloc int[clusters];
+        number.Fill(-1);
+        int groups = 0;
+        for (int c = 0; c < clusters; c++)
+        {
+            if (groupOf[c] < 0) continue;
+            ref int n = ref number[groupOf[c]];
+            if (n < 0) n = groups++;
+            groupOf[c] = n;
+        }
+        return groups;
     }
 
     private static float SmoothStep(float edge0, float edge1, float x)
@@ -238,16 +308,20 @@ internal sealed class PaletteExtractor : IPaletteExtractor
 }
 
 /// <summary>Everything <see cref="PaletteExtractor.Analyze(ReadOnlySpan{byte}, int, int)"/> decided, before glow-ify.</summary>
-/// <param name="Centers">Cluster centroids in Oklab.</param>
-/// <param name="Shares">Each cluster's fraction of the used pixels.</param>
-/// <param name="Scores">Each cluster's score (negative infinity for an empty cluster).</param>
-/// <param name="PrimaryIndex">The Primary cluster.</param>
-/// <param name="SecondaryIndex">The Secondary cluster, or −1 when Secondary was derived from Primary.</param>
+/// <param name="Centers">The scored groups' centroids in Oklab: k-means clusters with near ones merged
+/// (<see cref="PaletteExtractor.MergeDistance"/>). Every group holds at least one pixel.</param>
+/// <param name="Shares">Each group's fraction of the used pixels.</param>
+/// <param name="Scores">Each group's score.</param>
+/// <param name="PrimaryIndex">The Primary group.</param>
+/// <param name="SecondaryIndex">The Secondary group, or −1 when Secondary was derived from Primary.</param>
 /// <param name="PrimarySource">The Primary color before glow-ify.</param>
-/// <param name="SecondarySource">The Secondary color before glow-ify (a centroid or the derived color).</param>
-/// <param name="FlatShare">The share of used pixels within the flat tolerance of the largest cluster's centroid.</param>
+/// <param name="SecondarySource">The Secondary color before glow-ify (a group centroid or the derived color).</param>
+/// <param name="FlatShare">The share of used pixels within the flat tolerance of the largest k-means cluster's centroid.</param>
 /// <param name="IsNoArt">Whether the image counts as no art (grayscale palette and mostly one flat color).</param>
 /// <param name="SampleCount">The number of pixels used (opaque enough, on the sampling grid).</param>
+/// <param name="ClusterCenters">The raw k-means centroids, before merging.</param>
+/// <param name="ClusterShares">Each raw k-means cluster's fraction of the used pixels (0 for an empty cluster).</param>
 internal sealed record PaletteAnalysis(
     Oklab[] Centers, float[] Shares, float[] Scores, int PrimaryIndex, int SecondaryIndex,
-    Oklab PrimarySource, Oklab SecondarySource, float FlatShare, bool IsNoArt, int SampleCount);
+    Oklab PrimarySource, Oklab SecondarySource, float FlatShare, bool IsNoArt, int SampleCount,
+    Oklab[] ClusterCenters, float[] ClusterShares);

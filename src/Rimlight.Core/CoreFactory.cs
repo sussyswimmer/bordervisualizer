@@ -55,9 +55,11 @@ public static class CoreFactory
     /// least 60 % of the pixels within Oklab distance 0.03 of the largest cluster), as with a player's generic app
     /// icon. Keep the previous palette, or the manual one, in that case.</para>
     /// <para>Deterministic, and the extractor holds no state, so calls may run on any thread, even concurrently. One
-    /// call allocates about 400 bytes (scratch comes from the shared array pool) and took about 1.5 ms for 64 × 64
-    /// and under 0.1 s for 512 × 512 on the Linux test machine: run it on the thread pool, never on the UI or render
-    /// thread.</para>
+    /// call took about 1.5 ms for 64 × 64 and under 0.1 s for 512 × 512 on the Linux test machine: run it on the
+    /// thread pool, never on the UI or render thread. Scratch comes from the shared array pool, which keeps it per
+    /// thread: the first call on a thread allocates it (about 85 KB at 64 × 64, about 5 MB at 512 × 512) and that
+    /// thread holds it until the pool trims it; a repeat call on the same thread allocates about 500 bytes. Pass the
+    /// thumbnail at 64 × 64 to keep both small.</para>
     /// </remarks>
     public static IPaletteExtractor CreatePaletteExtractor() => new PaletteExtractor();
     /// <summary>Creates an immediate-transition palette stub until C5 lands.</summary>

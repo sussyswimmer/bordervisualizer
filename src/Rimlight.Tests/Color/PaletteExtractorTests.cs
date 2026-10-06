@@ -65,6 +65,39 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     }
 
     [Theory]
+    [InlineData(3, 0f)]
+    [InlineData(10, 0f)]
+    [InlineData(20, 0f)]
+    [InlineData(0, 0.01f)]
+    [InlineData(0, 0.05f)]
+    [InlineData(0, 0.15f)]
+    [InlineData(6, 0.10f)]
+    public void TexturedOrShadedSeventyPercentBlueBeatsAFlatThirtyPercentOrange(int grain, float lightnessSpan)
+    {
+        // Doc 05 §4's 70/30 case with only the blue textured (±grain in sRGB) or shaded (an Oklab L ramp across x),
+        // and the orange flat. k-means splits the blue into several clusters of about 17 % each, which would each
+        // lose to the flat 30 % (0.16 to 0.21); merged, the blue scores as the one 70 % area it is.
+        var blue = Blue.ToOklab();
+        var image = ArtImage.Create(64, 64, (x, y) =>
+        {
+            if (y * 64 + x >= 0.7f * 4096) return Orange;
+            var shaded = Rgba8.FromOklab(blue with { L = blue.L + lightnessSpan * (x / 63f - 0.5f) });
+            int n = (int)((Noise.Hash(x, y, 3) - 0.5f) * 2 * grain);
+            return new Rgba8(Clamp(shaded.R + n), Clamp(shaded.G + n), Clamp(shaded.B + n));
+        });
+        var analysis = Analyze(image);
+        string shares = string.Join(", ", analysis.Shares.Select(x => x.ToString("F3")));
+        output.WriteLine($"{analysis.ClusterCenters.Length} clusters → {analysis.Centers.Length} groups, shares {shares}");
+        Assert.True(analysis.ClusterCenters.Length > 2, "k-means did not split the blue"); // the case under test
+        Assert.Equal(2, analysis.Centers.Length);
+        Assert.Equal(0.7f, analysis.Shares[analysis.PrimaryIndex], 1e-3f);
+
+        var palette = Extract(image);
+        Assert.True(OklabTests.HueDistance(Lch(palette.Primary).H, Blue.ToOklab().ToLch().H) < 10, $"primary {Lch(palette.Primary)}");
+        Assert.True(OklabTests.HueDistance(Lch(palette.Secondary).H, Orange.ToOklab().ToLch().H) < 10, $"secondary {Lch(palette.Secondary)}");
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(6)]
     public void BlackAndWhitePhotoGlowsSoftWhiteWithNoInventedHue(int channelNoise)
@@ -166,6 +199,26 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void EveryPixelIsConvertedWhenOnlyOneChannelChanges(int channel)
+    {
+        // A ramp in one channel, the other two 0: neighbors differ only in that channel, so a conversion cache keyed
+        // on fewer channels would reuse each row's first color. The groups' share-weighted mean L is the mean of the
+        // exact per-pixel L (centroids are means of their pixels, and merging keeps the weighting).
+        var image = ArtImage.Create(64, 64, (x, _) =>
+        {
+            byte v = (byte)(x * 4);
+            return channel switch { 0 => new Rgba8(v, 0, 0), 1 => new Rgba8(0, v, 0), _ => new Rgba8(0, 0, v) };
+        });
+        var analysis = Analyze(image);
+        double expected = Enumerable.Range(0, 4096).Average(i => image[i % 64, i / 64].ToOklab().L);
+        double actual = analysis.Centers.Select((c, i) => (double)c.L * analysis.Shares[i]).Sum();
+        Assert.Equal(expected, actual, 1e-3);
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void GrayscaleGradientIsNeutralButNotNoArt(bool horizontal)
@@ -242,7 +295,7 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         foreach (int size in new[] { 64, 512 })
         {
             var image = NoisyRainbow(size, size);
-            for (int i = 0; i < 3; i++) Extract(image); // warm up the JIT and the array pool
+            for (int i = 0; i < 3; i++) Extract(image); // warm up the JIT and this thread's array-pool slots
             int runs = size == 64 ? 50 : 5;
             long before = GC.GetAllocatedBytesForCurrentThread();
             var watch = Stopwatch.StartNew();
@@ -250,7 +303,7 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
             watch.Stop();
             long bytes = (GC.GetAllocatedBytesForCurrentThread() - before) / runs;
             output.WriteLine($"{size}×{size}: {watch.Elapsed.TotalMilliseconds / runs:F2} ms, {bytes} B allocated per call (informational timing)");
-            Assert.True(bytes < 1024, $"{bytes} B per call at {size}×{size}"); // scratch comes from the array pool
+            Assert.True(bytes < 1024, $"{bytes} B per call at {size}×{size}"); // scratch comes from the array pool (per thread)
         }
     }
 
@@ -266,9 +319,10 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         })
         {
             var analysis = Analyze(image);
-            output.WriteLine(string.Join(", ", analysis.Shares.Select(s => s.ToString("F3"))));
-            Assert.Equal(5, analysis.Centers.Length);
-            Assert.All(analysis.Shares, share => Assert.InRange(share, 0.17f, 0.23f));
+            output.WriteLine(string.Join(", ", analysis.ClusterShares.Select(s => s.ToString("F3"))));
+            Assert.Equal(5, analysis.ClusterCenters.Length);
+            Assert.All(analysis.ClusterShares, share => Assert.InRange(share, 0.17f, 0.23f));
+            Assert.Equal(5, analysis.Centers.Length); // spread wide, so none merge
         }
     }
 
@@ -362,6 +416,67 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         Assert.True(OklabTests.HueDistance(derived.H, source.H + 35) < 1e-3f);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SecondaryIsTheBestScoringQualifyingCluster(bool orangeFirst)
+    {
+        // 50 % blue (Primary), then 30 % mid grey and 20 % orange, both far from the blue. The orange scores higher
+        // (0.164 to 0.121) though the grey is larger, so the orange is Secondary in either band order.
+        var bands = orangeFirst
+            ? new[] { (Blue, 0.5f), (Orange, 0.2f), (MidGrey, 0.3f) }
+            : new[] { (Blue, 0.5f), (MidGrey, 0.3f), (Orange, 0.2f) };
+        var analysis = Analyze(ArtImage.Bands(64, 64, bands));
+        Assert.Equal(3, analysis.Centers.Length);
+        Assert.True(Oklab.Distance(analysis.PrimarySource, Blue.ToOklab()) < 1e-4f, $"primary {analysis.PrimarySource}");
+        Assert.True(Oklab.Distance(analysis.SecondarySource, Orange.ToOklab()) < 1e-4f, $"secondary {analysis.SecondarySource}");
+    }
+
+    // ---- merging near clusters before scoring (spec clarification) ----
+
+    [Theory]
+    [InlineData(0.045f, true)]
+    [InlineData(0.055f, false)]
+    public void ClustersCloserThan005AreMergedBeforeScoring(float distance, bool merged)
+    {
+        // 40 % purple, 30 % the same purple `distance` lighter, 30 % orange: three k-means clusters either way.
+        var purple = Rgba8.FromOklab(new OkLch(0.55f, 0.15f, 300f).ToOklab());
+        var near = Rgba8.FromOklab(purple.ToOklab() with { L = purple.ToOklab().L + distance });
+        float measured = Oklab.Distance(near.ToOklab(), purple.ToOklab());
+        Assert.True(MathF.Abs(measured - distance) < 0.003f, $"quantized distance {measured}");
+
+        var image = ArtImage.Bands(64, 64, (purple, 0.4f), (near, 0.3f), (Orange, 0.3f));
+        var analysis = Analyze(image);
+        Assert.Equal(3, analysis.ClusterCenters.Length);
+        Assert.Equal(merged ? 2 : 3, analysis.Centers.Length);
+        if (!merged) return;
+
+        // The merged group is the two purples' pixel-weighted mean, with their summed share.
+        var purples = Enumerable.Range(0, 4096).Select(i => image[i % 64, i / 64]).Where(c => c != Orange)
+            .Select(c => c.ToOklab()).ToArray();
+        var mean = new Oklab(purples.Average(c => c.L), purples.Average(c => c.A), purples.Average(c => c.B));
+        int group = Array.FindIndex(analysis.Centers, c => Oklab.Distance(c, mean) < 1e-4f);
+        Assert.True(group >= 0, $"no group at {mean}: {string.Join(", ", analysis.Centers)}");
+        Assert.Equal(purples.Length / 4096f, analysis.Shares[group], 1e-6f);
+        Assert.Equal(group, analysis.PrimaryIndex);
+    }
+
+    [Fact]
+    public void MergingChainsThroughIntermediateClusters()
+    {
+        // A blue L ramp 0.15 wide: k-means cuts it into neighbors about 0.035 apart, while the ends are about 0.1
+        // apart. Single linkage still makes it one group, so it beats the flat 30 % orange.
+        var blue = Blue.ToOklab();
+        var image = ArtImage.Create(64, 64, (x, y) =>
+            y * 64 + x >= 0.7f * 4096 ? Orange : Rgba8.FromOklab(blue with { L = blue.L + 0.15f * (x / 63f - 0.5f) }));
+        var analysis = Analyze(image);
+        var blues = analysis.ClusterCenters.Where(c => Oklab.Distance(c, Orange.ToOklab()) > 0.1f).ToArray();
+        float widest = blues.Max(a => blues.Max(b => Oklab.Distance(a, b)));
+        output.WriteLine($"{blues.Length} blue clusters, ends {widest:F3} apart");
+        Assert.True(widest >= PaletteExtractor.MergeDistance, "the ramp's ends are within one merge step");
+        Assert.Equal(2, analysis.Centers.Length);
+    }
+
     // ---- glow-ify through the extractor ----
 
     [Fact]
@@ -397,6 +512,18 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     {
         var icon = ArtImage.Create(64, 64, (x, y) => x is >= 24 and < 40 && y is >= 16 and < 48 ? White : new Rgba8(70, 70, 72));
         Assert.Null(extractor.Extract(icon.Bgra, 64, 64, "t"));
+    }
+
+    [Fact]
+    public void FlatShareIsMeasuredAgainstTheLargestClusterNotPrimary()
+    {
+        // A grey glyph (30 %, Primary: near-black sits at the fitness floor) on a flat near-black icon (70 %).
+        var image = ArtImage.Bands(64, 64, (new Rgba8(8, 8, 8), 0.7f), (MidGrey, 0.3f));
+        var analysis = Analyze(image);
+        Assert.True(Oklab.Distance(analysis.PrimarySource, MidGrey.ToOklab()) < 1e-4f, $"primary {analysis.PrimarySource}");
+        Assert.True(analysis.FlatShare >= 0.69f, $"flat share {analysis.FlatShare}");
+        Assert.True(analysis.IsNoArt);
+        Assert.Null(extractor.Extract(image.Bgra, 64, 64, "t"));
     }
 
     [Fact]
