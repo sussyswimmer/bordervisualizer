@@ -15,6 +15,23 @@ internal sealed record DisplayMonitor(string DeviceName, string StableId, RECT B
     public float Scale => Dpi / 96f;
 }
 
+/// <summary>A monitor as Settings lists it (the Displays page, doc 06 §3).</summary>
+/// <param name="StableId">
+/// The monitor's device interface path (<c>DISPLAY_DEVICE.DeviceID</c>), the ID <see cref="Settings.CustomMonitorIds"/>
+/// stores (H-009). It survives reboots and re-plugging.
+/// </param>
+/// <param name="DeviceName">The GDI device name, e.g. <c>\\.\DISPLAY1</c>; stable within a session only.</param>
+/// <param name="FriendlyName">The name Windows shows, e.g. <c>DELL U2720Q</c>; null when the monitor reports none.</param>
+/// <param name="IsBuiltIn">True for a laptop's own panel.</param>
+/// <param name="IsPrimary">True for the primary monitor.</param>
+/// <param name="Left">Left edge of the monitor on the desktop, in physical pixels.</param>
+/// <param name="Top">Top edge of the monitor on the desktop, in physical pixels.</param>
+/// <param name="Width">Width in physical pixels.</param>
+/// <param name="Height">Height in physical pixels.</param>
+/// <param name="RefreshHz">The refresh rate in Hz, or 0 when Windows doesn't report it.</param>
+public sealed record MonitorInfo(string StableId, string DeviceName, string? FriendlyName, bool IsBuiltIn, bool IsPrimary,
+    int Left, int Top, int Width, int Height, uint RefreshHz);
+
 /// <summary>The attached monitors, as the overlay sees them.</summary>
 public static class DisplayMonitors
 {
@@ -23,6 +40,40 @@ public static class DisplayMonitors
     /// <see cref="OverlayHost.SetPausedMonitors"/> takes; null if there is none.
     /// </summary>
     public static string? PrimaryDeviceName() => Enumerate().Find(monitor => monitor.IsPrimary)?.DeviceName;
+
+    /// <summary>
+    /// The attached monitors with the names Windows shows for them, left to right (then top to bottom). Never throws;
+    /// a monitor whose name can't be read has a null <see cref="MonitorInfo.FriendlyName"/>. Any thread.
+    /// </summary>
+    /// <returns>The monitors; empty if none can be enumerated.</returns>
+    public static IReadOnlyList<MonitorInfo> Describe()
+    {
+        try
+        {
+            Dictionary<string, List<MonitorNames.Target>> names = MonitorNames.ByDeviceName();
+            var list = new List<MonitorInfo>();
+            foreach (DisplayMonitor monitor in Enumerate())
+            {
+                MonitorNames.Target? target = null;
+                if (names.TryGetValue(monitor.DeviceName, out List<MonitorNames.Target>? targets) && targets.Count > 0)
+                {
+                    // A duplicated desktop shows several monitors on one device; the overlay's ID is the first one's.
+                    int match = targets.FindIndex(t => string.Equals(t.DevicePath, monitor.StableId, StringComparison.OrdinalIgnoreCase));
+                    target = targets[Math.Max(match, 0)];
+                }
+                RECT bounds = monitor.Bounds;
+                list.Add(new MonitorInfo(monitor.StableId, monitor.DeviceName, target?.FriendlyName, target?.IsBuiltIn ?? false,
+                    monitor.IsPrimary, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top, monitor.RefreshHz));
+            }
+            list.Sort((a, b) => a.Left != b.Left ? a.Left.CompareTo(b.Left) : a.Top.CompareTo(b.Top));
+            return list;
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.WriteLine($"[Displays] Listing the monitors failed: {exception.Message}");
+            return [];
+        }
+    }
 
     // Enumerates the attached monitors. Allocates; called only when the layout may have changed.
     internal static unsafe List<DisplayMonitor> Enumerate()

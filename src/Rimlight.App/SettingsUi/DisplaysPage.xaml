@@ -1,0 +1,54 @@
+<UserControl x:Class="Rimlight.App.SettingsUi.DisplaysPage"
+             x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+             FontFamily="{DynamicResource ContentControlThemeFontFamily}"
+             FontSize="14">
+    <UserControl.Resources>
+        <ResourceDictionary Source="PageStyles.xaml" />
+    </UserControl.Resources>
+
+    <ScrollViewer Style="{StaticResource PageScroller}">
+        <StackPanel Style="{StaticResource PageContent}">
+            <TextBlock Style="{StaticResource PageTitle}" Text="Displays" />
+
+            <Border Style="{StaticResource Row}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource RowLabel}" Text="Show the glow on" />
+                    <WrapPanel Margin="0,8,0,0">
+                        <RadioButton x:Name="AllChoice" Style="{StaticResource SegmentRadio}" GroupName="Monitors" Margin="0,0,4,4"
+                                     Content="_All displays" AutomationProperties.Name="All displays" Checked="OnSelectionChanged" />
+                        <RadioButton x:Name="PrimaryChoice" Style="{StaticResource SegmentRadio}" GroupName="Monitors" Margin="0,0,4,4"
+                                     Content="_Main display" AutomationProperties.Name="Main display only" Checked="OnSelectionChanged" />
+                        <RadioButton x:Name="CustomChoice" Style="{StaticResource SegmentRadio}" GroupName="Monitors" Margin="0,0,4,4"
+                                     Content="_Choose" AutomationProperties.Name="Choose displays" Checked="OnSelectionChanged" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- One toggle per attached monitor, named as Windows names it; filled in by the page. -->
+            <StackPanel x:Name="MonitorList" />
+            <TextBlock x:Name="SelectionNote" Style="{StaticResource WarningText}" Margin="0,4,0,0" Visibility="Collapsed"
+                       AutomationProperties.LiveSetting="Polite" />
+
+            <TextBlock Style="{StaticResource SectionHeader}" Text="Smoothness" />
+            <Border Style="{StaticResource Row}">
+                <DockPanel>
+                    <ComboBox x:Name="FpsBox" DockPanel.Dock="Right" MinWidth="200" VerticalAlignment="Center" Margin="16,0,0,0"
+                              AutomationProperties.Name="Frame rate limit" SelectionChanged="OnFpsChanged">
+                        <ComboBoxItem Content="30 frames a second" Tag="30" />
+                        <ComboBoxItem Content="60 frames a second" Tag="60" />
+                        <ComboBoxItem Content="120 frames a second" Tag="120" />
+                        <ComboBoxItem Content="Match the display" Tag="0" />
+                    </ComboBox>
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource RowLabel}" Text="Frame rate limit" />
+                        <TextBlock Style="{StaticResource RowDescription}"
+                                   Text="How often the glow moves while music plays. Lower uses less power; it never goes above the display's own rate." />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

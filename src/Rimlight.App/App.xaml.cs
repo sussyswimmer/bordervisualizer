@@ -49,7 +49,7 @@ public partial class App : Application
     {
         // Windows may end the process soon after; keep the last change and the last lines.
         Trace.WriteLine($"[App] Windows session ending ({e.ReasonSessionEnding}).");
-        controller?.Flush();
+        controller?.EndSession();
         AppLog.Flush();
         base.OnSessionEnding(e);
     }

@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Rimlight.App.Overlay;
+using Rimlight.App.SettingsUi;
 using Rimlight.Core;
 using Rimlight.Platform;
 using Rimlight.Platform.Media;
@@ -95,7 +96,12 @@ internal sealed class TrayIconHost : IDisposable
         var quit = new MenuItem { Header = "_Quit " + AppInfo.Name };
         quit.Click += (_, _) => app.Quit();
         menu.Items.Add(quit);
-        menu.Opened += (_, _) => Refresh();
+        menu.Opened += (_, _) =>
+        {
+            // The menu follows Windows' light or dark mode, also when it changed while no window watched for it.
+            UiTheme.Sync();
+            Refresh();
+        };
 
         createRetry = new DispatcherTimer(DispatcherPriority.Background) { Interval = CreateRetryInterval };
         createRetry.Tick += (_, _) => Create();

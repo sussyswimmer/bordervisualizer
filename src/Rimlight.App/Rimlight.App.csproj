@@ -19,5 +19,7 @@
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
     <ProjectReference Include="../Rimlight.Platform/Rimlight.Platform.csproj" />
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.3.2" />
+    <!-- Fluent controls, Mica and light/dark themes for the settings window and the tray menu (MIT). -->
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 </Project>
