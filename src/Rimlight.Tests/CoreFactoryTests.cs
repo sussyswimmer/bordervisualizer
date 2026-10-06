@@ -6,6 +6,12 @@ namespace Rimlight.Tests;
 public sealed class CoreFactoryTests
 {
     [Fact]
+    public void PresetCatalogIsAvailableDuringShellStartup()
+    {
+        Assert.NotNull(Presets.All);
+    }
+
+    [Fact]
     public void AllFactoryMethodsReturnObjects()
     {
         Assert.NotNull(CoreFactory.CreateAnalyzer());
