@@ -16,6 +16,7 @@ internal sealed class SettingsService : IDisposable
     private readonly object saveGate = new(); // serializes store calls (H-004); never taken per frame
     private Settings current;
     private bool savePending; // guarded by saveGate
+    private bool disposed;
 
     public SettingsService(ISettingsStore store)
     {
@@ -30,9 +31,13 @@ internal sealed class SettingsService : IDisposable
     /// <summary>Raised on the thread that called <see cref="Update"/> (the UI thread) with the new snapshot.</summary>
     public event Action<Settings>? Changed;
 
-    /// <summary>Replaces the settings with <paramref name="change"/>(current). Call from the UI thread only.</summary>
+    /// <summary>
+    /// Replaces the settings with <paramref name="change"/>(current). Call from the UI thread only. Ignored once the
+    /// service is disposed (a window closing during exit).
+    /// </summary>
     public void Update(Func<Settings, Settings> change)
     {
+        if (disposed) return;
         Settings before = current;
         Settings after = change(before);
         // Record equality compares CustomMonitorIds by reference, so a rebuilt equal list still counts as a change;
@@ -66,6 +71,8 @@ internal sealed class SettingsService : IDisposable
     /// <summary>Stops the save timer and saves any pending change.</summary>
     public void Dispose()
     {
+        if (disposed) return;
+        disposed = true;
         saveTimer.Dispose();
         Flush(); // also waits for a save already running on the timer thread
     }

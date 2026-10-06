@@ -12,7 +12,8 @@
     <ApplicationIcon>Assets\Rimlight.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <Resource Include="Assets\Rimlight.ico" />
+    <!-- Rimlight.ico, and an optional Rimlight-dim.ico that replaces the derived 50 % tray icon (TrayIconImages). -->
+    <Resource Include="Assets\*.ico" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />

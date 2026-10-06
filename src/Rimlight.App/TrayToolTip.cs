@@ -15,6 +15,7 @@ internal static class TrayToolTip
 
     private const string Separator = " · ";
     private const string Ellipsis = "…";
+    private const char FullwidthAmpersand = '\uFF06';
 
     /// <summary>The tooltip for this track (null: no media session).</summary>
     /// <param name="track">The current track, or null.</param>
@@ -62,6 +63,8 @@ internal static class TrayToolTip
     }
 
     // One line of plain text: control characters (line breaks, tabs) become spaces and runs of spaces collapse.
+    // "&" becomes the fullwidth "＆": notification-area tooltips can take a lone "&" as an access-key marker and hide
+    // it ("Rock & Roll" → "Rock  Roll"), and the escapes that work differ between Windows versions.
     // Null when nothing is left.
     private static string? Clean(string? text)
     {
@@ -77,7 +80,7 @@ internal static class TrayToolTip
             }
             if (space) builder.Append(' ');
             space = false;
-            builder.Append(c);
+            builder.Append(c == '&' ? FullwidthAmpersand : c);
         }
         return builder.Length > 0 ? builder.ToString() : null;
     }
