@@ -75,7 +75,7 @@
 - [x] K2 `LoopbackCapture` + lock-free ring buffer + device-change restart. Render thread drains the ring → `IAudioAnalyzer` (real since C2) — PR #9 — effort: M (notes below; Windows manual test pending)
 - [x] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale — PR #14 — effort: L (notes below; Windows manual test pending)
 - [x] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip — PR #18 — effort: M (notes below; Windows manual test pending)
-- [ ] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause
+- [x] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause — PR #19 — effort: M (notes below; Windows manual test pending)
 - [ ] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow
 - [ ] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names
 - [ ] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode
@@ -289,6 +289,64 @@
     - The "Now playing" row reads `Current` and `Art` (compare `Art.TrackId` with `Current.TrackId` to hide stale art), with swatches via `SrgbHex.Format`.
     - Subscribe to the two events and marshal them to the dispatcher.
   - **C4/C5 (via K10):** with the fakes, colors are averaged, never "no art", and switch instantly.
+
+## K5 notes
+
+- **Structure (`src/Rimlight.Platform/Watchers/`):**
+  - `SystemWatcher` runs its own thread with a hidden top-level window and a `GetMessage` loop. `WM_POWERBROADCAST` and `WM_DISPLAYCHANGE` reach top-level windows only.
+    - It publishes an immutable `SystemState` (locked, disconnected, suspended, display off, battery, remote session, fullscreen everywhere, fullscreen monitors) on every real change.
+    - It raises `StateChanged` and `Resumed` (wake, unlock, reconnect, display back on) on its own thread.
+    - `Start` waits up to 2 s for the first state. `Dispose` unregisters everything on the watcher thread, then destroys the window.
+  - `PowerWatcher`:
+    - `PBT_APMSUSPEND` / `PBT_APMRESUMEAUTOMATIC` / `PBT_APMRESUMESUSPEND`.
+    - `PBT_APMPOWERSTATUSCHANGE` → `GetSystemPowerStatus`.
+    - `RegisterPowerSettingNotification(GUID_CONSOLE_DISPLAY_STATE)`: 0 is off, dimmed is on.
+  - `SessionWatcher`:
+    - `WTSRegisterSessionNotification(NOTIFY_FOR_THIS_SESSION)` for lock/unlock and console/remote connect/disconnect.
+    - The state at start comes from `WTSSessionInfoEx`, so a start while locked starts paused.
+    - Registration is retried every 5 s while the session service is still starting.
+  - `FullscreenDetector` gathers facts from Windows, and `FullscreenRules` (pure, no Windows calls) decides.
+    - It re-evaluates on `EVENT_SYSTEM_FOREGROUND`, every 2 s, on `WM_DISPLAYCHANGE`, and right after a wake or unlock.
+    - It runs only while `PauseInFullscreen` is on.
+  - `OverlayHost.CheckDevices()` (new, thread-safe) asks the GPU device on the next frame and schedules K1's debounced monitor rebuild, which also catches a replaced adapter.
+  - Paused monitors are now applied before settings, so overlays created at start begin paused on a fullscreen monitor.
+  - **App:** `SystemPauseBridge` maps the state onto `SetPaused` / `SetOnBattery` / `SetPausedMonitors` (sent only on change) and `Resumed` onto `CheckDevices`. One lock orders the watcher and UI threads; it is never taken per frame.
+    - The Debug menu's simulated battery and pauses (K3) are combined with the real state.
+    - The Debug menu adds a `System:` status line and a "Pause in fullscreen apps" toggle.
+- **Effects:**
+  - Lock, a disconnected session, sleep, display off, a screen saver (`QUNS_NOT_PRESENT`) and presentation mode pause everywhere. That goes through the engine's `paused`: no frames, and the capture is closed.
+  - Fullscreen apps pause per monitor through K3's 300 ms monitor fade.
+  - Battery feeds K3's "On battery".
+- **Spec clarifications and deviations:**
+  - **Folder `Watchers/`, not doc 02's `System/`:** a `…System` namespace would shadow `System`. K6's hotkey and startup classes can go to `Platform/Shell/`.
+  - **Own thread and top-level window, not doc 02's message-only window:** message-only windows get no broadcasts. Keeping it off the overlay thread means shell queries and session RPCs never touch frame timing.
+  - **Fullscreen pauses only its monitor (doc 07 Phase 5 over doc 04's literal `QUNS_BUSY` → pause):**
+    - Doc 04's rule: the foreground window's `GetWindowRect` equals its monitor's `rcMonitor`. Maximized windows never match, because of their resize borders.
+    - With `QUNS_BUSY`, a non-maximized window that covers its monitor also counts.
+    - `QUNS_RUNNING_D3D_FULL_SCREEN` pauses the foreground window's monitor, or everything without a window to tie it to.
+  - **Sticky (addition):** a fullscreen window keeps its monitor paused while the focus is on another monitor. This lasts until it leaves fullscreen, moves, is minimized, hidden, cloaked or closed, or another window is activated on that monitor.
+  - **Exclusions:** every window of the shell's process (desktop, taskbar, Alt+Tab, Task View; F11 File Explorer as a side effect), `Progman`/`WorkerW`, the desktop window, and every window of our process (the overlays, the future settings window).
+  - **Detection runs whenever `PauseInFullscreen` is on**, even while the glow is off, so turning the glow on during a fullscreen app never flashes it. The cost is a few user32 calls every 2 s.
+  - **Display off** applies only while the session is on the physical console (`WTSGetActiveConsoleSessionId`).
+  - **Modern Standby** sends no suspend, and display off covers it. The display coming back also clears a missed suspend.
+  - **RDP (decided):** the glow keeps working in a connected remote session and pauses while disconnected; fast user switching pauses it too. A reconnect re-checks the GPU and monitors. RDP bandwidth is K11's to measure.
+  - **Do Not Disturb / Focus assist** has no documented API; only what `SHQueryUserNotificationState` reports pauses.
+  - **F11-style fullscreen** (no foreground change) is found by the 2 s poll, per doc 04's cadence.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Every new Win32 call, struct and constant was checked against CsWin32 0.3.346's generated sources. That includes `GUID_CONSOLE_DISPLAY_STATE`'s value, `POWERBROADCAST_SETTING`'s inline data, `WTSINFOEX_LEVEL1_W`, `QUERY_USER_NOTIFICATION_STATE`, and `WTS_CURRENT_SERVER_HANDLE` living on `HANDLE`.
+  - **Scratch harness (not committed)** linking `FullscreenRules.cs` and `SystemState.cs`, 35 checks:
+    - exact and loose cover, and maximized windows never pausing
+    - `QUNS_BUSY` never pausing everywhere
+    - D3D with and without a window
+    - screen saver and presentation mode
+    - every sticky keep and drop case
+    - `SystemState` equality and `PausesEverywhere`
+  - Nothing has run on Windows yet: Maxwell's checklist is in #19.
+- **Left for later:**
+  - **K7:** the Behavior page's "Pause in fullscreen apps" toggle (already wired through `settings.Changed`). `SystemState` can feed diagnostics.
+  - **K11:** sleep/hibernate, Modern Standby, RDP (bandwidth too), TDR and hotplug on real hardware. Also check whether `QUNS_NOT_PRESENT` ever shows up spuriously, for example in a remote session.
+  - **C6 (via K10):** global pauses fade over 300 ms once the real engine lands (H-008); with the fake they are instant.
 
 ## Lane B notes
 
