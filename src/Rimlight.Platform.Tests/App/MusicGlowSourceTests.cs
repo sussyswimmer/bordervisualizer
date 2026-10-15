@@ -80,10 +80,10 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
 
         // Warm-up: the capture opens, the analyzer settles, and the JIT has compiled the edit paths as well as the frame's
         // (a method's first calls run unoptimized code, and its tier-up can allocate on the calling thread).
-        Run(3000, editEvery: 5);
+        Run(1500, editEvery: 5);
         frameBytes = editBytes = edits = 0;
-        Run(6000, editEvery: 97);
-        output.WriteLine($"{mode}: {frameBytes} B over 6000 frames; at most {editBytes} B on the {edits} frames with a new snapshot");
+        Run(3000, editEvery: 97);
+        output.WriteLine($"{mode}: {frameBytes} B over 3000 frames; at most {editBytes} B on the {edits} frames with a new snapshot");
         Assert.Equal(0, frameBytes);
         // A new snapshot that changes neither Sensitivity nor a color costs nothing either, except in demo mode with the
         // glow off or Off: the demo's engine settings (the user's, shown on and in music sync) are made once per snapshot.

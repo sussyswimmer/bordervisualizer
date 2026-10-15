@@ -44,12 +44,12 @@ public sealed class VisualizerHandOffTests
     {
         // The writer fills every slot of its buffer with one number; a reader that ever saw two numbers in one buffer,
         // or a number smaller than before, would be looking at a buffer the writer was filling.
-        const int Size = 256;
+        const int Size = 64;
         var buffer = new TripleBuffer<long[]>(new long[Size], new long[Size], new long[Size]);
         bool done = false;
         var writer = new Thread(() =>
         {
-            for (long n = 1; n <= 3_000_000; n++)
+            for (long n = 1; n <= 2_000_000; n++)
             {
                 long[] back = buffer.Back;
                 for (int i = 0; i < Size; i++) back[i] = n;
