@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using Rimlight.Core;
 using Rimlight.Platform.Shell;
 using Velopack;
@@ -15,13 +16,6 @@ internal sealed class UpdateBootstrap
 {
     /// <summary>Where releases come from: the project's GitHub Releases, stable ones only.</summary>
     public const string RepositoryUrl = "https://github.com/sussyswimmer/bordervisualizer";
-
-    /// <summary>
-    /// For testing updates without publishing a release: an environment variable (<c>RIMLIGHT_UPDATE_FEED</c>) naming a
-    /// folder of packed releases (<c>build/pack.ps1</c>'s <c>artifacts/releases</c>) or an http(s) URL of one. Releases
-    /// then come from there instead of GitHub.
-    /// </summary>
-    public static readonly string FeedVariable = AppInfo.Name.ToUpperInvariant() + "_UPDATE_FEED";
 
     private UpdateManager? manager;
     private bool managerCreated;
@@ -122,12 +116,16 @@ internal sealed class UpdateBootstrap
         try
         {
             // Stable releases only, without a token: GitHub allows 60 API requests an hour per IP address, and a check
-            // makes one. The installed copy reads its own channel's feed (win or win-arm64, C9).
-            string? feed = Environment.GetEnvironmentVariable(FeedVariable)?.Trim();
-            var updates = string.IsNullOrEmpty(feed)
+            // makes one. The installed copy reads its own channel's feed (win or win-arm64, C9). The test feed is a local
+            // folder only, never a URL (UpdateFeedOverride).
+            string variable = UpdateFeedOverride.Variable;
+            string? value = Environment.GetEnvironmentVariable(variable);
+            string? folder = UpdateFeedOverride.LocalFolder(value, UpdateFeedOverride.IsOnNetworkDrive, out string? ignored);
+            if (ignored is not null) Trace.WriteLine($"[Updates] {variable} ('{value}') is ignored: {ignored}. Releases come from GitHub.");
+            var updates = folder is null
                 ? new UpdateManager(new GithubSource(RepositoryUrl, accessToken: null, prerelease: false))
-                : new UpdateManager(feed);
-            if (!string.IsNullOrEmpty(feed)) Trace.WriteLine($"[Updates] Releases come from {FeedVariable}: {feed}");
+                : new UpdateManager(new SimpleFileSource(new DirectoryInfo(folder)));
+            if (folder is not null) Trace.WriteLine($"[Updates] Releases come from the folder in {variable}: {folder}");
             if (updates.IsInstalled) return updates;
             NotInstalled = true;
             Trace.WriteLine("[Updates] This copy isn't installed (it runs from a build folder), so it doesn't check for updates.");
