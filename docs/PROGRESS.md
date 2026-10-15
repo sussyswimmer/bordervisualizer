@@ -563,6 +563,12 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
     - Palette (7): no rule, no Primary condition, candidate thresholds of 0.05/0.02, Primary thresholds of 0.05/0.02, and the next colorful group instead of the derived color.
     - Factory guards (2): a leftover `Fakes` type, and a wrapped engine.
   - Nothing new runs per frame: the tempo change reuses the sorted 16-float buffer, and C12's soak allocation checks pass.
+  - **A flaky test found and fixed:** `OklabTests.ConversionsDoNotAllocate` (C4) failed in 1 of 3 full runs, with 1,048 B allocated.
+    - **Cause:** its warm-up skipped `Srgb.ToLinear(byte)`, so Srgb's 256-float table was built inside the measured loop whenever this test was the first in its process to touch Srgb. Alone, it failed every time.
+    - **Fix:** the warm-up now runs the measured expression. The table is built once per process, so the product behavior is unchanged.
+    - **Check:** each of the 11 allocation-measuring tests then passed alone in a fresh process, twice. The fix was followed by 5 more full runs: all 695 + 73 passed.
+  - **C12's two open flakes** (`ExtractionCostIsModest`, `UpdateDoesNotAllocate`) pass alone and didn't recur in 9 full runs here. Their cause is still open.
+  - **CI on #27** (head `06c807b`): Linux (SDK 8) and Windows both passed.
 
 ## Lane B — Claude Code
 
