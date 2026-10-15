@@ -5,11 +5,15 @@ using Svg.Skia;
 namespace Rimlight.IconGen;
 
 /// <summary>
-/// Renders one SVG document to square bitmaps. The document's viewport (its width and height, or its viewBox) is
-/// scaled uniformly to fit the bitmap and centered, so a square SVG fills it exactly.
+/// Renders one SVG document to bitmaps: square ones for icons, rectangular ones such as the README banner. The
+/// document's viewport (its width and height, or its viewBox) is scaled uniformly to fit the bitmap and centered,
+/// so an SVG with the bitmap's aspect ratio fills it exactly.
 /// </summary>
 internal sealed class SvgRasterizer : IDisposable
 {
+    /// <summary>The largest bitmap side, in pixels.</summary>
+    public const int MaxSize = 4096;
+
     private readonly SKSvg svg;
     private readonly SKPicture picture;
 
@@ -103,11 +107,27 @@ internal sealed class SvgRasterizer : IDisposable
     /// </summary>
     /// <param name="opacity">Multiplies every pixel's alpha, 0 to 1; 0.5 gives the tray's "glow off" icon.</param>
     /// <returns>Straight-alpha (not premultiplied) BGRA, rows top to bottom.</returns>
-    public byte[] RenderBgra(int size, float opacity = 1f)
+    public byte[] RenderBgra(int size, float opacity = 1f) => RenderBgra(size, size, opacity);
+
+    /// <summary>
+    /// Renders a <paramref name="width"/>×<paramref name="height"/> bitmap on a transparent background, with the
+    /// viewport scaled uniformly to fit and centered (letterboxed when the aspect ratios differ).
+    /// </summary>
+    /// <param name="opacity">
+    /// Multiplies every pixel's alpha, 0 to 1. It has no default, so a two-argument call always means the square
+    /// overload's (size, opacity) and never (width, height).
+    /// </param>
+    /// <returns>Straight-alpha (not premultiplied) BGRA, rows top to bottom, <paramref name="width"/> pixels each.</returns>
+    public byte[] RenderBgra(int width, int height, float opacity)
     {
-        if (size is < 1 or > 4096)
+        if (width is < 1 or > MaxSize)
         {
-            throw new ArgumentOutOfRangeException(nameof(size), size, "Size must be 1 to 4096 px.");
+            throw new ArgumentOutOfRangeException(nameof(width), width, $"Width must be 1 to {MaxSize} px.");
+        }
+
+        if (height is < 1 or > MaxSize)
+        {
+            throw new ArgumentOutOfRangeException(nameof(height), height, $"Height must be 1 to {MaxSize} px.");
         }
 
         if (!(opacity >= 0f && opacity <= 1f))
@@ -115,27 +135,27 @@ internal sealed class SvgRasterizer : IDisposable
             throw new ArgumentOutOfRangeException(nameof(opacity), opacity, "Opacity must be 0 to 1.");
         }
 
-        var info = new SKImageInfo(size, size, SKColorType.Bgra8888, SKAlphaType.Premul);
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using SKSurface surface = SKSurface.Create(info)
-            ?? throw new InvalidOperationException($"Skia could not create a {size}x{size} surface.");
+            ?? throw new InvalidOperationException($"Skia could not create a {width}x{height} surface.");
         SKCanvas canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
 
-        float scale = Math.Min(size / Bounds.Width, size / Bounds.Height);
-        canvas.Translate((size - Bounds.Width * scale) / 2f, (size - Bounds.Height * scale) / 2f);
+        float scale = Math.Min(width / Bounds.Width, height / Bounds.Height);
+        canvas.Translate((width - Bounds.Width * scale) / 2f, (height - Bounds.Height * scale) / 2f);
         canvas.Scale(scale);
         canvas.Translate(-Bounds.Left, -Bounds.Top);
         canvas.DrawPicture(picture);
         canvas.Flush();
 
         // Read back unpremultiplied: .ico DIBs and PNGs both store straight alpha.
-        byte[] pixels = new byte[size * size * 4];
-        var straight = new SKImageInfo(size, size, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        byte[] pixels = new byte[width * height * 4];
+        var straight = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
         using (var bitmap = new SKBitmap(straight))
         {
             if (!surface.ReadPixels(straight, bitmap.GetPixels(), straight.RowBytes, 0, 0))
             {
-                throw new InvalidOperationException($"Skia could not read back the {size}x{size} render.");
+                throw new InvalidOperationException($"Skia could not read back the {width}x{height} render.");
             }
 
             bitmap.GetPixelSpan().CopyTo(pixels);

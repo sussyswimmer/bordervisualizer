@@ -30,10 +30,10 @@ internal static class TestSvgs
         </svg>
         """;
 
-    /// <summary>BGRA of pixel (x, y) in a square straight-alpha buffer.</summary>
-    public static (byte B, byte G, byte R, byte A) Pixel(byte[] bgra, int size, int x, int y)
+    /// <summary>BGRA of pixel (x, y) in a straight-alpha buffer whose rows are <paramref name="width"/> pixels.</summary>
+    public static (byte B, byte G, byte R, byte A) Pixel(byte[] bgra, int width, int x, int y)
     {
-        int i = (y * size + x) * 4;
+        int i = (y * width + x) * 4;
         return (bgra[i], bgra[i + 1], bgra[i + 2], bgra[i + 3]);
     }
 }

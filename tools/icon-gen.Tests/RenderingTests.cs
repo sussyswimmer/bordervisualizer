@@ -42,6 +42,44 @@ public sealed class RenderingTests
     }
 
     [Fact]
+    public void RectangularBitmapsFitTheViewportUniformlyAndCenterIt()
+    {
+        // Same aspect ratio: 20×10 units fill 40×20 px exactly.
+        using SvgRasterizer wide = SvgRasterizer.FromSvg(WideBlue);
+        byte[] filled = wide.RenderBgra(40, 20, 1f);
+        Assert.Equal(40 * 20 * 4, filled.Length);
+        for (int y = 0; y < 20; y++)
+        {
+            for (int x = 0; x < 40; x++)
+            {
+                Assert.Equal((255, 0, 0, 255), Pixel(filled, 40, x, y));
+            }
+        }
+
+        // 16×16 units in 32×16 px: scaled to 16 px and pillarboxed, so the red half covers columns 8..15.
+        using SvgRasterizer square = SvgRasterizer.FromSvg(LeftHalfRed);
+        byte[] boxed = square.RenderBgra(32, 16, 1f);
+        for (int y = 0; y < 16; y++)
+        {
+            Assert.Equal((0, 0, 0, 0), Pixel(boxed, 32, 7, y));
+            Assert.Equal((0, 0, 255, 255), Pixel(boxed, 32, 8, y));
+            Assert.Equal((0, 0, 255, 255), Pixel(boxed, 32, 15, y));
+            Assert.Equal((0, 0, 0, 0), Pixel(boxed, 32, 16, y));
+            Assert.Equal((0, 0, 0, 0), Pixel(boxed, 32, 31, y));
+        }
+    }
+
+    [Fact]
+    public void SquareRenderIsTheRectangularRenderWithEqualSides()
+    {
+        using SvgRasterizer art = SvgRasterizer.FromSvg(HalfGreen);
+        Assert.Equal(art.RenderBgra(24, 24, 0.5f), art.RenderBgra(24, 0.5f));
+        Assert.Equal(
+            IconBuilder.BuildPng(art, 24, 24, 1f),
+            IconBuilder.BuildPng(art, 24));
+    }
+
+    [Fact]
     public void PixelsAreStraightAlpha()
     {
         using SvgRasterizer art = SvgRasterizer.FromSvg(HalfGreen);
@@ -86,6 +124,11 @@ public sealed class RenderingTests
         Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(16, 1.01f));
         Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(16, -0.1f));
         Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(16, float.NaN));
+        Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(0, 16, 1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(16, 0, 1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(4097, 16, 1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(16, 4097, 1f));
+        Assert.Throws<ArgumentOutOfRangeException>(() => art.RenderBgra(16, 8, float.NaN));
     }
 
     [Theory]

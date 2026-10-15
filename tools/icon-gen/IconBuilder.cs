@@ -38,9 +38,15 @@ internal static class IconBuilder
     }
 
     /// <summary>Renders one square PNG.</summary>
-    public static byte[] BuildPng(SvgRasterizer art, int size, float opacity = 1f)
+    public static byte[] BuildPng(SvgRasterizer art, int size, float opacity = 1f) => BuildPng(art, size, size, opacity);
+
+    /// <summary>
+    /// Renders one PNG of any size, such as the 1280×640 README banner that doubles as GitHub's social preview
+    /// (doc 08 §1). The art is scaled uniformly to fit and centered (see <see cref="SvgRasterizer"/>).
+    /// </summary>
+    public static byte[] BuildPng(SvgRasterizer art, int width, int height, float opacity)
     {
         ArgumentNullException.ThrowIfNull(art);
-        return SvgRasterizer.EncodePng(art.RenderBgra(size, opacity), size, size);
+        return SvgRasterizer.EncodePng(art.RenderBgra(width, height, opacity), width, height);
     }
 }
