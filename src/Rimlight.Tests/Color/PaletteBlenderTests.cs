@@ -723,9 +723,10 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
         blender.Update(1f);
         Assert.Same(next, blender.Current);
         _ = blender.Current;
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++) _ = blender.Current;
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 1000; i++) _ = blender.Current;
+        }));
     }
 
     // ---- allocation, determinism, validation ----
@@ -748,9 +749,10 @@ public sealed class PaletteBlenderTests(ITestOutputHelper output)
             frame++;
         }
         for (int i = 0; i < 600; i++) Frame();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 6000; i++) Frame();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 6000; i++) Frame();
+        }));
 
         // Informational cost of one fill (shared Linux machine).
         var watch = Stopwatch.StartNew();

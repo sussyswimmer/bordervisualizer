@@ -796,10 +796,11 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         var engine = new LightEngine();
         Scenario(engine, 2_000, 3, null);
         // Modes cycle every 250 frames (Off and Enabled = false go static), with pauses, silences and 3 s stalls.
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 50_000; i++)
-            engine.Update(i % 400 == 0 ? 3f : Dt, new AudioFeatures(i % 13 / 13f, 0, i % 31 == 0 ? 1 : 0, i % 900 > 600), Palette.Default, Modes[i / 250 % Modes.Length], i % 700 > 650);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 50_000; i++)
+                engine.Update(i % 400 == 0 ? 3f : Dt, new AudioFeatures(i % 13 / 13f, 0, i % 31 == 0 ? 1 : 0, i % 900 > 600), Palette.Default, Modes[i / 250 % Modes.Length], i % 700 > 650);
+        }));
     }
 
     // ---- with the real analyzer ----

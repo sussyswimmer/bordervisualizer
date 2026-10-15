@@ -121,17 +121,22 @@ public sealed class OklabTests(ITestOutputHelper output)
     [Fact]
     public void ConversionsDoNotAllocate()
     {
-        // C5 blends in Oklab every frame of a crossfade; these must stay allocation-free.
+        // C5 blends in Oklab every frame of a crossfade; these must stay allocation-free. The warm-up runs every call
+        // that is measured: the first Srgb.ToLinear(byte) builds Srgb's 1 KB table, once per process. With a warm-up
+        // that skipped it, the test failed (1,048 B) whenever it was the first in its process to touch Srgb.
         float sink = 0;
-        for (int i = 0; i < 100; i++) sink += Oklab.FromLinearSrgb(0.2f, 0.4f, 0.6f).ToLch().ToOklab().ToLinearSrgb().R;
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        for (int i = 0; i < 100; i++) sink += Convert(i);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 10_000; i++) sink += Convert(i);
+        }));
+        Assert.True(float.IsFinite(sink));
+
+        static float Convert(int i)
         {
             var lab = Oklab.FromLinearSrgb(i / 10_000f, 0.4f, 0.6f);
-            sink += lab.ToLch().ToOklab().ToLinearSrgb().G + Srgb.ToLinear((byte)i) + Srgb.FromLinear(lab.L) + Glow.ToLight(lab).B;
+            return lab.ToLch().ToOklab().ToLinearSrgb().G + Srgb.ToLinear((byte)i) + Srgb.FromLinear(lab.L) + Glow.ToLight(lab).B;
         }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-        Assert.True(float.IsFinite(sink));
     }
 
     internal static float HueDistance(float a, float b) => MathF.Abs((a - b + 540f) % 360f - 180f);

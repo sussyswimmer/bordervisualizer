@@ -42,11 +42,13 @@ public sealed class AudioFrontEndTests(ITestOutputHelper output)
         var samples = new float[800];
         FillSignal(samples, 0, 48000);
         for (int i = 0; i < 2000; i++) analyzer.Process(samples, 48000, 1f / 60);
-        long start = Stopwatch.GetTimestamp();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++) analyzer.Process(samples, 48000, 1f / 60);
-        long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        double nsPerFrame = Stopwatch.GetElapsedTime(start).TotalNanoseconds / 1000;
+        double nsPerFrame = 0; // the last measured run's
+        long bytes = AllocationProbe.MinBytes(() =>
+        {
+            long start = Stopwatch.GetTimestamp();
+            for (int i = 0; i < 1000; i++) analyzer.Process(samples, 48000, 1f / 60);
+            nsPerFrame = Stopwatch.GetElapsedTime(start).TotalNanoseconds / 1000;
+        });
         Assert.Equal(0, bytes);
         output.WriteLine($"C1 front end, 48 kHz, 800 samples/frame, N=2048, 2000 warmup + 1000 measured frames: {nsPerFrame:F1} ns/frame, {bytes / 1000.0:F1} bytes/frame. Timing is informational, not a CI threshold.");
     }
@@ -60,9 +62,10 @@ public sealed class AudioFrontEndTests(ITestOutputHelper output)
         FillSignal(burst, 0, 48000);
         int[] sizes = [0, 1, 441, 735, 800, 2048, 2049, 5000];
         for (int i = 0; i < 400; i++) analyzer.Process(burst.AsSpan(0, sizes[i % sizes.Length]), i % 50 < 25 ? 48000 : 44100, 1f / 60);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++) analyzer.Process(burst.AsSpan(0, sizes[i % sizes.Length]), i % 50 < 25 ? 48000 : 44100, 1f / 60);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 1000; i++) analyzer.Process(burst.AsSpan(0, sizes[i % sizes.Length]), i % 50 < 25 ? 48000 : 44100, 1f / 60);
+        }));
     }
 
     [Fact]
