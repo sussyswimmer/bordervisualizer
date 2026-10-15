@@ -19,8 +19,8 @@ namespace Rimlight.App;
 /// Owns the notification-area icon (doc 06 §2): the icon, dimmed to half opacity while the glow is off; the
 /// now-playing tooltip; click to turn the glow on or off, double-click for Settings; and the right-click menu, which
 /// the keyboard opens too. Re-creates the icon when it can't be added at sign-in or Explorer restarts, and shows
-/// notifications (K7's "still running in the tray", K9's "update ready", whose click restarts into the update). Use it
-/// on the UI thread only.
+/// notifications (K7's "still running in the tray", K9's "update ready", whose click offers the restart into the
+/// update). Use it on the UI thread only.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
@@ -30,9 +30,9 @@ internal sealed class TrayIconHost : IDisposable
     private readonly TaskbarIcon icon;
     private readonly TrayIconImages images;
     private readonly DispatcherTimer createRetry;
-    private readonly TrayNotificationClicks clicks = new();
     private readonly string toolTipSuffix;
     private readonly MenuItem glowOn;
+    private readonly MenuItem restartToUpdate;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
     private readonly (MenuItem Item, ColorMode Mode)[] colorModes;
     private readonly (MenuItem Item, Func<Settings, Settings> Apply)[] presets;
@@ -40,6 +40,7 @@ internal sealed class TrayIconHost : IDisposable
     private readonly DebugMenu debug;
 #endif
     private string toolTip; // what the tooltip should say, also while the shell refuses it
+    private Action? notificationClicked; // the click action of the notification shown last (OnNotificationClicked)
     private bool dimmed;
     private bool disposed;
 
@@ -83,6 +84,11 @@ internal sealed class TrayIconHost : IDisposable
         var updates = new MenuItem { Header = "Check for _updates" };
         updates.Click += (_, _) => app.CheckForUpdates();
         menu.Items.Add(updates);
+        // Only while a downloaded update waits for a restart (K9): the notification that says so is gone after a few
+        // seconds, or never shows during Do Not Disturb, and this works without it.
+        restartToUpdate = new MenuItem { Visibility = Visibility.Collapsed };
+        restartToUpdate.Click += (_, _) => app.RestartToUpdate();
+        menu.Items.Add(restartToUpdate);
         var logs = new MenuItem { Header = "Open _logs folder" };
         logs.Click += (_, _) => app.OpenLogsFolder();
         menu.Items.Add(logs);
@@ -119,10 +125,7 @@ internal sealed class TrayIconHost : IDisposable
         // Keyboard access: Shift+F10 or the menu key on the focused icon (Win+B, then the arrow keys), Enter or Space.
         icon.TrayKeyboardContextMenu += (_, _) => ShowMenuFromKeyboard();
         icon.TrayKeyboardKeySelect += (_, _) => ShowMenuFromKeyboard();
-        // Which notification a click belongs to (TrayNotificationClicks). H.NotifyIcon raises these on this thread from
-        // the shell's NIN_BALLOONSHOW, NIN_BALLOONHIDE/NIN_BALLOONTIMEOUT and NIN_BALLOONUSERCLICK.
-        icon.TrayBalloonTipShown += (_, _) => clicks.Shown();
-        icon.TrayBalloonTipClosed += (_, _) => clicks.Closed();
+        // H.NotifyIcon raises this on this thread from the shell's NIN_BALLOONUSERCLICK.
         icon.TrayBalloonTipClicked += (_, _) => OnNotificationClicked();
         // Each (re)creation, including H.NotifyIcon's own after Explorer restarts (TaskbarCreated), gets the current
         // icon and tooltip: a change the shell refused while Explorer was gone would otherwise be lost. If that
@@ -174,25 +177,28 @@ internal sealed class TrayIconHost : IDisposable
     /// <param name="message">The text.</param>
     /// <param name="userInitiated">True when it answers something the user just did, so it isn't held back.</param>
     /// <param name="clicked">
-    /// What a click on it does (K9's "Restart now"), or null for nothing. It runs on the UI thread, at most once, and
-    /// only while this notification is the one on screen (<see cref="TrayNotificationClicks"/>).
+    /// What a click on it does (K9's "Update ready"), or null for nothing. It runs on the UI thread for every click on a
+    /// notification until the next one replaces it. The shell doesn't say which notification was clicked, so a click on
+    /// an older one still in Windows' notification list runs it too: it must be safe to repeat and must ask before doing
+    /// anything the user didn't choose.
     /// </param>
     /// <returns>False if the shell refused it (no icon yet, Explorer restarting).</returns>
     public bool Notify(string title, string message, bool userInitiated = false, Action? clicked = null)
     {
         if (disposed) return false;
-        clicks.Showing(clicked); // first: the shell's NIN_BALLOONSHOW for it must find it armed
         try
         {
             icon.ShowNotification(title, message, NotificationIcon.None, respectQuietTime: !userInitiated);
-            return true;
         }
         catch (InvalidOperationException exception)
         {
-            clicks.Showing(null);
             Trace.WriteLine($"[Tray] Showing a notification failed: {exception.Message}");
             return false;
         }
+        // Set once the shell took it (a refused one replaces nothing). Its click arrives later through the window
+        // procedure, on this thread.
+        notificationClicked = clicked;
+        return true;
     }
 
     private void Create()
@@ -245,16 +251,17 @@ internal sealed class TrayIconHost : IDisposable
         }
     }
 
-    // A click on a notification runs its action if it is the one on screen (TrayNotificationClicks). The click arrives
-    // inside the icon's window procedure; the action runs after it returns, since it may quit the app, which disposes
-    // the icon and its window.
+    // A click on a notification, on screen or in Windows' notification list, runs the action of the one shown last
+    // (Notify). It doesn't depend on the shell's show and close messages, whose order nobody promises. The click
+    // arrives inside the icon's window procedure; the action runs after it returns, since it may quit the app, which
+    // disposes the icon and its window.
     private void OnNotificationClicked()
     {
         if (disposed) return;
-        if (clicks.Clicked() is not { } clicked)
+        if (notificationClicked is not { } clicked)
         {
-            // Rare (a click on a notification); says why "Restart now" did nothing, if it ever doesn't.
-            Trace.WriteLine("[Tray] A notification was clicked; it has no action, or it isn't the one on screen.");
+            // Rare (a click on a notification); says why a click on "Update ready" did nothing, if it ever doesn't.
+            Trace.WriteLine("[Tray] A notification was clicked; the one shown last has no action.");
             return;
         }
         icon.Dispatcher.InvokeAsync(() =>
@@ -327,6 +334,9 @@ internal sealed class TrayIconHost : IDisposable
         glowOn.IsChecked = current.Enabled;
         HotkeyStatus hotkey = app.Hotkey;
         glowOn.InputGestureText = hotkey.State == HotkeyState.Registered ? hotkey.Gesture?.ToString() ?? "" : "";
+        string? update = app.Updates.ReadyVersion;
+        restartToUpdate.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
+        restartToUpdate.Header = update is null ? null : $"_Restart to update (version {update})";
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
         foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
         foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = IsShowing(apply, current);

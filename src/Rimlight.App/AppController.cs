@@ -218,6 +218,20 @@ internal sealed class AppController : IDisposable
         }
     }
 
+    /// <summary>"Restart to update" in the tray, shown while a downloaded update waits for a restart.</summary>
+    public void RestartToUpdate()
+    {
+        if (disposed) return;
+        try
+        {
+            Updates.RestartToUpdate();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[App] Restarting to update failed: {exception}");
+        }
+    }
+
     /// <summary>"Open logs folder" in the tray.</summary>
     public void OpenLogsFolder()
     {

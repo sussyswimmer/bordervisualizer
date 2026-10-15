@@ -20,12 +20,17 @@ internal static class UpdateMessages
     /// <param name="version">The new version.</param>
     public static string Downloading(string version) => $"Downloading version {version}…";
 
-    /// <summary>The notification for a downloaded update; clicking it restarts the app into it ("Restart now").</summary>
+    /// <summary>
+    /// The notification for a downloaded update. A click on it asks <see cref="ReadyQuestion"/> ("Restart now"); the tray
+    /// menu's "Restart to update" works also once the notification is gone.
+    /// </summary>
     /// <param name="version">The new version.</param>
     public static string Ready(string version) =>
-        $"Update ready — restart {AppInfo.Name} to apply.\nClick here to restart now (version {version}).";
+        $"Update ready — restart {AppInfo.Name} to apply.\nClick here, or choose Restart to update in the tray menu, to install version {version}.";
 
-    /// <summary>The same question in a message box, when the tray can't show a notification.</summary>
+    /// <summary>
+    /// The question a click on <see cref="Ready"/> asks, also in place of the notification when the tray can't show one.
+    /// </summary>
     /// <param name="version">The new version.</param>
     public static string ReadyQuestion(string version) =>
         $"Update ready — restart {AppInfo.Name} to apply.\n\nRestart now to install version {version}?";

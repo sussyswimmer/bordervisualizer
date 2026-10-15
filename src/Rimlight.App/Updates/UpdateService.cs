@@ -11,10 +11,10 @@ namespace Rimlight.App.Updates;
 /// <summary>
 /// Updates from GitHub Releases with Velopack (doc 06 §5). While Settings > Behavior > "Update automatically" is on it
 /// checks 30 s after start and then every 12 h (<see cref="UpdateSchedule"/>), downloads a newer release in the
-/// background and says so with a tray notification whose click restarts into it ("Restart now"); otherwise the update
-/// is installed at the next start (<see cref="InstallDownloadedUpdate"/>). "Check for updates" (the tray, Settings >
-/// About) works with the setting off too and reports every step. Only an installed copy checks, and the check is the
-/// app's only network call.
+/// background and says so with a tray notification whose click offers to restart into it ("Restart now"), as the tray
+/// menu's "Restart to update" does while it waits; otherwise the update is installed at the next start
+/// (<see cref="InstallDownloadedUpdate"/>). "Check for updates" (the tray, Settings > About) works with the setting off
+/// too and reports every step. Only an installed copy checks, and the check is the app's only network call.
 /// </summary>
 /// <remarks>
 /// Created, called and disposed on the UI thread. Velopack's disk and network work runs on the thread pool and its
@@ -48,6 +48,7 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
     private SemanticVersion? downloading;
     private VelopackAsset? ready; // downloaded: installed at the next start, or now by "Restart now"
     private SemanticVersion? announced; // the ready version the user has been told about
+    private bool asking; // the "Restart now?" question is open
     private bool disposed;
 
     /// <summary>Creates the service; <see cref="Start"/> starts the automatic checks.</summary>
@@ -69,6 +70,9 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
     /// <summary>Notes that Velopack's startup code threw; the update service logs it once the log is open.</summary>
     /// <param name="exception">What it threw.</param>
     public static void OnStartupFailed(Exception exception) => startupFailure = exception;
+
+    /// <inheritdoc />
+    public string? ReadyVersion => disposed ? null : ready?.Version.ToString();
 
     /// <summary>
     /// Installs an update that an earlier run downloaded ("apply on the next restart", doc 06 §5): starts Velopack's
@@ -284,12 +288,13 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
         }
     }
 
-    // "Update ready — restart Rimlight to apply." A click on the notification restarts into the update. When the tray
-    // can't show it, the user's own check asks with a message box instead; an automatic one only logs.
+    // "Update ready — restart Rimlight to apply." A click on the notification asks whether to restart into the update
+    // now. When the tray can't show it, the user's own check asks with a message box at once; an automatic one only
+    // logs. The tray menu offers "Restart to update" either way.
     private void AnnounceReady(VelopackAsset update, bool userAsked)
     {
         string version = update.Version.ToString();
-        if (app.Tray?.Notify(AppInfo.Name, UpdateMessages.Ready(version), userInitiated: userAsked, clicked: RestartIntoUpdate) == true)
+        if (app.Tray?.Notify(AppInfo.Name, UpdateMessages.Ready(version), userInitiated: userAsked, clicked: AskToRestart) == true)
         {
             announced = update.Version;
             return;
@@ -300,15 +305,34 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
             return;
         }
         announced = update.Version;
-        MessageBoxResult answer = MessageBox.Show(UpdateMessages.ReadyQuestion(version), AppInfo.Name, MessageBoxButton.YesNo,
-            MessageBoxImage.Information);
-        if (answer == MessageBoxResult.Yes) RestartIntoUpdate();
+        AskToRestart();
     }
 
-    // "Restart now": saves the settings, starts Velopack's updater, which waits for this process to end (up to 60 s),
-    // installs the update and starts the new version in the tray, then quits normally. The quit disposes everything and
-    // releases the single-instance claim before the new version starts.
-    private void RestartIntoUpdate()
+    // "Restart now?"; Yes restarts into the update. A click on a notification only asks: the shell doesn't say which
+    // notification was clicked, so it may be an older one still in Windows' list (K7's "still running in the tray").
+    private void AskToRestart()
+    {
+        if (disposed || asking || ready is not { } update) return;
+        asking = true; // the message box runs a message loop, where another click can arrive
+        try
+        {
+            MessageBoxResult answer = MessageBox.Show(UpdateMessages.ReadyQuestion(update.Version.ToString()), AppInfo.Name,
+                MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (answer == MessageBoxResult.Yes) RestartToUpdate();
+        }
+        finally
+        {
+            asking = false;
+        }
+    }
+
+    /// <summary>
+    /// "Restart now" (Yes to the notification's question, the tray menu's "Restart to update"): saves the settings,
+    /// starts Velopack's updater, which waits for this process to end (up to 60 s), installs the update and starts the
+    /// new version in the tray, then quits normally. The quit disposes everything and releases the single-instance claim
+    /// before the new version starts. Does nothing without a downloaded update.
+    /// </summary>
+    public void RestartToUpdate()
     {
         if (disposed || manager is null || ready is not { } update) return;
         Trace.WriteLine($"[Updates] Restarting to install version {update.Version}.");
@@ -324,6 +348,9 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
             app.Tell(UpdateMessages.RestartFailed);
             return;
         }
+        // The updater has it now. The quit is posted to the dispatcher, and the question and the tray menu can both be
+        // open: a second Yes or click before it runs starts no second updater.
+        ready = null;
         app.Quit();
     }
 
