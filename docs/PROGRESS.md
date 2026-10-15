@@ -522,6 +522,7 @@
     - The checklist in #24 now says the fake blender switches colors instantly, Silence shows after about 3 s (2 s of silence plus the 1 s status hold), and Alt+Tab only ends recording.
     - Release and Debug have 0 warnings, `dotnet test` (165) passes, and the harness has 142 checks (new: the capture with no overlay, and 47 recorder cases).
 - **Merged with K3's second no-overlay fix:** K3's host already gives the source one paused frame when the last overlay goes away (`SuspendSource`). The merge keeps that call and has `SuspendSource` call `FramesStopped()` right after it, once per stretch, in place of K7's own flag, so the capture also closes while Settings wants audio.
+- **Fix after the merge with K6's second review round:** the Behavior page's inline warning names `HotkeyState.TypesCharacter` (the shortcut types an AltGr character on one of the user's layouts), and the recorder refuses such a combination up front with `GlobalHotkey.TypesCharacter`, asking for Win or a different one. Before, the page showed the shortcut with no warning while it didn't work.
 - **Left for later:**
   - **K8:** use `AppController.RequestAudio()` and `MusicGlowSource.LatestAudio`.
   - **K9:** set `AppController.Updates`; About's button and the tray already call it.

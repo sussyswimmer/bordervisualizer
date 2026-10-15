@@ -72,6 +72,8 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
                 HotkeyState.InUse => $"Another app already uses {gesture}, so it doesn't work here. Pick a different one.",
                 HotkeyState.Invalid => $"\"{status.Text}\" isn't a shortcut Windows can use. Pick a different one.",
                 HotkeyState.Failed => $"Windows didn't accept {gesture} as a shortcut. Pick a different one.",
+                HotkeyState.TypesCharacter => $"With your keyboard layout, {gesture} types a character (it's the same as AltGr), "
+                    + "so it doesn't work here. Pick a different one.",
                 _ => "",
             });
         }
@@ -176,7 +178,9 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
 
         int virtualKey = KeyInterop.VirtualKeyFromKey(key);
         bool valid = HotkeyGesture.TryCreate(modifiers, virtualKey, out HotkeyGesture gesture);
-        if (valid && !TakenFromApps(gesture))
+        // A Ctrl+Alt combination that a keyboard layout types as AltGr would only be refused on registration (K6).
+        bool typesCharacter = valid && GlobalHotkey.TypesCharacter(gesture);
+        if (valid && !typesCharacter && !TakenFromApps(gesture))
         {
             string text = gesture.ToString();
             recording = false; // the new shortcut is registered by the settings change, not by resuming the old one
@@ -187,7 +191,10 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
             return;
         }
         bool needsModifier = (modifiers & (HotkeyModifiers.Ctrl | HotkeyModifiers.Alt | HotkeyModifiers.Win)) == 0;
-        PageEdits.SetMessage(HotkeyWarning, valid
+        PageEdits.SetMessage(HotkeyWarning, typesCharacter
+            ? $"With your keyboard layout, {gesture} types a character (it's the same as AltGr). "
+                + "Hold Win with it too, or pick a different one."
+            : valid
             ? "Apps use that for typing and editing. Hold Ctrl+Alt or Win with it, for example Ctrl+Alt+L."
             : HotkeyGesture.KeyName(virtualKey) is null
             ? "That key can't be part of a shortcut. Try a letter, a number or a function key."
