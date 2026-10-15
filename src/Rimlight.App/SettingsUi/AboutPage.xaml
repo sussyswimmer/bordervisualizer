@@ -49,6 +49,7 @@
                     <WrapPanel Margin="-12,4,0,0">
                         <ui:HyperlinkButton x:Name="SourceLink" Content="Source code on GitHub" AutomationProperties.Name="Source code on GitHub" />
                         <ui:HyperlinkButton x:Name="LicenseLink" Content="MIT License" AutomationProperties.Name="MIT License" />
+                        <ui:HyperlinkButton x:Name="NoticesLink" Content="Third-party notices" AutomationProperties.Name="Third-party notices" />
                     </WrapPanel>
                 </StackPanel>
             </Border>

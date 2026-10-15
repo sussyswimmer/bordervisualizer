@@ -11,7 +11,7 @@ namespace Rimlight.App.SettingsUi;
 
 /// <summary>
 /// About (doc 06 §3.6): the version, Check for updates with where updates stand and Restart now once one is downloaded
-/// (doc 06 §5), the source and license, and the privacy promise.
+/// (doc 06 §5), the source, the license and the third-party notices, and the privacy promise.
 /// </summary>
 internal partial class AboutPage : UserControl, ISettingsPage
 {
@@ -39,6 +39,8 @@ internal partial class AboutPage : UserControl, ISettingsPage
         LicenseText.Text = $"{AppInfo.Name} is free to use, share and change under the MIT License.";
         SourceLink.NavigateUri = RepositoryUrl;
         LicenseLink.NavigateUri = RepositoryUrl + "/blob/main/LICENSE";
+        // The libraries Rimlight ships and their licenses; installed copies also have the file next to Rimlight.exe.
+        NoticesLink.NavigateUri = RepositoryUrl + "/blob/main/THIRD-PARTY-NOTICES.txt";
         PrivacyList.ItemsSource = Privacy;
         AppIcon.Source = LoadIcon(96);
     }
