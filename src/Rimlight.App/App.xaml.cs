@@ -31,7 +31,7 @@ public partial class App : Application
         // One copy per user session (doc 06 §4), decided before any tray icon exists: a second copy would otherwise
         // replace the first one's icon (H.NotifyIcon derives the icon's ID from the exe path). A start by hand asks the
         // running copy to show Settings (or the demo, or the visualizer); a start at sign-in just leaves.
-        instance = SingleInstance.Claim(AppInfo.Name, options.Command, out string? runningElsewhere, out bool runningElevated);
+        instance = SingleInstance.Claim(AppInfo.Name, options.Command, out string? runningElsewhere, out bool runningAtOtherElevation);
         if (instance is null)
         {
             // Another copy (another build or folder) runs: say so, rather than leaving quietly while it stays in charge.
@@ -40,10 +40,11 @@ public partial class App : Application
                 MessageBox.Show($"{AppInfo.Name} is already running from another folder:\n{runningElsewhere}\n\n"
                     + "Quit it from its tray icon, then start this copy again.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
             }
-            else if (runningElevated)
+            else if (runningAtOtherElevation)
             {
-                // A copy started as administrator, which this start can't ask to show anything.
-                MessageBox.Show($"{AppInfo.Name} is already running as administrator.\n\n"
+                // One of the two was started as administrator, and this start can't ask the other to show anything.
+                string how = Environment.IsPrivilegedProcess ? "without administrator rights" : "as administrator";
+                MessageBox.Show($"{AppInfo.Name} is already running {how}.\n\n"
                     + "Quit it from its tray icon, then start it again.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
             }
             Shutdown();

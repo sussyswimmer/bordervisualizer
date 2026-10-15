@@ -11,7 +11,8 @@ namespace Rimlight.Platform.Shell;
 /// Says whether one of the app's windows is cloaked: Windows still counts it as visible, but nothing draws it, mostly
 /// because it is on another virtual desktop. WPF's <c>IsVisible</c> stays true then and no window message arrives, so
 /// this listens for Windows' cloak events. Create it on the window's thread, whose message loop delivers them; the
-/// callback then runs on that thread. Keep it as long as the window and dispose it when the window closes.
+/// callback then runs on that thread. Keep it while the window is shown and dispose it on that thread when the window
+/// hides or closes: the hook hears every window's cloak changes, so a hidden window shouldn't keep one.
 /// </summary>
 public sealed class CloakWatcher : IDisposable
 {

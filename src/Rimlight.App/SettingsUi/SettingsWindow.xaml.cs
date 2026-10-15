@@ -29,7 +29,7 @@ internal partial class SettingsWindow : FluentWindow
     private ISettingsPage? selected;
     private ISettingsPage? active;
     private IDisposable? audio;
-    private CloakWatcher? cloak; // kept with the window: its callback must outlive the hook
+    private CloakWatcher? cloak; // only while the window is shown: its hook hears every window's cloak changes
     private bool subscribed;
     private int systemQueued; // set by the watcher thread, cleared on this one
     private bool sized;
@@ -64,7 +64,7 @@ internal partial class SettingsWindow : FluentWindow
         if (!SystemParameters.ClientAreaAnimation) Navigation.TransitionDuration = 0;
 
         Loaded += OnLoaded;
-        IsVisibleChanged += (_, _) => UpdateActivity();
+        IsVisibleChanged += (_, _) => OnVisibleChanged();
         StateChanged += (_, _) => UpdateActivity();
         Closing += OnClosing;
         Closed += OnClosed;
@@ -90,8 +90,24 @@ internal partial class SettingsWindow : FluentWindow
         // Top-level windows get display and theme broadcasts, also while hidden.
         HwndSource.FromHwnd(handle)?.AddHook(WindowProcedure);
         UiTheme.Follow(this); // WPF-UI restyles this window's backdrop and title bar itself (it is the main window)
-        // A switch to another virtual desktop changes neither IsVisible nor the window state.
-        cloak = new CloakWatcher(handle, () => Dispatcher.InvokeAsync(UpdateActivity));
+    }
+
+    // A switch to another virtual desktop changes neither IsVisible nor the window state, so a watcher follows it while
+    // the window is shown. Hidden (closed to the tray, most of the session), the window needs none, and Windows stops
+    // waking this thread for every cloak change on the desktop. Show places the window on the current desktop, so it
+    // starts uncloaked.
+    private void OnVisibleChanged()
+    {
+        if (IsVisible)
+        {
+            cloak ??= new CloakWatcher(new WindowInteropHelper(this).Handle, () => Dispatcher.InvokeAsync(UpdateActivity));
+        }
+        else
+        {
+            cloak?.Dispose();
+            cloak = null;
+        }
+        UpdateActivity();
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
