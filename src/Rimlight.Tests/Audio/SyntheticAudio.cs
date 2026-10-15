@@ -19,6 +19,24 @@ internal static class SyntheticAudio
         return samples;
     }
 
+    // The same kick sound at the given times (seconds, ascending) plus white noise, for missed and extra beats.
+    public static float[] KicksAt(int sampleRate, float seconds, IReadOnlyList<float> kickTimes, float kickAmplitude, float noiseAmplitude, int seed = 1)
+    {
+        var random = new Random(seed);
+        var samples = new float[(int)(sampleRate * seconds)];
+        int next = 0;
+        float lastKick = float.NegativeInfinity;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float t = i / (float)sampleRate;
+            while (next < kickTimes.Count && kickTimes[next] <= t) lastKick = kickTimes[next++];
+            float sinceKick = t - lastKick;
+            float kick = float.IsFinite(sinceKick) ? kickAmplitude * MathF.Exp(-sinceKick / 0.06f) * MathF.Sin(2 * MathF.PI * 60 * sinceKick) : 0;
+            samples[i] = kick + noiseAmplitude * (float)(random.NextDouble() * 2 - 1);
+        }
+        return samples;
+    }
+
     // A busier, music-like mix: kick on every beat, a bass line changing note each beat, off-beat hats,
     // a sustained pad and vocal-ish vibrato tones. Only the kick should drive bass-band onsets.
     public static float[] MusicLike(int sampleRate, float seconds, float bpm, int seed = 2)
