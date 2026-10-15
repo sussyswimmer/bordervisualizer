@@ -17,8 +17,8 @@ The XML remarks on `CoreFactory` are the binding text, and this page follows the
 | `CreateAnalyzer(AudioTuning? tuning = null)` | `IAudioAnalyzer` | The render thread, every member | At construction and on a `WindowSize` change only. `Process` never allocates. |
 | `AnalysisSampleRate(int captureSampleRate)` | `int` (Hz); a rate ≤ 0 throws | Any thread | No (pure) |
 | `CreatePaletteExtractor()` | `IPaletteExtractor` | Any thread, concurrently; use the thread pool | Pooled scratch per thread, then about 500 B per call |
-| `CreatePaletteBlender(Palette initial)` | `IPaletteBlender` | The render thread, every member | `Update`, `FillGradient` and an in-range `SetTarget`: never. `Current` during a fade: one `Palette` per step. |
-| `CreateLightEngine()` | `ILightEngine` | One thread per instance (the render thread) | `Update` never |
+| `CreatePaletteBlender(Palette initial)` | `IPaletteBlender` | One thread per instance (the render thread; a Settings preview may own its own), every member | `Update`, `FillGradient` and an in-range `SetTarget`: never. `Current` during a fade: one `Palette` per step. |
+| `CreateLightEngine()` | `ILightEngine` | One thread per instance (the render thread, one per monitor; a Settings preview may own its own) | `Update` never |
 | `CreateSettingsStore(string directory)` | `ISettingsStore` | Any thread, serialized internally; never per frame | Yes (file I/O) |
 
 None of the render-thread objects take locks. The extractor holds no state. The store locks per instance.
@@ -59,7 +59,7 @@ In C12's 8-hour soak, the analyzer, blender and light engine together used 0.36 
 |---|---|
 | `WindowSize` | A power of two, 1024–16384 |
 | `Sensitivity` | 0.25–2 |
-| `NoPacketTimeoutSeconds` | At least 0.03 s |
+| `NoPacketTimeoutSeconds` | 0.03 s to 3600 s |
 | `FluxHistorySeconds` | Over 0 and at most 4 s |
 | `BassMinHz` < `BassMaxHz` < `MidMaxHz` < `HighMaxHz` | Strictly increasing; `BassMinHz` at least 0 |
 | `Level*Weight` | 0–1 each, independent; the sum isn't checked |
@@ -84,7 +84,7 @@ In C12's 8-hour soak, the analyzer, blender and light engine together used 0.36 
 - **`IsSilent`** turns true after the RMS stays below `SilenceThresholdDb` (−60 dBFS) for `SilenceHoldMs` (2 s), and false as soon as it rises above `SilenceExitThresholdDb` (−55 dBFS).
 - **Beats** come from spectral flux in the bass band. A beat needs flux above all three of:
   - the mean + `FluxThresholdMultiplier` × σ over `FluxHistorySeconds`, with the multiplier scaled by 1/√`Sensitivity`;
-  - 10 × the median flux, relaxed the same way;
+  - the median flux × (1 + 9/√`Sensitivity`), so 10 × at the default `Sensitivity` of 1;
   - `MinFlux` × the window's RMS, so playback volume doesn't matter.
 
   No beat fires until a quarter of `FluxHistorySeconds` of flux history exists (after creation, a reset or a stall), within `BeatRefractorySeconds` of the last beat, or while the window RMS is at or below −80 dBFS.
@@ -131,7 +131,7 @@ A grayscale photo or gradient isn't flat, so it still returns a soft-white palet
 ## 5. Palette blender (`CreatePaletteBlender`)
 
 **Threading and allocation.**
-- Every member, `Current` included, belongs to the render thread that owns the instance.
+- Every member, `Current` included, belongs to the one thread that owns the instance: the render thread, or a Settings preview's UI thread for its own blender.
 - `Update` and `FillGradient` never allocate, read no clock and are deterministic. `SetTarget` allocates nothing for a palette whose channels are in 0..1.
 - A null palette throws. NaN channels count as 0, and out-of-range channels are clamped.
 
@@ -273,6 +273,8 @@ This is the order C12's soak simulates and K3's `MusicGlowSource` uses, all on t
 
 `Contracts/` is frozen, so these Step 0 summaries stay as written. The behavior is as this page describes:
 
+- `IAudioAnalyzer` ("no allocations after construction"): `Process` never allocates, but assigning a `Tuning` with a different `WindowSize` allocates and replaces `Diagnostics` (§3).
+- `IPaletteBlender` ("Render-thread palette transitions") and `ILightEngine.Update` ("on the render thread"): each instance belongs to one thread. That is the render thread, except for a Settings preview's own blender and engine on its UI thread (§5, §6).
 - `ISettingsStore` ("the real implementation arrives in C7") and `Settings` ("validation and persistence arrive in C7"): both are in place.
 - `AudioTuning.MinFlux` ("provisional K0 default"): it is relative to the window's RMS (§3). The 0.01 default stays (H-005 is still open for re-tuning defaults).
 - `AudioTuning.Sensitivity` ("inversely scales the flux multiplier"): it scales the multiplier by 1/√Sensitivity, not 1/Sensitivity, so 0.25 doesn't turn beats off.

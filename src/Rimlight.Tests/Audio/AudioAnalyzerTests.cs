@@ -620,7 +620,7 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         {
             t with { Sensitivity = 0.2f }, t with { Sensitivity = 2.1f }, t with { Sensitivity = float.NaN },
             t with { WindowSize = 256 }, t with { WindowSize = 512 }, t with { WindowSize = 32768 }, t with { WindowSize = 3000 },
-            t with { NoPacketTimeoutSeconds = 0.02f }, t with { NoPacketTimeoutSeconds = float.PositiveInfinity },
+            t with { NoPacketTimeoutSeconds = 0.02f }, t with { NoPacketTimeoutSeconds = 3601 }, t with { NoPacketTimeoutSeconds = float.PositiveInfinity },
             t with { FluxHistorySeconds = 4.1f }, t with { FluxHistorySeconds = 0 },
         })
         {
@@ -631,7 +631,7 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         foreach (AudioTuning good in new[]
         {
             t with { Sensitivity = 0.25f }, t with { Sensitivity = 2 }, t with { WindowSize = 1024 }, t with { WindowSize = 16384 },
-            t with { NoPacketTimeoutSeconds = 0.03f }, t with { FluxHistorySeconds = 4 },
+            t with { NoPacketTimeoutSeconds = 0.03f }, t with { NoPacketTimeoutSeconds = 3600 }, t with { FluxHistorySeconds = 4 },
         })
         {
             analyzer.Tuning = good;

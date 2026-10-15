@@ -77,7 +77,8 @@ public static class CoreFactory
     /// <returns>A new blender.</returns>
     /// <remarks>
     /// <para><b>Threading.</b> Not thread-safe: call every member, <see cref="IPaletteBlender.Current"/> included, from
-    /// the render thread that owns the instance. <see cref="IPaletteBlender.Update"/> and
+    /// the one thread that owns the instance: the render thread, or a Settings preview's UI thread for its own blender.
+    /// <see cref="IPaletteBlender.Update"/> and
     /// <see cref="IPaletteBlender.FillGradient"/> never allocate, read no clock and are deterministic;
     /// <see cref="IPaletteBlender.SetTarget"/> allocates nothing for a palette with channels in 0..1. A null palette
     /// throws.</para>

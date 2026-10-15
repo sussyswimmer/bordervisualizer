@@ -202,6 +202,10 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(126, BeatStats.Tempo(frameQuantized), 0.1);
         double[] withErrors = frameQuantized.Where((_, k) => k != 20).Append(10.3).Order().ToArray();
         Assert.Equal(126, BeatStats.Tempo(withErrors), 0.1);
+
+        // Alternating 0.3 s and 0.6 s intervals: none lies within ±25 % of the 0.45 s median, so the median gives the
+        // tempo, as BeatDetector.TypicalInterval does.
+        Assert.Equal(60 / 0.45, BeatStats.Tempo([0, 0.3, 0.9, 1.2, 1.8]), 6);
     }
 
     private static (int Code, string Output, string Error) Cli(params string[] args)

@@ -526,12 +526,12 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - `CoreFactoryTests` now checks three things:
     - every factory method returns the real type;
     - Core has no `Fake*` type and no `Fakes` namespace;
-    - the factory's public methods and Core's exported types match `docs/CORE-API.md`. Adding a public method fails the test until the page is updated.
+    - the factory's public methods and Core's exported types are pinned, so changing them fails the test as a reminder to update `docs/CORE-API.md`. The test also reads that page and fails when it doesn't name one of them in code (`Name`, `Name(…)` or `Name.Member`), so updating only the pinned lists doesn't pass. It checks names only, not that a section is complete.
   - **Not edited:**
     - `CLAUDE.md` line 28 and `AGENTS.md` lines 17 and 41 are agent instruction files and still describe fakes. Maxwell can drop those lines.
     - `START-HERE.md` (the K0 prompt) and doc 09 describe the plan, so their mentions stay.
     - Two comments on the K8 branch say "the fake light engine" (H-020).
-- **`docs/CORE-API.md`** is the Core API as Lane B uses it, taken from the code and the `CoreFactory` remarks. Where a frozen contract summary is out of date, its §9 says so: `ISettingsStore`, `Settings`, `AudioTuning.MinFlux`, `AudioTuning.Sensitivity` and `LightState.Intensity`.
+- **`docs/CORE-API.md`** is the Core API as Lane B uses it, taken from the code and the `CoreFactory` remarks. Where a frozen contract summary is out of date, its §9 says so: `IAudioAnalyzer`, `IPaletteBlender` and `ILightEngine.Update` (threading), `ISettingsStore`, `Settings`, `AudioTuning.MinFlux`, `AudioTuning.Sensitivity` and `LightState.Intensity`.
 - **H-016, tempo (spec clarification of doc 03 §4):** `EstimatedBpm` is the mean of the stored intervals (at most 16, each at most 2 s) within ±25 % of their median. Before, it was the median alone.
   - **Why:** a beat is only seen on a frame, so at a steady frame rate the intervals are whole frames and the median picked one of two values.
   - **Results.** Steady 60 fps, no jitter, every estimate once the history is full:
@@ -545,7 +545,7 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
 
     90 and 120 BPM read exactly. 44.1 kHz gives the same.
   - **Repro.** `wav-analyze` on generated tracks now reads 126.0 / 128.0 / 139.8 / 174.0. The C2 test with the worst estimate moves from 122.0 to 123.8 for 124 BPM. In `selftest`, the analyzer reads 120.1 / 127.9 / 119.9 / 173.9; C3's table had 120.2 / 127.7 / 119.8 / 175.1.
-  - **Fallback:** when no interval lies within the window (two equal clusters), the median itself is used.
+  - **Fallback:** when no interval lies within the window (two equal clusters), the median itself is used. `wav-analyze`'s `BeatStats.Tempo` (C3), the rule's reference, now does the same: before, alternating 0.3 s / 0.6 s beats made it average an empty set and the CLI crash.
 - **C4 known limit 2 (spec clarification of doc 05 §2 step 5):** a colorful Primary (chroma ≥ 0.03) never takes a neutral Secondary group (< 0.03). When the best group at least 0.12 from Primary is neutral, Secondary is the derived color (+35° hue, L + 0.08) instead.
   - A neutral Primary keeps a neutral Secondary, so grayscale art still glows soft white. The no-art rule is unchanged.
   - The next colorful group is deliberately not used instead. On the dark-cover fixture it is the logo's anti-aliased edge (H 346.6° against 353.4°), which would make a one-hue glow.
@@ -576,8 +576,21 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
       - **Two more causes ruled out by scratch probes:**
         - Crossing the tier-1 call-count threshold, including after the tiering worker has idled out, allocates nothing on the calling thread.
         - `GetAllocatedBytesForCurrentThread` stays exact (0 B drift) while other threads force 576,291 GCs and the measured thread allocates every iteration.
-      - **Change (`57c702d`, pushed to this branch by another session):** the test now asserts the smallest per-call figure of three batches. A per-call allocation still shows in every batch and fails. The one-off cost itself is still unexplained: tier-up on the calling thread is ruled out above, while on-stack replacement and a first type load remain candidates.
+      - **Change:** the test now measures three batches, and at least two must stay under 1 KB per call. One outlier batch is tolerated, so a one-off cost passes, but a cost that recurs every few calls lands in two batches and fails.
+        - `57c702d` first took the smallest of the three. Review found that this hides an intermittent allocation. Example: 4 KB on every 7th 512 × 512 call reads 1,352 / 528 / 1,352 B per call. The minimum (528 B) passed, while two batches over the limit now fail. A one-off 7.8 KB on one call reads 2,092 / 528 / 528, which matches the CI figure, and still passes.
+        - The one-off cost itself is still unexplained, so this stays open. Tier-up on the calling thread is ruled out above; on-stack replacement and a first type load remain candidates.
   - **C12's two open flakes** (`ExtractionCostIsModest`, `UpdateDoesNotAllocate`) didn't recur in 9 local full runs.
+- **Review fixes:**
+  - **The surface test now reads `docs/CORE-API.md`.** Before, it compared reflection with two lists written into the test, so editing the lists passed with the page unchanged. Its note above overstated this.
+  - **`BeatStats.Tempo` median fallback**, as in Core (see H-016 above). New check: `[0, 0.3, 0.9, 1.2, 1.8]` reads 60 / 0.45 s.
+  - **`ExtractionCostIsModest`** tolerates one outlier batch instead of taking the minimum (see the CI flake above).
+  - **CORE-API.md:**
+    - §3 now gives the median guard as × (1 + 9/√`Sensitivity`), not 10 × relaxed. That is 7.36 × at Sensitivity 2 and 19 × at 0.25.
+    - `NoPacketTimeoutSeconds` is 0.03 s to 3600 s. The analyzer's error message said "at least 0.03 s" for both ends; it now names both. `TuningBoundsAreValidated` checks 3600 and 3601.
+    - The blender may be owned by one thread, as the light engine already was. A Settings preview's blender on its UI thread (K7's `GlowPreview`) is allowed, and `CoreFactory`'s blender remark says so too.
+    - §9 adds `IAudioAnalyzer`'s "no allocations after construction" (a `WindowSize` change allocates) and the render-thread wording of `IPaletteBlender` and `ILightEngine.Update`.
+  - **Mutants, all killed (6):** the CLI's tempo without the fallback; the page missing a method (`AnalysisSampleRate`) or a type (`SilentBehavior`); a new `CreateFoo` added to the pinned list but not to the page; no upper bound on `NoPacketTimeoutSeconds`; and 4 KB on every 7th 512 × 512 extraction, which the minimum-of-three version passed.
+  - **Verification:** 0 warnings. 4 full runs of `dotnet test Rimlight.sln -c Release`: 695 + 73 passed each time.
 
 ## Lane B — Claude Code
 

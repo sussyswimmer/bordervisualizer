@@ -25,6 +25,8 @@ public static class BeatStats
     /// The tempo from the intervals between consecutive beats: the median finds the typical interval, and the mean of
     /// the intervals within ±25 % of it gives the tempo. Beats are only seen at frame times, so at a steady 60 fps a
     /// 126 BPM interval is 28 or 29 frames; the median alone then reads 124.1 or 128.6 BPM, the mean reads 126.0.
+    /// When no interval lies that close (two equal clusters, such as alternating 0.3 s and 0.6 s), the median itself
+    /// gives the tempo, as in the analyzer.
     /// </summary>
     /// <param name="beats">Beat times in ascending order.</param>
     /// <param name="fromSeconds">Ignore beats before this time (analyzer warm-up).</param>
@@ -39,7 +41,8 @@ public static class BeatStats
         }
         if (intervals.Count == 0) return 0;
         double median = Median(intervals);
-        return 60 / intervals.Where(i => Math.Abs(i - median) <= InlierTolerance * median).Average();
+        var inliers = intervals.Where(i => Math.Abs(i - median) <= InlierTolerance * median).ToList();
+        return 60 / (inliers.Count > 0 ? inliers.Average() : median);
     }
 
     /// <summary>Matches detected beats to the kicks that caused them.</summary>

@@ -60,7 +60,7 @@ public sealed class CoreFactoryTests
     [Fact]
     public void FactorySurfaceIsTheOneCoreApiDocuments()
     {
-        // docs/CORE-API.md describes each of these; a new public method needs a section there too.
+        // The surface is pinned, so changing it fails here as a reminder to update docs/CORE-API.md.
         string[] methods = [.. typeof(CoreFactory).GetMethods(BindingFlags.Public | BindingFlags.Static).Select(m => m.Name).Order(StringComparer.Ordinal)];
         Assert.Equal(["AnalysisSampleRate", "CreateAnalyzer", "CreateLightEngine", "CreatePaletteBlender", "CreatePaletteExtractor", "CreateSettingsStore"], methods);
         string[] publicTypes = [.. typeof(CoreFactory).Assembly.GetExportedTypes().Where(t => !t.IsNested).Select(t => t.Name).Order(StringComparer.Ordinal)];
@@ -69,5 +69,23 @@ public sealed class CoreFactoryTests
              "IAudioAnalyzer", "ILightEngine", "IPaletteBlender", "IPaletteExtractor", "ISettingsStore", "LightState", "MonitorSelection",
              "NowPlaying", "Palette", "Presets", "Rgb", "Settings", "SilentBehavior"],
             publicTypes);
+
+        // And the page itself names every factory method and exported type in code, as `Name`, `Name(…)` or `Name.Member`,
+        // so updating only the lists above doesn't pass.
+        string page = File.ReadAllText(CoreApiPagePath());
+        string[] undocumented = [.. methods.Concat(publicTypes).Where(name => !page.Contains('`' + name + '`', StringComparison.Ordinal)
+            && !page.Contains('`' + name + '(', StringComparison.Ordinal) && !page.Contains('`' + name + '.', StringComparison.Ordinal))];
+        Assert.True(undocumented.Length == 0, "docs/CORE-API.md doesn't name: " + string.Join(", ", undocumented));
+    }
+
+    // docs/CORE-API.md in the source tree, found from the test output folder (bin/<configuration>/<framework>/).
+    private static string CoreApiPagePath()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Rimlight.sln")))
+                return Path.Combine(directory.FullName, "docs", "CORE-API.md");
+        }
+        throw new DirectoryNotFoundException("Rimlight.sln not found above " + AppContext.BaseDirectory);
     }
 }
