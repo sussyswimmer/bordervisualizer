@@ -2,9 +2,11 @@
   <img src="assets/banner.png" alt="Rimlight — your screen, lit by your music" width="100%">
 </p>
 
+<!-- The downloads badge counts the x64 installer only. GitHub's total for every file would mostly count update checks:
+     each installed copy downloads the update feed (releases.<channel>.json) of the newest releases on every check. -->
 <p align="center">
   <a href="https://github.com/sussyswimmer/bordervisualizer/releases/latest"><img src="https://img.shields.io/github/v/release/sussyswimmer/bordervisualizer?sort=semver&amp;display_name=tag&amp;label=release&amp;color=7C5CFF" alt="Latest release"></a>
-  <a href="https://github.com/sussyswimmer/bordervisualizer/releases"><img src="https://img.shields.io/github/downloads/sussyswimmer/bordervisualizer/total?label=downloads&amp;color=0891B2" alt="Total downloads"></a>
+  <a href="https://github.com/sussyswimmer/bordervisualizer/releases"><img src="https://img.shields.io/github/downloads/sussyswimmer/bordervisualizer/RimlightSetup.exe?label=downloads&amp;color=0891B2" alt="Downloads of RimlightSetup.exe, all releases"></a>
   <a href="https://github.com/sussyswimmer/bordervisualizer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/sussyswimmer/bordervisualizer/ci.yml?branch=main&amp;label=CI&amp;logo=githubactions&amp;logoColor=white" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4" alt="Windows 10 | 11">
@@ -147,7 +149,7 @@ No. Rimlight captures only system output audio, the sound your speakers or headp
 <details>
 <summary><b>Will it slow down games?</b></summary>
 
-It's built not to. The glow is drawn on the GPU and only redraws when it changes: about 10 times a second while it breathes in Idle Glow, and not at all while it holds still. When a game fills a screen, the glow on that screen pauses and its overlay window is hidden, so the game has that display to itself. If you play with the glow on, you can lower **Frame rate limit** in **Settings > Displays**.
+It's built not to. The glow is drawn on the GPU and only redraws when it changes: 60 times a second while music drives it (the default **Frame rate limit**, never above your display's rate), about 10 times a second while it breathes in Idle Glow, and not at all while it holds still. When a game fills a screen, the glow on that screen pauses and its overlay window is hidden, so the game has that display to itself. If you play with the glow on, you can lower **Frame rate limit** to 30 in **Settings > Displays**.
 
 </details>
 
