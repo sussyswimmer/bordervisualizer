@@ -297,12 +297,21 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
             var image = NoisyRainbow(size, size);
             for (int i = 0; i < 3; i++) Extract(image); // warm up the JIT and this thread's array-pool slots
             int runs = size == 64 ? 50 : 5;
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            var watch = Stopwatch.StartNew();
-            for (int i = 0; i < runs; i++) extractor.Extract(image.Bgra, size, size, "t");
-            watch.Stop();
-            long bytes = (GC.GetAllocatedBytesForCurrentThread() - before) / runs;
-            output.WriteLine($"{size}×{size}: {watch.Elapsed.TotalMilliseconds / runs:F2} ms, {bytes} B allocated per call (informational timing)");
+            // The steady state is the smallest of three batches: a one-off cost on this thread (a tier-up or on-stack
+            // replacement of a hot loop, a first type load) can land in any one batch on a slow runner. Windows CI once
+            // measured 2091 B per call at 512×512 in a single batch; steady state is a few hundred bytes.
+            long bytes = long.MaxValue;
+            double milliseconds = 0;
+            for (int batch = 0; batch < 3; batch++)
+            {
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                var watch = Stopwatch.StartNew();
+                for (int i = 0; i < runs; i++) extractor.Extract(image.Bgra, size, size, "t");
+                watch.Stop();
+                long perCall = (GC.GetAllocatedBytesForCurrentThread() - before) / runs;
+                if (perCall < bytes) (bytes, milliseconds) = (perCall, watch.Elapsed.TotalMilliseconds / runs);
+            }
+            output.WriteLine($"{size}×{size}: {milliseconds:F2} ms, {bytes} B allocated per call (informational timing)");
             Assert.True(bytes < 1024, $"{bytes} B per call at {size}×{size}"); // scratch comes from the array pool (per thread)
         }
     }
