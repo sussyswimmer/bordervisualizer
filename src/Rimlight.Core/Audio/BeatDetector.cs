@@ -24,7 +24,7 @@ internal sealed class BeatDetector
     private const float WarmUpFraction = 0.25f;
 
     private const int MaxHistory = 1024;         // per-step flux values; ≥ 4.2 s, as steps are ≥ 1/240 s (AudioAnalyzer)
-    private const int IntervalCount = 16;        // beat intervals kept for the BPM median
+    private const int IntervalCount = 16;        // beat intervals kept for the tempo estimate
     private const float MaxIntervalSeconds = 2f; // longer gaps (< 30 BPM) are not tempo
     private const float StaleBpmSeconds = 4f;    // no beat for this long: the tempo is unknown again
 
@@ -192,7 +192,7 @@ internal sealed class BeatDetector
 
     private static float MedianOfThree(float a, float b, float c) => MathF.Max(MathF.Min(a, b), MathF.Min(MathF.Max(a, b), c));
 
-    // Tempo from the median of recent beat intervals (doc 03 §4), without allocating.
+    // Tempo from recent beat intervals (doc 03 §4), without allocating.
     private void AddInterval(float seconds)
     {
         intervals[intervalHead] = seconds;
@@ -209,9 +209,32 @@ internal sealed class BeatDetector
             for (; j >= 0 && sorted[j] > value; j--) sorted[j + 1] = sorted[j];
             sorted[j + 1] = value;
         }
-        float median = intervalCount % 2 == 1
-            ? sorted[intervalCount / 2]
-            : 0.5f * (sorted[intervalCount / 2 - 1] + sorted[intervalCount / 2]);
-        EstimatedBpm = median > 0 ? 60f / median : 0;
+        float typical = TypicalInterval(sorted);
+        EstimatedBpm = typical > 0 ? 60f / typical : 0;
+    }
+
+    // Intervals further than this share from the median don't count toward the tempo (missed or extra beats).
+    internal const float TempoWindow = 0.25f;
+
+    // Spec clarification (H-016): a beat is only seen on a frame, so at a steady frame rate every interval is a whole
+    // number of frames (20 or 21 at 174 BPM and 60 fps) and the plain median picked one of the two (171.4 BPM, outside
+    // doc 03's ±2). The tempo is the mean of the intervals within ±25 % of the median: the median still finds the
+    // typical interval and drops missed (double) and extra (half) ones, and the mean of consecutive frame-quantized
+    // intervals is the true spacing to within a frame or two over the whole set (about ±1 BPM at 174 BPM with 16).
+    // When nothing lies that close (two equal clusters), the median itself is used.
+    internal static float TypicalInterval(ReadOnlySpan<float> sorted)
+    {
+        int count = sorted.Length;
+        if (count == 0) return 0;
+        float median = count % 2 == 1 ? sorted[count / 2] : 0.5f * (sorted[count / 2 - 1] + sorted[count / 2]);
+        float low = median * (1 - TempoWindow), high = median * (1 + TempoWindow), sum = 0;
+        int used = 0;
+        foreach (float interval in sorted)
+        {
+            if (interval < low || interval > high) continue;
+            sum += interval;
+            used++;
+        }
+        return used > 0 ? sum / used : median;
     }
 }

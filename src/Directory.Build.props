@@ -5,6 +5,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <LangVersion>latest</LangVersion>
+    <!-- Pinned so a newer SDK (global.json rolls forward to the latest installed) compiles the same
+         C# version and enables the same analyzer rules and warning wave as the .NET 8 SDK. -->
+    <LangVersion>12</LangVersion>
+    <AnalysisLevel>8.0</AnalysisLevel>
+    <!-- NuGet audit stays on, but a newly published advisory (NU1901-NU1904) or an offline restore
+         (NU1900) shows up as a warning instead of failing a build no commit touched. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
   </PropertyGroup>
 </Project>

@@ -26,6 +26,79 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         Assert.InRange(beats.Count(t => t >= 2), expected - 1, expected + 1);
     }
 
+    // H-016: at a steady frame rate a beat is only seen on a frame, so every interval is a whole number of frames
+    // (20 or 21 at 174 BPM and 60 fps) and a plain median of them read 171.4. No jitter here: a waitable swap chain
+    // paces frames far more evenly than the ±20 % above, which dithers the error away. Once the 16-interval history is
+    // full (17 beats after the first), every frame's estimate must be within doc 03's ±2 BPM, not only the last one.
+    [Theory]
+    [InlineData(48000, 90f)]
+    [InlineData(48000, 120f)]
+    [InlineData(48000, 126f)]
+    [InlineData(48000, 128f)]
+    [InlineData(48000, 140f)]
+    [InlineData(48000, 174f)]
+    [InlineData(44100, 126f)]
+    [InlineData(44100, 174f)]
+    public void TempoIsWithinTwoBpmAtASteadySixtyFps(int sampleRate, float bpm)
+    {
+        IAudioAnalyzer analyzer = CoreFactory.CreateAnalyzer();
+        float[] track = SyntheticAudio.KickTrack(sampleRate, 30, bpm, 0.8f, 0.2f);
+        float settled = 2 + 18 * 60 / bpm, low = float.MaxValue, high = float.MinValue;
+        int position = 0, frame = 0, beats = 0;
+        float previousBeat = 0;
+        while (position < track.Length)
+        {
+            int arrived = (int)Math.Min(track.Length, (long)++frame * sampleRate / 60);
+            AudioFeatures features = analyzer.Process(track.AsSpan(position, arrived - position), sampleRate, 1f / 60);
+            position = arrived;
+            if (features.Beat >= 0.999f && previousBeat < 0.999f) beats++;
+            previousBeat = features.Beat;
+            if (frame / 60f < settled) continue;
+            low = MathF.Min(low, analyzer.Diagnostics.EstimatedBpm);
+            high = MathF.Max(high, analyzer.Diagnostics.EstimatedBpm);
+        }
+        output.WriteLine($"{sampleRate} Hz, {bpm} BPM, 60 fps steady: {beats} beats, estimate {low:F2}..{high:F2} from {settled:F1} s, last {analyzer.Diagnostics.EstimatedBpm:F2}");
+        Assert.InRange(beats, (int)(30 * bpm / 60) - 2, (int)(30 * bpm / 60) + 1);
+        Assert.InRange(low, bpm - 2, bpm + 2);
+        Assert.InRange(high, bpm - 2, bpm + 2);
+    }
+
+    // The tempo rule on its own (H-016): the mean of the intervals within ±25 % of their median.
+    [Theory]
+    [InlineData(new[] { 20f, 21, 21, 20, 21, 21, 21, 20, 21, 21, 20, 21, 21, 21, 20, 21 }, 331f / 16)] // 174 BPM at 60 fps, in frames: not the median's 21
+    [InlineData(new[] { 0.5f, 0.5f, 1.0f, 0.5f, 0.5f, 1.0f, 0.5f }, 0.5f)]       // missed beats drop out
+    [InlineData(new[] { 0.5f, 0.25f, 0.25f, 0.5f, 0.5f }, 0.5f)]                 // extra beats drop out
+    [InlineData(new[] { 0.4f, 0.5f, 0.62f }, (0.4f + 0.5f + 0.62f) / 3)]          // inside the window at both ends
+    [InlineData(new[] { 0.37f, 0.5f, 0.5f }, 0.5f)]                              // just below it
+    [InlineData(new[] { 0.5f, 0.5f, 0.63f }, 0.5f)]                              // just above it
+    [InlineData(new[] { 0.3f, 0.3f, 0.6f, 0.6f }, 0.45f)]                        // two equal clusters: the median itself
+    public void TypicalIntervalAveragesTheIntervalsNearTheMedian(float[] intervals, float expected)
+    {
+        float[] sorted = [.. intervals.Order()];
+        Assert.Equal(expected, BeatDetector.TypicalInterval(sorted), expected * 1e-6f);
+    }
+
+    // The median still picks the typical interval, so a missed kick (a double interval) or an extra off-beat kick
+    // (a half interval) doesn't pull the mean that H-016 added.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MissedAndExtraBeatsDoNotPullTheTempo(bool extra)
+    {
+        var kicks = new List<float>();
+        for (int beat = 0; beat * 0.5f < 30; beat++)
+        {
+            if (!extra && beat % 4 == 3) continue;            // every fourth kick missing: intervals 0.5, 0.5, 1.0
+            kicks.Add(beat * 0.5f);
+            if (extra && beat % 4 == 1) kicks.Add(beat * 0.5f + 0.25f); // an off-beat kick: 0.5, 0.25, 0.25, 0.5
+        }
+        var analyzer = new AudioAnalyzer();
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KicksAt(48000, 30, kicks, 0.8f, 0.2f), 48000, jitter: 0.2f);
+        output.WriteLine($"extra {extra}: {beats.Count} beats for {kicks.Count} kicks, estimate {analyzer.Diagnostics.EstimatedBpm:F2}");
+        Assert.InRange(beats.Count, kicks.Count - 2, kicks.Count + 1);
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 118, 122);
+    }
+
     [Fact]
     public void MusicLikeMixTracksTheKick()
     {
@@ -311,9 +384,10 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
             frame++;
         }
         for (int i = 0; i < 2000; i++) Step();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1600; i++) Step();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 1600; i++) Step();
+        }));
     }
 
     [Fact]
@@ -547,7 +621,7 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         {
             t with { Sensitivity = 0.2f }, t with { Sensitivity = 2.1f }, t with { Sensitivity = float.NaN },
             t with { WindowSize = 256 }, t with { WindowSize = 512 }, t with { WindowSize = 32768 }, t with { WindowSize = 3000 },
-            t with { NoPacketTimeoutSeconds = 0.02f }, t with { NoPacketTimeoutSeconds = float.PositiveInfinity },
+            t with { NoPacketTimeoutSeconds = 0.02f }, t with { NoPacketTimeoutSeconds = 3601 }, t with { NoPacketTimeoutSeconds = float.PositiveInfinity },
             t with { FluxHistorySeconds = 4.1f }, t with { FluxHistorySeconds = 0 },
         })
         {
@@ -558,7 +632,7 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         foreach (AudioTuning good in new[]
         {
             t with { Sensitivity = 0.25f }, t with { Sensitivity = 2 }, t with { WindowSize = 1024 }, t with { WindowSize = 16384 },
-            t with { NoPacketTimeoutSeconds = 0.03f }, t with { FluxHistorySeconds = 4 },
+            t with { NoPacketTimeoutSeconds = 0.03f }, t with { NoPacketTimeoutSeconds = 3600 }, t with { FluxHistorySeconds = 4 },
         })
         {
             analyzer.Tuning = good;

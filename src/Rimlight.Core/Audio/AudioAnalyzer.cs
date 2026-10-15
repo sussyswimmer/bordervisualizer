@@ -292,7 +292,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         if (!(tuning.Sensitivity >= MinSensitivity && tuning.Sensitivity <= MaxSensitivity))
             throw new ArgumentOutOfRangeException(nameof(tuning.Sensitivity), $"Expected {MinSensitivity} through {MaxSensitivity} (doc 03 §2).");
         if (!(tuning.NoPacketTimeoutSeconds >= MinNoPacketTimeoutSeconds && tuning.NoPacketTimeoutSeconds <= MaxGapSeconds))
-            throw new ArgumentOutOfRangeException(nameof(tuning.NoPacketTimeoutSeconds), $"Expected at least {MinNoPacketTimeoutSeconds} s.");
+            throw new ArgumentOutOfRangeException(nameof(tuning.NoPacketTimeoutSeconds), $"Expected {MinNoPacketTimeoutSeconds} through {MaxGapSeconds} s.");
         if (!float.IsFinite(tuning.SilenceExitThresholdDb) || tuning.SilenceExitThresholdDb < tuning.SilenceThresholdDb)
             throw new ArgumentOutOfRangeException(nameof(tuning.SilenceExitThresholdDb), "Must be finite and at least SilenceThresholdDb.");
         if (tuning.SilenceHoldMs < 0) throw new ArgumentOutOfRangeException(nameof(tuning.SilenceHoldMs));
