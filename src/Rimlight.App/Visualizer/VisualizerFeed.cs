@@ -55,6 +55,15 @@ internal sealed class VisualizerFeed
 
     /// <summary>Overlay thread: the newest tuning request, once; null when there is none.</summary>
     internal TuningRequest? TakeTuning() => Interlocked.Exchange(ref pendingTuning, null);
+
+    /// <summary>
+    /// Overlay thread: the last request it handled, 0 for none. Kept here rather than in <see cref="AnalyzerTap"/>, so
+    /// it lasts as long as the window that numbers the requests, also while the window is minimized and detached.
+    /// </summary>
+    internal int HandledRequest { get; set; }
+
+    /// <summary>Overlay thread: why <see cref="HandledRequest"/> was refused, or null when it was applied.</summary>
+    internal string? TuningError { get; set; }
 }
 
 /// <summary>A tuning the visualizer asked for.</summary>

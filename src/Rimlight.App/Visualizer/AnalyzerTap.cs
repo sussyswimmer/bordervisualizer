@@ -9,14 +9,15 @@ namespace Rimlight.App.Visualizer;
 /// While a <see cref="VisualizerFeed"/> is attached it applies the tunings the UI posts (H-004: only the render thread
 /// touches the analyzer), records Level, Bass, Beat and the time step of every analyzer call next to the analyzer's
 /// own flux and threshold histories, and about 60 times a second copies all of it into the feed's next snapshot.
-/// Nothing here allocates per frame. With no feed attached it costs nothing.
+/// Nothing here allocates per frame. With no feed attached it costs nothing and holds on to none
+/// (<see cref="Detach"/>).
 /// </summary>
 internal sealed class AnalyzerTap
 {
     // At most about 60 snapshots a second, whatever the frame rate: the visualizer draws at 30.
     private const float SnapshotSeconds = 1f / 60;
 
-    private VisualizerFeed? feed;  // the feed the rings below were recorded for
+    private VisualizerFeed? feed;  // the feed the rings below are recorded for; null while none is attached
     private float[] level = new float[VisualizerFeed.HistoryEntries];
     private float[] bass = new float[VisualizerFeed.HistoryEntries];
     private float[] beat = new float[VisualizerFeed.HistoryEntries];
@@ -24,8 +25,6 @@ internal sealed class AnalyzerTap
     private int head;              // where the next entry goes
     private float sinceSnapshot;
     private long sequence;
-    private int handledRequest;
-    private string? tuningError;
 
     /// <summary>
     /// Before the analyzer runs this frame: applies the newest tuning the visualizer posted. The analyzer's setter
@@ -45,15 +44,15 @@ internal sealed class AnalyzerTap
         try
         {
             analyzer.Tuning = wanted; // a WindowSize change allocates and resets in here (CoreFactory.CreateAnalyzer)
-            tuningError = null;
+            current.TuningError = null;
         }
         catch (Exception exception)
         {
             // Validation failed (ArgumentException); the analyzer kept the previous tuning.
-            tuningError = exception.Message;
+            current.TuningError = exception.Message;
             Trace.WriteLine($"[Visualizer] Tuning not applied: {exception.Message}");
         }
-        handledRequest = request.Id;
+        current.HandledRequest = request.Id;
         sinceSnapshot = SnapshotSeconds; // report the outcome on this frame
     }
 
@@ -110,14 +109,23 @@ internal sealed class AnalyzerTap
         snapshot.Format = audio?.Format;
         snapshot.DroppedSamples = audio?.DroppedSamples ?? 0;
         snapshot.Tuning = analyzer.Tuning;
-        snapshot.TuningRequest = handledRequest;
-        snapshot.TuningError = tuningError;
+        snapshot.TuningRequest = current.HandledRequest;
+        snapshot.TuningError = current.TuningError;
         snapshot.Demo = demo;
         snapshot.Sequence = ++sequence;
         current.Publish();
     }
 
-    // A new visualizer window starts with empty plots and no tuning outcome, and gets a snapshot on its first frame.
+    /// <summary>
+    /// A frame without a visualizer: lets go of the feed (its window closed, hid or was minimized), so a closed
+    /// window's snapshots aren't kept alive, and the next attachment, even of the same feed, starts over.
+    /// </summary>
+    public void Detach() => feed = null;
+
+    // Every attachment starts with empty plots and gets a snapshot on its first frame. While none was attached the
+    // analyzer went on adding to its own histories (one entry per call) and nothing was recorded here, so older
+    // entries would pair Level, Beat and time steps from before with flux from after. The feed keeps its requests'
+    // outcome.
     private void Attach(VisualizerFeed current)
     {
         if (ReferenceEquals(current, feed)) return;
@@ -127,8 +135,6 @@ internal sealed class AnalyzerTap
         Array.Clear(beat);
         Array.Clear(seconds);
         head = 0;
-        handledRequest = 0;
-        tuningError = null;
         sinceSnapshot = SnapshotSeconds;
     }
 

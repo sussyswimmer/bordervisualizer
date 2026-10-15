@@ -145,6 +145,7 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         // The visualizer's tuning edits reach the analyzer here, on its own thread, before it runs (H-004).
         VisualizerFeed? feed = Volatile.Read(ref visualizer);
         if (feed is not null) tap.ApplyTuning(feed, analyzer, ClampSensitivity(settings.Sensitivity));
+        else tap.Detach(); // the analyzer runs on without it, so the next attachment starts its plots over
 
         int count = audio?.Read(samples) ?? 0;
         int sampleRate = audio?.SampleRate ?? FallbackSampleRate;
