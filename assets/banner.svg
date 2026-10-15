@@ -8,8 +8,8 @@
        build/icons.sh (or icons.ps1) renders it to assets/banner.png with tools/icon-gen.
 
        Text: every glyph is an outline, so the file needs no font. "Rimlight" is Inter Display SemiBold at
-       150 px with -0.02 em tracking; the tagline is Inter Regular at 34 px. Both were shaped with HarfBuzz
-       (kerning on) and centered on x = 640 by their ink.
+       150 px with -0.02 em tracking on baseline y = 338; the tagline is Inter Regular at 34 px on baseline
+       y = 414. Both were shaped with HarfBuzz (kerning on) and centered on x = 640 by their ink.
        Inter 4.0, copyright 2016 The Inter Project Authors (https://github.com/rsms/inter), is licensed under
        the SIL Open Font License 1.1 (https://openfontlicense.org), which allows embedding its outlines in a
        document like this one. Renaming the app means outlining the new name the same way. -->
