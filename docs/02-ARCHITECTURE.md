@@ -78,8 +78,11 @@ public readonly record struct LightState(
     float Spread,                             // 0..1 glow reach
     float CoreThicknessDip,                   // solid line thickness in DIPs
     float Phase,                              // 0..1 gradient rotation around the perimeter
-    float Pulse);                             // 0..1 beat pulse, used for a brief width/brightness kick
+    float Pulse,                              // 0..1 beat pulse, used for a brief width/brightness kick
+    float Visibility);                        // 0..1 every fade: pause, glow off, Off, silence → Hide
 ```
+
+*Clarification (C13): the frozen contract (doc 09 §3) has `Visibility` as the last field, which this sample lacked. `Intensity` excludes it, and the renderer multiplies alpha by both (H-008); the engine keeps `Ratio` in 0.1..0.9. `docs/CORE-API.md` §6 is the reference.*
 
 `LightEngine` is a pure function plus internal smoothing state. All the "feel" lives here and in the audio engine, and it's fully unit-testable.
 

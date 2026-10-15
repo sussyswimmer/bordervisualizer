@@ -68,7 +68,7 @@ Total target: **< 50 ms**. Use the newest samples every frame, and do not queue 
 A small always-on-top WPF window showing live:
 - The spectrum (log frequency axis) with the band boundaries marked
 - Scrolling plots of `Level`, `Bass`, `Beat`, raw flux, and the beat threshold
-- A beat counter and estimated BPM (median of recent beat intervals)
+- A beat counter and estimated BPM (median of recent beat intervals). *Clarification (C13, H-016): the estimate is the mean of the last 16 intervals that lie within ±25 % of their median, or the median when none does. A plain median is biased by whole-frame intervals at a steady frame rate (171.4 for 174 BPM at 60 fps); `docs/CORE-API.md` §4.4 has the details.*
 - `IsSilent`, the capture format, and the device name
 
 This is how Maxwell will tune the feel. Make all the parameters above live-editable here (sliders) and add a "Copy params as JSON" button. Parameters live in an `AudioTuning` record in Core with the defaults above.

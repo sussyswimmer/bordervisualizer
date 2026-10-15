@@ -1,5 +1,72 @@
 # Handoff
 
+## [OPEN] H-023 · from: claude-code (C13) · to: maxwell · type: CONTRACT CHANGE (XML only) · blocking: none
+**Need:** *(Filed as H-018 on the C13 branch; renumbered in the K10 docs pass, because K10 had taken H-018.)* Seven summaries in the frozen `src/Rimlight.Core/Contracts/` are out of date. The code and `docs/CORE-API.md` are right; only the XML text is stale:
+- `ISettingsStore`: "the real implementation arrives in C7". It has arrived.
+- `Settings`: "validation and persistence arrive in C7". Both exist.
+- `AudioTuning.MinFlux`: "provisional K0 default, to be tuned in C2". The default stays 0.01, but it is relative to the window's RMS.
+- `AudioTuning.Sensitivity`: "inversely scales the flux multiplier". It scales by 1/√Sensitivity and also relaxes the median guard.
+- `AudioTuning.FluxThresholdMultiplier`: "standard deviations above mean". The effective threshold is the largest of three criteria.
+- `LightState.Intensity`: "Brightness, 0..1". It excludes `Visibility` (H-008 item 2).
+- `LightState.Ratio`: "0..1". The engine gives 0.1..0.9.
+**Repro:** `docs/CORE-API.md` §10 lists them with the right wording.
+**Proposed:** Maxwell writes "approved: XML only" under this entry. Then only these seven XML summaries change, to the wording in CORE-API.md. No type, member, signature or default changes. Until then, CORE-API.md §10 is the correction.
+---
+## [DONE] H-022 · from: claude-code (K12) · to: claude-code (K10) or codex · blocking: the first release (v1.0.0)
+**Need:** *(Filed without a number on the K12 branch; numbered in the K10 docs pass.)* CHANGELOG.md catches up before the v1.0.0 tag.
+- `[Unreleased]` has no Lane B entries for K4–K7: now playing and album colors, the fullscreen/battery/lock pauses, the tray menu, the hotkey and startup, and the Settings window.
+- Its "Colors from album art" entry still says "Hooking this up to the track that's playing is still to come."
+- Its release heading is `[0.1.0]`, but doc 08 §5 and docs/RELEASE-GUIDE.md ship v1.0.0.
+**Repro:** read CHANGELOG.md on `wip/k12-readme-banner` (base 8abd6f5).
+**Proposed:** add the K4–K9 user-facing entries, fix the album-colors line, and rename the heading to `[1.0.0]` with the date and link refs when tagging (docs/RELEASE-GUIDE.md §5 has this step).
+**Resolved (K10, `wip/k10-integration`):** CHANGELOG `[Unreleased]` now says the album colors follow the track that is playing. It adds entries for the pauses, the tray, shortcut and startup, the Settings window, the installer and automatic updates, demo mode, the visualizer, the soak and benchmark, and Lane B's tests. Renaming the heading to `[1.0.0]` stays a tagging step (RELEASE-GUIDE §5).
+---
+## [DONE] H-021 · from: claude-code (K9) · to: claude-code (K12) · blocking: none
+**Need:** *(Filed without a number on the K9 branch; numbered in the K10 docs pass.)* README facts from K9, so the FAQ and the Privacy section match the app.
+1. Logs: `%APPDATA%\Rimlight\logs` (not `%LOCALAPPDATA%`). Settings: `%APPDATA%\Rimlight\settings.json`.
+2. Uninstall (Windows Settings > Apps) removes the app, its shortcuts and the "Launch at startup" entry. It keeps `%APPDATA%\Rimlight` (settings and logs); delete that folder by hand for a clean removal.
+3. Updates:
+   - An installed copy checks GitHub Releases 30 s after start and every 12 h while Settings > Behavior > Update automatically is on, and downloads new versions in the background.
+   - It then shows "Update ready — restart Rimlight to apply."; a click restarts into the new version, and otherwise it installs at the next start. *(Changed in K9's review: a click asks "Restart now to install version X?", and the tray menu's "Restart to update (version X)" restarts without asking.)*
+   - "Check for updates" in the tray and in Settings > About works with the setting off.
+   - Prereleases are never offered.
+   - The check is the only network call: unauthenticated GitHub API requests, with no ID sent.
+**Repro:** n/a.
+**Proposed:** K12 uses these in the FAQ ("How do I uninstall?", updates) and in Privacy. Anything that already says `%LOCALAPPDATA%\Rimlight\logs` (from H-013's original text) changes to the new path.
+**Resolved (K12, checked in K10):** README.md's FAQ and Privacy sections already state each fact, and they match K9's code:
+- logs in `%APPDATA%\Rimlight\logs` and settings in `%APPDATA%\Rimlight`;
+- uninstall keeps `%APPDATA%\Rimlight`;
+- "Update automatically" is in Settings > Behavior;
+- the update check is the only network call.
+---
+## [DONE] H-020 · from: claude-code (Lane A, C12) · to: claude-code (Lane B: K10) · blocking: none
+**Need:** *(Suggested in the C12 notes; filed in the K10 docs pass.)* `MusicGlowSource.ApplySettings` allocates on the render thread when a setting changes: one `AudioTuning` (120 B) per Sensitivity edit, and a `Palette` per manual color edit. This is a once-per-edit cost, not per frame.
+**Repro:** `FramePipeline` mirrors the retune and reports it as `SettingsBytes`; docs/PERF.md, "Settings edits allocate, in the app too".
+**Proposed:** If strict 0 B on the render thread is wanted, build both on the UI thread and publish them with the Settings snapshot.
+**Resolved (K10):** kept on the overlay thread, and documented in `MusicGlowSource.ApplySettings`.
+- Why: the new tuning must start from the analyzer's own, which the visualizer edits on that thread (H-004). A copy built on the UI thread could put back a tuning the overlay thread has since replaced.
+- Measured cost, once per edit and never per frame: 120 B per Sensitivity edit, 48 B per manual color edit, and 112 B per settings change while the demo runs with the glow off or Off (the demo's engine settings).
+- `MusicGlowSourceTests` holds each edit under 256 B and every frame at 0 B.
+---
+## [OPEN] H-019 · from: claude-code (Lane A, C12) · to: claude-code (Lane B: K8, K10, K11), maxwell · blocking: none
+**Need:** *(Filed as H-018 on the C12 branch; renumbered in the K10 docs pass, because K10 had taken H-018.)*
+1. **Windows CPU numbers for `docs/PERF.md`.** Maxwell measures the real app with the steps in its "Measuring the app on Windows" section, and K11 writes them into the "At a glance" row "The real app's CPU on Windows" (currently "not measured yet"). The cases:
+   - Release build, Settings window closed
+   - music playing at 60 fps on 1 and on 2 monitors: target under 2 %
+   - Idle Glow, "Hide the glow" while quiet, and Off: target about 0 %, with no presents and GPU at 0 %
+2. **Keep the Bench copies in step.** `Rimlight.Bench` times the render thread on Linux through copies of two Lane B pieces:
+   - `FramePipeline` copies `MusicGlowSource.NextFrame`, including its refill rule, `Motion` and `ApplySettings`.
+   - `PaceModel` copies `FramePacer.Next` and the dt rule of `OverlayHost`'s loop.
+   - A Lane B change to those (for example K8's `--demo` source or K10 fixes) should update the copy in the same PR, or add a line here.
+**Repro:** n/a.
+**Proposed:** K11 records the numbers along with the CPU model, the logical processor count and the monitors' refresh rates. Lane B checks the two Bench files when it touches `MusicGlowSource` or `FramePacer`.
+**Progress (K10):** item 2 is now enforced by a test.
+- `src/Rimlight.Platform.Tests/Overlay/BenchMirrorTests.cs` runs FramePipeline next to the app's real MusicGlowSource over a 45 s session. Light state, refills, gradient and motion must match bit for bit.
+- It also compares PaceModel with FramePacer over 200,000 random frames, and `PaceModel.FrameDt` with `FramePacer.FrameDt`.
+- It found PaceModel without C13's fade rule; that is fixed (H-018).
+
+Item 1 (Maxwell's Windows CPU numbers) stays open: row 14 of the K11 checklist in PROGRESS.md.
+---
 ## [OPEN] H-018 · from: claude-code (K10) · to: codex, maxwell · blocking: none
 **Need:** Maxwell asked Claude Code to finish both lanes, so K10 changed Lane A files. Please review them on the K10 PR and keep them in later Lane A work:
 - `src/Rimlight.Bench/PaceModel.cs`: C13's fade rule. With nothing on screen, a light with Visibility > 0 keeps the full rate, as `FramePacer.Next` does. The repro is `BenchMirrorTests.PaceModelDecidesLikeTheFramePacerForOneMonitor`. In the K10 review, a 30-minute soak gave the same frame counts before and after the fix, so PERF.md stands.
@@ -17,12 +84,18 @@
 
 **Proposed:** Codex acknowledges the list here. Maxwell updates CLAUDE.md and AGENTS.md, or says how they should read.
 ---
-## [OPEN] H-017 · from: claude-code · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
+## [DONE] H-017 · from: claude-code · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 **Need:** *(Filed as H-012 on the K7 branch; renumbered at the Lane A + Lane B integration because C10 had claimed H-012.)* Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
 **Repro:** `src/Rimlight.App/SettingsUi/GlowPreview.cs` (the preview's pair), `src/Rimlight.App/Overlay/MusicGlowSource.cs` (the overlay's).
 **Proposed:** Keep C5/C6 instances independent: no mutable static state (caches, scratch buffers, random generators) shared between instances. Confirm in C5/C6, or say here if something is shared.
+**Resolved (C13, `wip/c13-core-api`):** Confirmed: the analyzer, blender, extractor and engine share no mutable state, and Core needed no change. `src/Rimlight.Tests/InstanceIndependenceTests.cs` checks three things:
+- **Statics.** A scan of every static field in Core's Audio, Color and Lighting namespaces: each must be readonly and immutable, with no `[ThreadStatic]`. `Srgb.ByteToLinearTable` is the one reviewed exception, a read-only table.
+- **Two glow pipelines.** An overlay pair (60 fps) and a preview pair (30 fps, 200 ms edits) share palette and settings instances. Run interleaved on one thread, and on two threads at once, each matches its solo run bit for bit: state, IsStatic, IsAnimating, gradient and Current.
+- **Two analyzers.** Interleaved, each matches its solo run bit for bit: features and every diagnostics value.
+
+Making any instance clock, cache or scratch static fails at least one of these tests. The extractor has no fields: its scratch comes from `ArrayPool` per call, and `PaletteExtractorTests` already runs it on 8 threads.
 ---
-## [OPEN] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
+## [DONE] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
 **Need:** `AnalyzerDiagnostics.EstimatedBpm` (the median of the last 16 beat intervals) is biased when the render loop is steady. Beats are only seen at frame times, so the intervals are whole frames and the median picks one of the two neighbouring values.
 **Repro:**
 - Run `wav-analyze generate t.wav --bpm 174 --seconds 30`, then `wav-analyze t.wav --no-plot` (60 fps, no jitter).
@@ -38,8 +111,17 @@
 - With `--jitter 0.2`, which is what the C2 tests use, the error dithers away (126.1, 127.9, 140.2, 173.5). A waitable swap chain is much steadier than ±20 %, so the K8 visualizer will show the bias.
 - The tool's own tempo (median, then the mean of the intervals within ±25 % of it) reads 126.0, 128.0, 140.0 and 174.0.
 **Proposed:** In `BeatDetector`, after the median, average the stored intervals within ±25 % of it. The buffer is already sorted, so this needs no allocation. Then add a no-jitter tempo test at 126 and 174 BPM. Display-only today: no light behavior depends on `EstimatedBpm`.
+**Note (K8):** the visualizer shows `EstimatedBpm` as the analyzer reports it. Before the fix below, with the overlay calling at a steady 60 Hz, a 124 BPM synthetic track read 124.1 in the K8 harness.
+**Resolved (C13, `wip/c13-core-api` + `wip/c13-core-api-fix`):** `BeatDetector` now averages the stored intervals within ±25 % of their median. It works in the already sorted buffer and allocates nothing. If no interval qualifies, it keeps the median: `AudioAnalyzerTests.AlternateMissedBeatsKeepTheMedianTempo` guards this (every third kick missing reads 80 BPM).
+- **wav-analyze, steady 60 fps:** the tracks read 126.0, 128.0, 140.0 and 174.0. They read 124.1, 128.6, 138.5 and 171.4 before.
+- **wav-analyze, ±20 % jitter:** readings moved by at most 0.2 BPM (126.1, 128.1, 140.1 and 173.6, from 126.1, 127.9, 140.2 and 173.5).
+- **Tests:**
+  - `AudioAnalyzerTests.SteadyFrameRateTempoIsNotBiasedByFrameQuantization` covers 126 BPM at steady 60 and 30 fps and 174 BPM at 60 and 144 fps. It checks a 1 BPM bound on every reading from 10 s on, tighter than doc 03's ±2, and failed before the fix.
+  - `MissedBeatsDropOutOfTheTempo` guards the inlier filter.
+- **The 126 BPM case was already inside ±2 before** (124.14), so it fails before the fix only on the 1 BPM bound.
+- The `CoreFactory.CreateAnalyzer` remarks and `docs/CORE-API.md` §4.4 describe the new estimate; doc 03 §4 carries it as a clarification (K10 docs pass).
 ---
-## [OPEN] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
+## [DONE] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
 **Need:** K8's "Copy params as JSON" should produce what `wav-analyze --tuning` reads, so a tuned feel can be replayed offline and handed back for the default re-tune (sync point 2).
 **Format:**
 - One flat JSON object whose keys are `AudioTuning` property names. Any subset is allowed, and missing keys keep their defaults.
@@ -47,8 +129,18 @@
 - `System.Text.Json.JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })` with default naming already produces this. Copy every property, not only the changed ones, so the JSON stays valid if a default changes.
 - Reference implementation: `tools/audio-tools/TuningJson.cs`.
 **Proposed:** K8 serializes the live `analyzer.Tuning` this way. Mark DONE in the K8 PR.
+**Resolved (K8, `wip/k8-visualizer-demo`):**
+- "Copy params as JSON" writes the tuning in effect (the live `analyzer.Tuning`, taken from the render thread's snapshot) with `JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })`: all 26 properties, default naming. That is `Rimlight.App.Visualizer.TuningParameters.ToJson`.
+- "Paste JSON" reads the reference reader's way: any subset on top of the defaults, keys in any case, comments and trailing commas allowed, unknown keys refused. A pasted Sensitivity changes the setting (H-007), and only after a throwaway analyzer accepted the whole tuning, so a refused paste changes nothing.
+
+**Verified (K10):** committed as `src/Rimlight.Platform.Tests/App/TuningParametersTests.cs`:
+- the output is byte-identical to `TuningJson.Serialize`;
+- a tuning with all 26 properties changed round-trips through `TuningJson.Parse` and "Paste JSON";
+- paste reads a subset, any case, comments and trailing commas, and refuses unknown keys, null and arrays, exactly like the reference reader;
+- every default lies on its slider's grid and writes back exactly;
+- every step of every slider is a tuning the real analyzer accepts, apart from the two silence thresholds, which may cross on purpose.
 ---
-## [OPEN] H-014 · from: claude-code (C9) · to: claude-code (Lane B: K9, K6, logging, K12) · blocking: K9 (the first release)
+## [DONE] H-014 · from: claude-code (C9) · to: claude-code (Lane B: K9, K6, logging, K12) · blocking: K9 (the first release)
 **Need:** What the app must do now that `build/pack.ps1` packs it with Velopack. The setup is vpk 1.2.161, packId `Rimlight`, install root `%LocalAppData%\Rimlight`, and channels `win` (x64) and `win-arm64`.
 1. **K9, required before the first tag:**
    - **Package.** Add the `Velopack` NuGet package at 1.2.161, the vpk version in `.config/dotnet-tools.json` (MIT). vpk warns when the two differ.
@@ -74,8 +166,31 @@
    - **Signing.** When signing is turned on, drop the SmartScreen sentence there and in the README.
 **Repro:** On the current app, `pwsh build/pack.ps1 -Runtimes win-x64` without `-SkipVelopackAppCheck` fails at vpk's check.
 **Proposed:** K9 does item 1 and the hook wiring in item 2, K6 the `Run` value, the logging task item 3, and K12 item 4. Mark this DONE in the K9 PR.
+**Resolved (K9, `wip/k9-velopack-updates` + `wip/k9-velopack-updates-fix`):**
+1. **Package, entry point, dry run, updates:**
+   - Velopack 1.2.161 (MIT) is in Rimlight.App.
+   - App.xaml is a Page (`EnableDefaultApplicationDefinition=false`), and `Program.Main` runs `VelopackApp.Build()…Run()` first.
+   - vpk 1.2.161 verifies it on x64 and ARM64 packs: "Verified VelopackApp.Run() in 'System.Void Rimlight.App.Program::Main()'".
+   - The release dry run no longer passes `-SkipVelopackAppCheck`.
+   - `UpdateService` uses `new UpdateManager(new GithubSource("https://github.com/sussyswimmer/bordervisualizer", null, false))` with no channel and does nothing when `IsInstalled` is false.
+   - The AUMID is confirmed: `velopack.Rimlight`, the nuspec's `shortcutAumid`.
+2. **Hooks and startup:**
+   - Hooks run inside `Run()`, before WPF, the mutex or the tray exist. `OnBeforeUninstallFastCallback` removes the HKCU Run value. If `Run()` throws during a hook run, `Main` still never starts the app (and removes the Run value for an uninstall).
+   - Velopack's automatic install at startup is off: Update.exe kills every process in the install folder, so a second start would end a running copy. The app installs a downloaded update itself, after the single-instance claim.
+   - K6's Run value was checked against 1.2.161 and needed no change: the stub `%LocalAppData%\Rimlight\Rimlight.exe` is named after `--packTitle` and runs `Update.exe start -- <args>`, so `--background` reaches `current\Rimlight.exe`.
+3. **Logging:** logs are in `%APPDATA%\Rimlight\logs`. Doc 02, CONTRIBUTING.md and the bug form are updated. Velopack's library lines also reach that log as `[Velopack] …`; Update.exe logs only to `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, which CONTRIBUTING.md and the bug form ask for on install, update and uninstall problems.
+
+**Item 4 resolved (K12, `wip/k12-readme-banner`):**
+- The README links `releases/latest/download/` for `RimlightSetup.exe`, `RimlightSetup-arm64.exe`, `Rimlight-win-Portable.zip` and `Rimlight-win-arm64-Portable.zip`.
+- `.github/release-notes-intro.md` has the demo GIF slot at its top by absolute URL (`raw.githubusercontent.com/…/main/assets/demo.gif`), commented out until the GIF is on main.
+- The SmartScreen sentence is in README Install. docs/RELEASE-GUIDE.md §6 says to drop it there and in the intro once signing is on.
+
+**Checked (K10):** the integrated start and stop order is right.
+- Start: `Program.Main` runs `VelopackApp…Run()` first. Then come `App`, `AppLog.CatchUnhandled`, `SingleInstance.Claim`, `AppLog.Start`, `UpdateService.InstallDownloadedUpdate(e.Args)` and finally `AppController.Start`.
+- Restart now: it saves the settings and starts Update.exe, then quits normally. `App.OnExit` first stops taking hand-overs (`SingleInstance.StopListening`). `AppController.Dispose` closes the settings window, visualizer and welcome, then disposes, in this order: the hotkey, updates, media, system watchers, overlay, capture, tray and settings. The mutex is released last, so the new version can claim it.
+- Install at start passes the start's own arguments on to the new version; `--demo` and `--debug-visualizer` among them are harmless. Restart now passes only `--background`.
 ---
-## [OPEN] H-013 · from: claude-code (C11) · to: claude-code (Lane B: logging, K6, K7, K9, K12), codex · blocking: none
+## [DONE] H-013 · from: claude-code (C11) · to: claude-code (Lane B: logging, K6, K7, K9, K12), codex · blocking: none
 **Need:** C11's user-facing docs name UI strings and paths that Lane B hasn't built yet. Keep them as written, or update the files in the same PR that changes them.
 1. Logs live in `%LOCALAPPDATA%\Rimlight\logs`, at most five files of 1 MB (doc 02). The tray item is named exactly **Open logs folder** (doc 06 §2). Logs never contain audio.
 2. The version is shown in **Settings > About**. **Hide from screen capture** and auto-update are under **Settings > Behavior** (doc 06 §3).
@@ -83,8 +198,26 @@
 4. **Please verify (K9/C9):** Velopack installs to `%LOCALAPPDATA%\{packId}` by default. If the pack ID is `Rimlight`, the logs folder sits inside the install root, which uninstall may delete. Doc 07 Phase 6 says uninstall keeps the settings and logs folders.
 **Repro:** `.github/ISSUE_TEMPLATE/bug_report.yml` (Logs, Rimlight version and screenshot fields), `CONTRIBUTING.md` ("Reporting a bug with logs"), `SECURITY.md` (Supported versions, Reporting).
 **Proposed:** Lane B keeps these names, or edits the three files when it renames one. K12's README FAQ "How do I report a bug?" links the bug form and CONTRIBUTING's "Reporting a bug with logs" section. For item 4, choose a logs location that survives uninstall, or change doc 07's promise.
+**Progress (K9):**
+- **Item 1:** logs are now in `%APPDATA%\Rimlight\logs`; CONTRIBUTING.md, the bug form and doc 02 are updated. The tray item is still "Open logs folder", and logs still never contain audio.
+- **Item 4:** verified. Velopack's uninstall deletes `%LOCALAPPDATA%\Rimlight` (Update.exe `remove_dir_contents(root)`), so the logs moved next to settings.json, and both survive an uninstall as doc 07 Phase 6 says.
+- **Items 2–3:** unchanged (K7 built them).
+
+**K12 part (`wip/k12-readme-banner`):** the README FAQ "How do I report a bug?" uses the tray's "Open logs folder" and links the bug form and CONTRIBUTING's "Reporting a bug with logs". The README says `%APPDATA%\Rimlight\logs`.
+
+**Resolved (K10):** every path and UI string in CONTRIBUTING.md, SECURITY.md, `.github/ISSUE_TEMPLATE/*`, README.md and docs/RELEASE-GUIDE.md was checked against the code, and all of them match:
+- Paths: `%APPDATA%\Rimlight\logs` (`AppLog.Folder`), with at most 5 files of 1 MB (`RollingFileLog`); `%APPDATA%\Rimlight\settings.json` (C7's `JsonSettingsStore`); `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`.
+- Tray items: "Open logs folder", "Demo mode", "Restart to update", Presets.
+- Settings > About: the version, "Check for updates", "Open logs folder".
+- Settings > Behavior: "Hide from screen capture", "Update automatically", "Start with Windows", "Pause in fullscreen apps", and "On battery" with "Save power (30 fps)", "Pause the glow" and "Keep going".
+- Settings > Displays: "Frame rate limit". Settings > Color: "Manual". Settings > Appearance: Glow and Brightness.
+- Defaults and the visualizer: Ctrl+Alt+L, and "Copy params as JSON".
+
+One fix: nothing logs track text (H.NotifyIcon's tooltip error is "UpdateToolTip failed."). CONTRIBUTING.md and the bug form now say logs "never contain audio or track titles, but they can include device and monitor names", and file paths that contain the Windows user name.
+
+Who did what: K9 resolved items 1 and 4 (logs in `%APPDATA%`, kept on uninstall), K7/C7 items 2–3, and K12 the README FAQ links.
 ---
-## [OPEN] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
+## [DONE] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
 **Need:** Use the icons C10 generated (PR #15).
 1. **K6, tray while the glow is off (doc 06 §2):** `src/Rimlight.App/Assets/Rimlight-dim.ico` is the app icon at 50 % opacity and is already a WPF `Resource`.
    - When `Enabled` changes, swap `TaskbarIcon.IconSource` between `pack://application:,,,/Assets/Rimlight.ico` and `…/Rimlight-dim.ico`.
@@ -97,14 +230,37 @@
    - After editing either SVG, run `build/icons.sh` (or `icons.ps1`). `CommittedIconsTests` fails until the icons are regenerated.
 **Repro:** n/a.
 **Proposed:** K6 and K12 pick these up. Mark this DONE once the tray uses the dim icon.
+**Resolved (K6 #22, K12 `wip/k12-readme-banner`, checked in K10 `wip/k10-integration`):**
+- While the glow is off, the tray shows the committed `src/Rimlight.App/Assets/Rimlight-dim.ico` (`TrayIconImages.Load` reads it as a WPF resource). It derives a 50 % icon only if that file is missing or its sizes differ from the app icon's.
+- `TrayIconImages`' summary now says this, and no Lane B file says "placeholder icon" any more.
+- K12's banner (`assets/banner.svg`) reuses icon.svg's rim gradient, halo and inward spill. `build/icons.sh` / `icons.ps1` also render `assets/banner.png`, which `CommittedIconsTests.BannerMatchesAFreshRenderOfItsSvg` checks.
 ---
-## [OPEN] H-011 · from: claude-code · to: codex · blocking: none (C6; K3 paces frames on these)
+## [DONE] H-011 · from: claude-code · to: codex · blocking: none (C6; K3 paces frames on these)
 **Need:** What the K3 render loop assumes about `ILightEngine.IsStatic` and the light state, so C6 lets the glow idle without visible stepping. Nothing changes in `Contracts/`.
 1. **`IsStatic` means time alone changes nothing:** with the same audio features, palette, settings and `paused`, further `Update` calls (any dt) return the same state. No breathing, drift, smoothing or fade is still moving. Lane B then stops presenting. In music sync it keeps calling `Update` about 10 times a second, so a hidden glow (When silent = Hide) comes back when music returns. Otherwise (Off, `Enabled = false`, paused) it stops calling `Update` until an input changes.
 2. **Fully hidden is `Visibility == 0`.** Anything under 0.5/255 counts as hidden: the overlay windows are then hidden, so fullscreen apps below them can flip directly to the display.
 3. **Idle Glow is drawn at 10 fps.** Breathing and phase drift should stay slow (PRD §2: ±10% over about 6 s; drift 0.015 cycles/s), at most about 0.25 per second in Intensity, Visibility, Pulse, Spread or Ratio. Faster change is detected and drawn at the full rate, but up to 100 ms late. In music sync the renderer drops to 10 fps 1.75 s after `IsSilent` turns true, so the silence → Idle Glow fade (1.5 s) should be done by then.
 4. **dt:** after a gap in frames (a static glow, or an input that wakes the loop between 10 fps frames), `Update` gets one ordinary frame's dt, not the length of the gap. Fades therefore start on the first frame after the input.
 **Proposed:** Confirm in C6, or correct here.
+**Resolved (C13, `wip/c13-core-api` + `wip/c13-core-api-fix`):** `src/Rimlight.Tests/Lighting/RenderLoopContractTests.cs` (46 cases) encodes all four assumptions against `CoreFactory.CreateLightEngine()`, driven the way K3 drives it: full-rate frames, 10 Hz polls, no calls while still, and one ordinary dt after a gap. Assumptions 1–3 held:
+1. **Static.** With the same inputs, any dt (0 to 3600, NaN) returns the first static state bit for bit. Polling at 10 Hz, at 60 fps or not at all changes nothing afterwards. Audio never wakes a gate-closed engine. The 10 Hz poll that hears music wakes it already above 0.5/255.
+2. **Hidden.** Every fade-out lands on +0, and `IsStatic` follows on the next frame. Visibility is under 0.5/255 only in the last 40 ms or less of a fade-out (0–38 ms measured) and never rests between 0 and 0.5/255.
+3. **Idle motion.** Idle Glow moves at most 0.0942 per second at Brightness 1. The silence → Idle Glow crossfade ends 1.500–1.510 s after `IsSilent` (30–240 fps, ±20 % jitter), before K3 slows at 1.75 s.
+
+Assumption 4 failed in two integrated cases, which the C13 review found:
+- At start, a µs first frame released the engine's 1/60 s wake cap, and the GPU-setup frame then popped the glow in at about 26 %, at 60 Hz too.
+- Above about 130 Hz the first fade-in frame is under 0.5/255, so `FramePacer` waited 100 ms and the glow came in at about 29 %.
+
+Two fixes:
+- **Core:** steps after waking count at most 1/60 s each until they add up to 1/60 s. Constant-rate sequences are bit-identical to before. Guarded by `AShortWakeStepDoesNotLetALongOneJump` (7 cases).
+- **Lane B:** `FramePacer.Next` drops Full to Slow with nothing on screen only while `Visibility == 0`.
+
+At 30 fps the first wake step counts 1/60 s, so a 300 ms fade takes 317 ms. `LightEngineTests.HidingDropsAPendingBeatPush` also covers the dropped beat push. `docs/CORE-API.md` §6.4 states these semantics.
+
+**Lane B check (K10):** C13's FramePacer change, tested on Linux against the real engine:
+- `FramePacerTests.AFadeUnderMinVisibilityKeepsTheFullRate` covers the rule itself.
+- With `PacingTimelineTests`, resuming at 60, 144 and 240 Hz (native) fades in from the first frame with steps of 0.1 or less, and the start fade-in has no jump with 0, 150 or 250 ms of GPU setup.
+- Bench's PaceModel had kept the old rule. It is fixed, and `BenchMirrorTests` now compares the two (H-018, H-019).
 ---
 ## [DONE] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
@@ -166,6 +322,7 @@
 **Need:** A decision on how `AudioTuning` defaults get re-tuned. Doc 09 sync point 2 expects Codex to update them from the debug-visualizer JSON, but the values live inside the frozen `src/Rimlight.Core/Contracts/AudioTuning.cs`.
 **Repro:** `AudioTuning.cs` declares every default inline (e.g. `MinFlux = 0.01f` at line 61, a provisional value C2 will also want to calibrate).
 **Proposed:** Maxwell writes "approved: default values only" under this entry, so Codex may change default *values* in `AudioTuning.cs` (never names, types or members) without a new CONTRACT CHANGE. Otherwise each re-tune needs its own CONTRACT CHANGE entry.
+**Note (K8):** the visualizer's "Copy params as JSON" is ready for sync point 2 (H-015). Tuned values only reach the defaults once Maxwell answers this entry. The tuning session's steps are row 17 of the K11 checklist in PROGRESS.md.
 ---
 ## [DONE] H-004 · from: claude-code · to: codex · blocking: none (needed before C2/C5 merge)
 **Need:** Confirm, and state in the C2/C5 PRs, how Lane B will call Core. Lane B (K2/K3/K8) is built on these assumptions:
