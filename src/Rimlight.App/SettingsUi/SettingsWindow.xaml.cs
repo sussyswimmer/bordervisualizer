@@ -15,7 +15,8 @@ namespace Rimlight.App.SettingsUi;
 /// <summary>
 /// The settings window (doc 06 §3): a Fluent window with Mica that follows Windows' light or dark theme, with six pages
 /// in a navigation view. Every change applies live. Closing only hides it (the app keeps running in the tray), and
-/// nothing of it runs while it is hidden or minimized. Created on first use and kept; use it on the UI thread only.
+/// nothing of it runs while it is hidden or minimized, or nobody can see the screen (locked, switched away from, going
+/// to sleep, display off). Created on first use and kept; use it on the UI thread only.
 /// </summary>
 internal partial class SettingsWindow : FluentWindow
 {
@@ -32,6 +33,7 @@ internal partial class SettingsWindow : FluentWindow
     private IDisposable? audio;
     private bool subscribed;
     private bool themeQueued;
+    private int systemQueued; // set by the watcher thread, cleared on this one
     private bool sized;
     private bool toastShown;
 
@@ -58,6 +60,8 @@ internal partial class SettingsWindow : FluentWindow
         StateChanged += (_, _) => UpdateActivity();
         Closing += OnClosing;
         Closed += OnClosed;
+        // WPF keeps a window visible on a locked or dark screen; the watcher says when nobody can see it.
+        if (app.SystemPauses is { } system) system.StateChanged += OnSystemStateChanged;
     }
 
     /// <summary>Shows the window, or brings it to the front, on its last page.</summary>
@@ -113,7 +117,7 @@ internal partial class SettingsWindow : FluentWindow
     // The selected page runs only while the window is on screen, and outside changes are followed only then.
     private void UpdateActivity()
     {
-        bool shown = IsVisible && WindowState != WindowState.Minimized;
+        bool shown = IsVisible && WindowState != WindowState.Minimized && !ScreenUnseen();
         Subscribe(shown);
         ISettingsPage? next = shown ? selected : null;
         if (!ReferenceEquals(next, active))
@@ -142,6 +146,23 @@ internal partial class SettingsWindow : FluentWindow
             audio.Dispose();
             audio = null;
         }
+    }
+
+    // Nobody can see the window: the session is locked or switched away from, the machine is going to sleep, or the
+    // display is off (K5's watcher). A fullscreen app doesn't count, since the window may be on another monitor.
+    private bool ScreenUnseen() =>
+        app.SystemPauses?.State is { Locked: true } or { Disconnected: true } or { Suspended: true } or { DisplayOff: true };
+
+    // Watcher thread: one queued update follows the latest state however many changes arrive meanwhile.
+    private void OnSystemStateChanged()
+    {
+        if (Interlocked.Exchange(ref systemQueued, 1) == 0) Dispatcher.InvokeAsync(OnSystemStateQueued);
+    }
+
+    private void OnSystemStateQueued()
+    {
+        Volatile.Write(ref systemQueued, 0);
+        UpdateActivity();
     }
 
     private void Subscribe(bool on)
@@ -184,6 +205,7 @@ internal partial class SettingsWindow : FluentWindow
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        if (app.SystemPauses is { } system) system.StateChanged -= OnSystemStateChanged;
         active?.SetActive(false);
         active = null;
         Subscribe(false);

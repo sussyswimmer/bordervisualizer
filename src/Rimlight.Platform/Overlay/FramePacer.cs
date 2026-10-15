@@ -22,7 +22,8 @@ internal readonly record struct FrameReport(
     bool GradientChanged,    // the palette gradient was refilled this frame
     bool AnyVisible,         // some overlay shows a glow (the others are hidden)
     bool Transitioning,      // a per-monitor fade is in progress
-    bool AllPresented);      // every overlay already shows this frame (or is hidden); nothing is left to present
+    bool AllPresented,       // every overlay already shows this frame, is hidden, or is stalled
+    bool Stalled);           // a stalled overlay (no frame taken for a second: display off, DWM stalled) has one to show
 
 // The frame-pacing policy (doc 02 "Frame pacing"), kept free of Windows calls so it can be checked off Windows.
 // Owned by the overlay thread.
@@ -31,7 +32,9 @@ internal readonly record struct FrameReport(
 // capped at 30 fps when "Reduce on battery" applies. When that rate is the display's refresh the overlay thread waits
 // on a swap chain's frame-latency object (vsync) instead of the timer, so frames line up with the display.
 // The source's FrameMotion picks the pace; a few host-side facts override it:
-//   - an unfinished present or a per-monitor fade needs the full rate until it is done;
+//   - an unfinished present or a per-monitor fade needs the full rate until it is done. On a surface that has taken
+//     no frame for a second (display off) it only keeps frames from stopping (the slow rate), so a dark display can't
+//     hold the full rate;
 //   - for InputBusySeconds after an input changes, and ChangeHoldSeconds after the state last changed quickly,
 //     Slow motion runs at the full rate (an engine's own transitions are unknown here, and 10 fps would step them);
 //   - with nothing on screen and the light hidden (Visibility 0) the full rate is pointless: frames only listen for
@@ -123,9 +126,10 @@ internal sealed class FramePacer
         // first frame of a 300 ms fade-in is still under it (1.6e-3 at 144 Hz), and a 100 ms wait after it would show
         // the glow 100 ms late. The engine's hidden is exactly Visibility 0 (H-011), so only a fade runs at the full rate
         // with nothing on screen. The debug visualizer plots every analyzer frame, so it keeps the full rate too.
-        return pace == Pace.Full && !frame.AnyVisible && !(frame.State.Visibility > 0) && frame.Motion != FrameMotion.Observed
-            ? Pace.Slow
-            : pace;
+        if (pace == Pace.Full && !frame.AnyVisible && !(frame.State.Visibility > 0) && frame.Motion != FrameMotion.Observed)
+            return Pace.Slow;
+        // Never stop with a frame still to show: it is presented within 100 ms of the display taking frames again.
+        return pace == Pace.Block && frame.Stalled ? Pace.Slow : pace;
     }
 
     // The fastest change of anything the glow shows, per second. Colors are left out: they reach the screen through

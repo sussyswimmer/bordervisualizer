@@ -116,6 +116,8 @@ Reading the numbers:
 - about every 5 minutes a render-thread stall of 30 ms to 1.5 s, after which the analyzer gets the whole backlog;
 - frame times jittered by ±20 %, and audio in 10 ms packets.
 
+An input (a settings edit, a pause, new album colors) brings the next frame forward from 10 fps or from blocked. At the full rate it waits for the scheduled frame, as the app's overlay loop does since K3's review; the soak has done the same since the stack merge, after the runs below. That moves only frames that inputs had brought forward: a 2-hour run (seed 1) measured 290,501 frames with the rule and 290,509 without, and 720 refills instead of 729, so the numbers below stand.
+
 Before measuring, a scripted 80-second scene that takes every one of those paths runs on a throwaway pipeline, so every path is compiled and has run its static initializers; paths the scene takes only a few times are not tiered up yet (see the memory notes below). The soak's own first 5 simulated seconds are not measured either. Memory is read every simulated minute, without allocating (`/proc/self/statm` on Linux, `GetProcessMemoryInfo` through `Environment.WorkingSet` on Windows), along with the JIT's compiled-method count. The harness keeps its own bookkeeping out of what it measures: the progress snapshots are structs in an array sized before the run, the progress lines are formatted into a reused buffer, and the report counts what the run's thread allocated between frames (0 B here).
 
 **Pass criteria** (printed with every run):

@@ -110,6 +110,15 @@ internal sealed class AppController : IDisposable
         settings = new SettingsService(CoreFactory.CreateSettingsStore(directory));
         Settings initial = settings.Current;
 
+        // A later start of the app hands over its request ("show-settings", "show-visualizer", "demo") instead of running
+        // twice. Listening starts before the slow parts below, since a later start waits only 3 s for the pipe; OnCommand
+        // just queues the request on the dispatcher, where it runs once Start has returned.
+        if (instance is not null)
+        {
+            instance.CommandReceived += OnCommand;
+            instance.StartListening();
+        }
+
         // WPF-UI's Fluent styles and the system's light or dark theme for every window and the tray menu, with the
         // brand accent (doc 08). Before the tray icon, whose menu picks the styles up.
         UiTheme.Load();
@@ -174,14 +183,6 @@ internal sealed class AppController : IDisposable
         // Updates from GitHub Releases (doc 06 §5), the app's only network call: checks while "Update automatically" is
         // on, and only in an installed copy.
         updates.Start(settings);
-
-        // A later start of the app hands over its request ("show-settings", "show-visualizer", "demo") instead of running
-        // twice.
-        if (instance is not null)
-        {
-            instance.CommandReceived += OnCommand;
-            instance.StartListening();
-        }
 
         switch (options.WindowAtStart(initial.FirstRunComplete))
         {
@@ -449,18 +450,23 @@ internal sealed class AppController : IDisposable
         HotkeyStatus status;
         try
         {
-            status = hotkey?.Register(text) ?? new HotkeyStatus(text ?? "", HotkeyState.Failed, null);
+            status = hotkey?.Register(text) ?? WithoutHotkeyWindow(text);
         }
         catch (Exception exception)
         {
             Trace.WriteLine($"[App] Registering the shortcut failed: {exception.Message}");
-            status = new HotkeyStatus(text ?? "", HotkeyState.Failed, null);
+            status = WithoutHotkeyWindow(text);
         }
         if (status == Hotkey) return;
         Hotkey = status;
         welcome?.SetHotkey(status);
         HotkeyChanged?.Invoke();
     }
+
+    // No shortcut can work: an empty setting is still "none", anything else failed.
+    private static HotkeyStatus WithoutHotkeyWindow(string? text) => string.IsNullOrWhiteSpace(text)
+        ? HotkeyStatus.None with { Text = text ?? "" }
+        : new HotkeyStatus(text, HotkeyState.Failed, null);
 
     // Thread pool: a later start's request, one or more commands separated by spaces (StartupOptions.HandOverCommand).
     // Only known commands do anything.
@@ -507,7 +513,9 @@ internal sealed class AppController : IDisposable
 
     private void ShowNowPlaying()
     {
-        Volatile.Write(ref toolTipQueued, 0);
+        // A full fence: a plain store could pass the read of Current below (x64 store buffer), and a track published in
+        // between would then find the flag still set and never be shown.
+        Interlocked.Exchange(ref toolTipQueued, 0);
         try
         {
             tray?.SetNowPlaying(media?.Current); // null after Dispose

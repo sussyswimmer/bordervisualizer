@@ -18,7 +18,7 @@ public sealed class BenchMirrorTests
     public void PaceModelDecidesLikeTheFramePacerForOneMonitor()
     {
         // One monitor that presents every frame it draws: what PaceModel leaves out (per-monitor fades, unfinished
-        // presents, the visualizer's Observed) doesn't occur.
+        // presents, stalled surfaces, the visualizer's Observed) doesn't occur.
         var random = new Random(17);
         var pacer = new FramePacer();
         var model = new PaceModel();
@@ -45,7 +45,8 @@ public sealed class BenchMirrorTests
             FrameMotion motion = motions[random.Next(motions.Length)];
             bool refilled = random.Next(20) == 0;
             bool anyVisible = state.Visibility >= GlowConstants.MinVisibility;
-            Pace app = pacer.Next(now, new FrameReport(motion, state, dt, refilled, anyVisible, Transitioning: false, AllPresented: true));
+            Pace app = pacer.Next(now, new FrameReport(motion, state, dt, refilled, anyVisible, Transitioning: false, AllPresented: true,
+                Stalled: false));
             BenchPace bench = model.Next(now, Enum.Parse<BenchMotion>(motion.ToString()), in state, dt, refilled);
             Assert.True(app.ToString() == bench.ToString(), $"frame {i}: the app paces {app}, the bench {bench} ({motion}, visibility {state.Visibility})");
         }

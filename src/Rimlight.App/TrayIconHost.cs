@@ -19,8 +19,8 @@ namespace Rimlight.App;
 /// Owns the notification-area icon (doc 06 §2): the icon, dimmed to half opacity while the glow is off; the
 /// now-playing tooltip; click to turn the glow on or off, double-click for Settings; and the right-click menu, which
 /// the keyboard opens too. Re-creates the icon when it can't be added at sign-in or Explorer restarts, and shows
-/// notifications (K7's "still running in the tray", K9's "update ready", whose click offers the restart into the
-/// update). Use it on the UI thread only.
+/// notifications, each with an optional click action (K7's "still running in the tray", K9's "update ready", whose
+/// click offers the restart into the update). Use it on the UI thread only.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
@@ -35,7 +35,8 @@ internal sealed class TrayIconHost : IDisposable
     private readonly MenuItem restartToUpdate;
     private readonly MenuItem demoMode;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
-    private readonly (MenuItem Item, ColorMode Mode)[] colorModes;
+    private readonly MenuItem albumColors;
+    private readonly MenuItem manualColors;
     private readonly (MenuItem Item, Func<Settings, Settings> Apply)[] presets;
 #if DEBUG
     private readonly DebugMenu debug;
@@ -71,8 +72,17 @@ internal sealed class TrayIconHost : IDisposable
         modes = [Choice(mode, "_Music Sync", AnimationMode.MusicSync), Choice(mode, "_Idle Glow", AnimationMode.IdleGlow), Choice(mode, "_Off", AnimationMode.Off)];
         menu.Items.Add(mode);
 
+        // "From album art" means the glow shows the album colors, so it also turns off Override album color, which every
+        // preset turns on (H-009): that is the way back from a preset. "Manual" is checked whenever the manual or preset
+        // colors show. Choices are checkable like "Glow on" so screen readers announce which one is checked (WPF's
+        // automation peer offers the toggle state only then); Refresh resets the marks a click flips.
         var colors = new MenuItem { Header = "_Colors" };
-        colorModes = [ColorChoice(colors, "From _album art", ColorMode.AlbumArt), ColorChoice(colors, "_Manual", ColorMode.Manual)];
+        albumColors = new MenuItem { Header = "From _album art", IsCheckable = true };
+        albumColors.Click += (_, _) => Update(s => s with { ColorMode = ColorMode.AlbumArt, OverrideAlbumColor = false });
+        colors.Items.Add(albumColors);
+        manualColors = new MenuItem { Header = "_Manual", IsCheckable = true };
+        manualColors.Click += (_, _) => Update(s => s with { ColorMode = ColorMode.Manual });
+        colors.Items.Add(manualColors);
         menu.Items.Add(colors);
 
         // The built-in looks (doc 06 §1), in Core's order. The item is greyed out only if the catalog is ever empty.
@@ -130,15 +140,26 @@ internal sealed class TrayIconHost : IDisposable
         // Keyboard access: Shift+F10 or the menu key on the focused icon (Win+B, then the arrow keys), Enter or Space.
         icon.TrayKeyboardContextMenu += (_, _) => ShowMenuFromKeyboard();
         icon.TrayKeyboardKeySelect += (_, _) => ShowMenuFromKeyboard();
-        // H.NotifyIcon raises this on this thread from the shell's NIN_BALLOONUSERCLICK.
+        // H.NotifyIcon raises this on this thread from the shell's NIN_BALLOONUSERCLICK. A notification's action stays
+        // set when it times out or closes (no TrayBalloonTipClosed handler): it is still in Windows' notification list.
         icon.TrayBalloonTipClicked += (_, _) => OnNotificationClicked();
         // Each (re)creation, including H.NotifyIcon's own after Explorer restarts (TaskbarCreated), gets the current
-        // icon and tooltip: a change the shell refused while Explorer was gone would otherwise be lost. If that
-        // re-creation fails, the retry timer takes over.
+        // icon and tooltip: a change the shell refused while Explorer was gone would otherwise be lost.
         icon.TrayIcon.Created += (_, _) => OnCreated();
         icon.TrayIcon.Removed += (_, _) =>
         {
             if (!disposed) createRetry.Start();
+        };
+        // If that re-creation fails, the retry timer takes over. H.NotifyIcon swallows the failure, and Removed isn't
+        // raised after a real Explorer restart (the new Explorer doesn't know the icon, so its delete fails). This
+        // handler runs after H.NotifyIcon's own, which subscribed in the constructor.
+        icon.TrayIcon.MessageWindow.TaskbarCreated += (_, _) =>
+        {
+            if (disposed) return;
+            RefreshMedia();
+            if (icon.TrayIcon.IsCreated) return;
+            Trace.WriteLine("[Tray] The icon is not back after Explorer restarted; retrying every 3 s.");
+            createRetry.Start();
         };
         icon.TrayIcon.UpdateToolTip(toolTip); // kept until the icon exists
         icon.UpdateIcon(dimmed ? images.Dimmed : images.Normal);
@@ -150,6 +171,7 @@ internal sealed class TrayIconHost : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        notificationClicked = null;
         createRetry.Stop();
         icon.Dispose();
         images.Dispose(); // after the shell has let go of the icon handles
@@ -189,7 +211,8 @@ internal sealed class TrayIconHost : IDisposable
     /// What a click on it does (K9's "Update ready"), or null for nothing. It runs on the UI thread for every click on a
     /// notification until the next one replaces it. The shell doesn't say which notification was clicked, so a click on
     /// an older one still in Windows' notification list runs it too: it must be safe to repeat and must ask before doing
-    /// anything the user didn't choose.
+    /// anything the user didn't choose. Offer the action somewhere else too (the tray menu): a notification may never
+    /// show (Do Not Disturb).
     /// </param>
     /// <returns>False if the shell refused it (no icon yet, Explorer restarting).</returns>
     public bool Notify(string title, string message, bool userInitiated = false, Action? clicked = null)
@@ -262,8 +285,9 @@ internal sealed class TrayIconHost : IDisposable
 
     // A click on a notification, on screen or in Windows' notification list, runs the action of the one shown last
     // (Notify). It doesn't depend on the shell's show and close messages, whose order nobody promises. The click
-    // arrives inside the icon's window procedure; the action runs after it returns, since it may quit the app, which
-    // disposes the icon and its window.
+    // arrives inside the icon's window procedure, where an exception would not reach the dispatcher's handler (AppLog)
+    // and could end the process; the action runs after it returns, since it may quit the app, which disposes the icon
+    // and its window.
     private void OnNotificationClicked()
     {
         if (disposed) return;
@@ -287,9 +311,26 @@ internal sealed class TrayIconHost : IDisposable
         });
     }
 
+    // The media session manager may have gone away with Explorer, so it is asked again now instead of at its next
+    // 30 s check. Inside the icon's window procedure, where an exception would end the app.
+    private void RefreshMedia()
+    {
+        try
+        {
+            app.Media?.Refresh();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[Tray] Refreshing the media sessions failed: {exception}");
+        }
+    }
+
     // The menu at the notification area, for keyboard users (the mouse opens it at the pointer).
     private void ShowMenuFromKeyboard()
     {
+        // The shell also sends WM_CONTEXTMENU after a right-click (NOTIFYICON_VERSION_4), when H.NotifyIcon has already
+        // opened the menu at the pointer; opening it again would move it to the notification area's corner.
+        if (icon.ContextMenu is { IsOpen: true }) return;
         try
         {
             icon.ShowContextMenu(TaskbarIcon.GetPopupTrayPosition());
@@ -302,23 +343,16 @@ internal sealed class TrayIconHost : IDisposable
 
     private (MenuItem, AnimationMode) Choice(MenuItem parent, string header, AnimationMode mode)
     {
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, IsCheckable = true };
         item.Click += (_, _) => Update(s => s with { Animation = mode });
-        parent.Items.Add(item);
-        return (item, mode);
-    }
-
-    private (MenuItem, ColorMode) ColorChoice(MenuItem parent, string header, ColorMode mode)
-    {
-        var item = new MenuItem { Header = header };
-        item.Click += (_, _) => Update(s => s with { ColorMode = mode });
         parent.Items.Add(item);
         return (item, mode);
     }
 
     private (MenuItem, Func<Settings, Settings>) PresetItem(MenuItem parent, string name, Func<Settings, Settings> apply)
     {
-        var item = new MenuItem { Header = name.Replace("_", "__", StringComparison.Ordinal) }; // "_" would be an access key
+        // "_" would be an access key.
+        var item = new MenuItem { Header = name.Replace("_", "__", StringComparison.Ordinal), IsCheckable = true };
         item.Click += (_, _) =>
         {
             try
@@ -349,7 +383,9 @@ internal sealed class TrayIconHost : IDisposable
         demoMode.IsChecked = app.IsDemoActive;
         demoMode.Visibility = app.IsDemoActive ? Visibility.Visible : Visibility.Collapsed;
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
-        foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
+        bool albumColorsShown = current.ColorMode == ColorMode.AlbumArt && !current.OverrideAlbumColor;
+        albumColors.IsChecked = albumColorsShown;
+        manualColors.IsChecked = !albumColorsShown;
         foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = PresetChoice.IsShowing(apply, current);
 #if DEBUG
         debug.Refresh(current);

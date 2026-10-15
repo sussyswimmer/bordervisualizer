@@ -29,8 +29,8 @@ public sealed class GlowConstantsTests
         float renderScale = OverlaySurface.RenderScaleFor(width, half: true);
         Assert.Equal(1f, OverlaySurface.RenderScaleFor(width, half: false));
         Assert.Equal(width, OverlaySurface.BufferSize(width, half: false));
-        GlowConstants full = GlowConstants.Create(state, width, height, scale, cornerDip, Mean);
-        GlowConstants half = GlowConstants.Create(state, bufferWidth, bufferHeight, scale * renderScale, cornerDip, Mean);
+        GlowConstants full = GlowConstants.Create(state, width, height, scale, 1, cornerDip, Mean);
+        GlowConstants half = GlowConstants.Create(state, bufferWidth, bufferHeight, scale, renderScale, cornerDip, Mean);
 
         Assert.Equal((width + 1) / 2, half.ScreenWidthPx);
         Assert.Equal((height + 1) / 2, half.ScreenHeightPx);
@@ -64,7 +64,7 @@ public sealed class GlowConstantsTests
         GlowConstants c = GlowConstants.Create(State with
         {
             Intensity = 3, Pulse = -1, Visibility = float.NaN, Phase = 1.25f, CoreThicknessDip = float.PositiveInfinity,
-        }, 1920, 1080, 1, float.NaN, new Rgb(float.NaN, 1, 0));
+        }, 1920, 1080, 1, 1, float.NaN, new Rgb(float.NaN, 1, 0));
         Assert.Equal(1, c.Intensity);
         Assert.Equal(0, c.Pulse);
         Assert.Equal(0, c.Visibility);
@@ -72,7 +72,7 @@ public sealed class GlowConstantsTests
         Assert.Equal(0, c.CoreThicknessPx);
         Assert.Equal(0, c.CornerRadiusPx);
         Assert.Equal(0, c.MeanRed);
-        Assert.Equal(-0.75f + 1, GlowConstants.Create(State with { Phase = -0.75f }, 100, 100, 1, 0, Mean).Phase, 6);
+        Assert.Equal(-0.75f + 1, GlowConstants.Create(State with { Phase = -0.75f }, 100, 100, 1, 1, 0, Mean).Phase, 6);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public sealed class GlowConstantsTests
     [Fact]
     public void LooksLikeAllowsHalfACodeValueAndATinyPhaseShift()
     {
-        GlowConstants a = GlowConstants.Create(State, 1920, 1080, 1, 0, Mean);
+        GlowConstants a = GlowConstants.Create(State, 1920, 1080, 1, 1, 0, Mean);
         GlowConstants b = a;
         b.Intensity += 0.4f / 255;
         b.Phase += 0.0001f;

@@ -52,7 +52,7 @@ internal partial class WelcomeWindow : Window
     /// <param name="hotkey">The glow shortcut and whether it works.</param>
     public void SetHotkey(HotkeyStatus hotkey)
     {
-        string? gesture = hotkey.Gesture?.ToString();
+        string gesture = hotkey.Gesture?.ToString() ?? hotkey.Text; // no gesture when the shortcut window is missing
         SetText(HotkeyText, hotkey.State switch
         {
             HotkeyState.Registered => $"Press {gesture} anywhere to turn the glow on or off.",
@@ -60,6 +60,8 @@ internal partial class WelcomeWindow : Window
                 + "You can pick a different one in Settings.",
             HotkeyState.Invalid => $"\"{hotkey.Text}\" isn't a shortcut Windows can use. You can pick a different one in Settings.",
             HotkeyState.Failed => $"Windows didn't accept {gesture} as a shortcut. You can pick a different one in Settings.",
+            HotkeyState.TypesCharacter => $"With your keyboard layout, {gesture} types a character (it's the same as AltGr), so "
+                + "the glow has no keyboard shortcut yet. You can pick a different one in Settings.",
             _ => "",
         });
     }

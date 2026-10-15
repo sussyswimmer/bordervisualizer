@@ -125,7 +125,9 @@ public sealed class LoopbackCapture : IDisposable
                 {
                     session = Session.Start(enumerator, Signal);
                     Volatile.Write(ref current, session.Audio);
-                    Trace.WriteLine($"[LoopbackCapture] Capturing \"{session.Audio.DeviceName}\" ({session.Audio.Format}).");
+                    // Not the device's name: the log goes into public bug reports, and headphones are often named
+                    // after their owner.
+                    Trace.WriteLine($"[LoopbackCapture] Capturing the default output device ({session.Audio.Format}).");
                     while (!stopping && active && Volatile.Read(ref restartRequested) == 0 && !session.Failed) wake.WaitOne();
                     if (session.Failed) Trace.WriteLine($"[LoopbackCapture] Capture stopped: {session.Error?.Message ?? "unknown reason"}.");
                 }

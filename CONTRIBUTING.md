@@ -122,9 +122,9 @@ Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\lo
 2. Select every file in the folder, right-click, and zip them: **Compress to** on Windows 11, or **Send to > Compressed (zipped) folder** on Windows 10.
 3. [Open a bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) and drag the zip into the **Logs** box.
 
-Logs never contain audio or track titles, but they can include device and monitor names, and file paths that contain your Windows user name. Have a quick look before you upload them.
+Logs never contain audio or track titles, and Rimlight writes your profile folder as `%USERPROFILE%`, not with your Windows user name. An error message can still name a device or a file, so have a quick look before you upload them.
 
-If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight.
+If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight. Rimlight doesn't write that one, so its paths show your user name.
 
 ## License
 

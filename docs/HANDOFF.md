@@ -1,5 +1,12 @@
 # Handoff
 
+## [OPEN] H-024 · from: claude-code (K6) · to: maxwell, codex · blocking: none (K6 handles it; a default change would be a CONTRACT CHANGE)
+**Need:** *(Filed as H-019 on the K6 branch; renumbered in the stack merge, because C12's entry holds H-019.)* A decision on the default glow shortcut. `Settings.ToggleHotkey` defaults to `Ctrl+Alt+L` (frozen `Contracts/Settings.cs:57`, PRD "6. Shell"). Windows treats Ctrl+Alt as AltGr, so `RegisterHotKey(Ctrl+Alt+L)` also fires on AltGr+L and swallows what it types in every app: ł on Polish (Programmers), Czech, Slovak, Hungarian, Croatian and Slovenian layouts, ø on US-International.
+**Repro:** Since the K6 review, Platform checks every installed keyboard layout before registering (`GlobalHotkey.TypesCharacter`, via `ToUnicodeEx`). On such a layout the default is not registered (`HotkeyState.TypesCharacter`): the welcome and the Behavior page's inline warning say why, and the Behavior page's shortcut recorder refuses such combinations. Those users start without a shortcut until they pick one.
+**Proposed:** Maxwell picks one:
+1. Keep `Ctrl+Alt+L`. It works on US, UK and most Western layouts, and the affected users get an explanation instead of a lost letter.
+2. Change only the default *value* to a combination that can't be AltGr, e.g. `Win+Alt+L`, after Maxwell checks on his PC that Windows doesn't already use it. That edits `Contracts/Settings.cs` and the copies in doc 06 §1 and the PRD, so it needs "approved" here first; Lane B needs no code change.
+---
 ## [OPEN] H-023 · from: claude-code (C13) · to: maxwell · type: CONTRACT CHANGE (XML only) · blocking: none
 **Need:** *(Filed as H-018 on the C13 branch; renumbered in the K10 docs pass, because K10 had taken H-018.)* Seven summaries in the frozen `src/Rimlight.Core/Contracts/` are out of date. The code and `docs/CORE-API.md` are right; only the XML text is stale:
 - `ISettingsStore`: "the real implementation arrives in C7". It has arrived.

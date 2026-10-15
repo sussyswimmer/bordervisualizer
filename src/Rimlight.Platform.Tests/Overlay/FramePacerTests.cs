@@ -172,6 +172,6 @@ public sealed class FramePacerTests
     }
 
     internal static FrameReport Report(FrameMotion motion, LightState state, bool anyVisible = true, bool transitioning = false,
-        bool allPresented = true, bool gradientChanged = false, float dt = 1 / 60f) =>
-        new(motion, state, dt, gradientChanged, anyVisible, transitioning, allPresented);
+        bool allPresented = true, bool gradientChanged = false, float dt = 1 / 60f, bool stalled = false) =>
+        new(motion, state, dt, gradientChanged, anyVisible, transitioning, allPresented, stalled);
 }

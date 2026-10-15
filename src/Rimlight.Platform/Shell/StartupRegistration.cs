@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using Microsoft.Win32;
 
 namespace Rimlight.Platform.Shell;
@@ -30,7 +31,11 @@ public static class StartupRegistration
         try
         {
             if (!enabled) return Remove(valueName);
-            if (LauncherPath() is not { } launcher) return false;
+            if (LauncherPath() is not { } launcher)
+            {
+                Trace.WriteLine($"[Startup] Not started from the app's own exe ({Path.GetFileName(Environment.ProcessPath)}); the startup entry is left as it is.");
+                return false;
+            }
             string command = $"\"{launcher}\" {BackgroundArgument}";
             using RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
             string? existing = key.GetValue(valueName) as string;
@@ -74,13 +79,17 @@ public static class StartupRegistration
 
     /// <summary>
     /// The exe the Run value should start: Velopack's launcher in the install folder (the parent of <c>current</c>)
-    /// when installed and present, otherwise this process's exe. Null if the process path is unknown.
+    /// when installed and present, otherwise this process's exe. Null if the process path is unknown or isn't the
+    /// app's own exe (started through the dotnet host as <c>dotnet Rimlight.dll</c>, where it is dotnet.exe).
     /// </summary>
     /// <returns>The full path, or null.</returns>
     public static string? LauncherPath()
     {
         string? process = Environment.ProcessPath;
         if (string.IsNullOrEmpty(process)) return null;
+        // The app's exe carries the entry assembly's name (the apphost); dotnet.exe can't start the app by itself.
+        string? app = Assembly.GetEntryAssembly()?.GetName().Name;
+        if (!string.Equals(Path.GetFileNameWithoutExtension(process), app, StringComparison.OrdinalIgnoreCase)) return null;
         if (!IsInstalled(process)) return process;
         string root = Path.GetDirectoryName(Path.GetDirectoryName(process)!)!;
         // vpk names the launcher after the package title (--packTitle), which build/pack.ps1 sets to the app's name, the

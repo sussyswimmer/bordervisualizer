@@ -7,6 +7,7 @@ namespace Rimlight.Platform.Tests;
 [Collection(SerialTests.Name)]
 public sealed class RollingFileLogTests : IDisposable
 {
+    private const string LogName = "rimlight.log"; // AppLog passes AppInfo.Name in lower case
     private readonly string directory = Path.Combine(Path.GetTempPath(), "rimlight-k10-logs-" + Guid.NewGuid().ToString("N"));
 
     public void Dispose()
@@ -17,7 +18,7 @@ public sealed class RollingFileLogTests : IDisposable
     [Fact]
     public void LinesAreQueuedThenWrittenWithATimeAndThread()
     {
-        using var log = new RollingFileLog(directory);
+        using var log = new RollingFileLog(directory, LogName);
         log.WriteLine("[Test] one");
         log.Write("[Test] ");
         log.WriteLine("two"); // Trace.Write without a line end joins the next line
@@ -34,7 +35,7 @@ public sealed class RollingFileLogTests : IDisposable
     [Fact]
     public void ItKeepsFiveFilesOfAtMostOneMegabyte()
     {
-        using var log = new RollingFileLog(directory);
+        using var log = new RollingFileLog(directory, LogName);
         string line = new('x', 1000);
         for (int batch = 0; batch < 8; batch++)
         {
@@ -52,7 +53,7 @@ public sealed class RollingFileLogTests : IDisposable
     [Fact]
     public void ARunawayLineIsCutAndAFailingDiskIsSurvived()
     {
-        using (var log = new RollingFileLog(directory))
+        using (var log = new RollingFileLog(directory, LogName))
         {
             log.WriteLine(new string('y', 100_000));
             log.Flush();
@@ -64,7 +65,7 @@ public sealed class RollingFileLogTests : IDisposable
         // A folder that can't be created (a file is in the way): lines are dropped, nothing throws.
         string blocked = Path.Combine(directory, "blocked");
         File.WriteAllText(blocked, "");
-        using var failing = new RollingFileLog(Path.Combine(blocked, "logs"));
+        using var failing = new RollingFileLog(Path.Combine(blocked, "logs"), LogName);
         failing.WriteLine("lost");
         failing.Flush();
         failing.WriteLine("and the next line is queued as usual");

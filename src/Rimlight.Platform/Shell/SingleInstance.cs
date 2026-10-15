@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using Windows.Win32;
+using Windows.Win32.System.Threading;
 
 namespace Rimlight.Platform.Shell;
 
@@ -58,9 +60,14 @@ public sealed class SingleInstance : IDisposable
     /// </summary>
     /// <param name="appName">The app's name, the first part of the mutex and pipe names.</param>
     /// <param name="command">What to ask of a running instance, or null to just leave quietly (a start at sign-in).</param>
+    /// <param name="runningElsewhere">
+    /// The exe of the running instance when it is another copy of the app (another build or folder): the command is
+    /// not sent, and the caller should say where the app runs instead of exiting without a word. Otherwise null.
+    /// </param>
     /// <returns>The claim for this process (dispose it on exit), or null when another instance runs and this one should exit.</returns>
-    public static SingleInstance? Claim(string appName, string? command)
+    public static SingleInstance? Claim(string appName, string? command, out string? runningElsewhere)
     {
+        runningElsewhere = null;
         string user = CurrentUserSid();
         // Local\ is per session, the pipe namespace is not: the session ID keeps two sessions of one user apart.
         string pipeName = $"{appName}-{user}-{SessionId()}";
@@ -77,7 +84,7 @@ public sealed class SingleInstance : IDisposable
         }
 
         if (TryOwn(mutex, TimeSpan.Zero)) return new SingleInstance(mutex, pipeName);
-        if (command is not null && Send(pipeName, command))
+        if (command is not null && Send(pipeName, command, out runningElsewhere))
         {
             mutex.Dispose();
             return null;
@@ -150,16 +157,28 @@ public sealed class SingleInstance : IDisposable
         }
     }
 
-    // A later start: hands the command over and lets the running instance bring its window to the front.
-    private static bool Send(string pipeName, string command)
+    // A later start: hands the command over and lets the running instance bring its window to the front. True when
+    // it was delivered, or when the running instance is another copy (runningElsewhere, nothing sent).
+    private static bool Send(string pipeName, string command, out string? runningElsewhere)
     {
+        runningElsewhere = null;
         using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.CurrentUserOnly);
         try
         {
             client.Connect(ConnectTimeout); // waits while the running instance is still starting up
-            // Windows lets only the foreground process (this one, just launched by the user) hand the foreground on.
             if (PInvoke.GetNamedPipeServerProcessId(client.SafePipeHandle, out uint serverProcess))
+            {
+                // Another build (a dev build registered at sign-in, say) would open its own window and this start would
+                // vanish, so the person would test the wrong copy. Hang up instead; the server reads nothing.
+                if (ExePath(serverProcess) is { } server && Environment.ProcessPath is { } own
+                    && !string.Equals(server, own, StringComparison.OrdinalIgnoreCase))
+                {
+                    runningElsewhere = server;
+                    return true;
+                }
+                // Windows lets only the foreground process (this one, just launched by the user) hand the foreground on.
                 PInvoke.AllowSetForegroundWindow(serverProcess);
+            }
             client.Write(Encoding.UTF8.GetBytes(command + "\n"));
         }
         catch (Exception exception) when (exception is TimeoutException or IOException or UnauthorizedAccessException)
@@ -178,6 +197,19 @@ public sealed class SingleInstance : IDisposable
             // It read the command and hung up already; the command is delivered either way.
         }
         return true;
+    }
+
+    // The full path of a process's exe, or null if Windows won't say. Limited query rights work across users and
+    // integrity levels.
+    private static string? ExePath(uint processId)
+    {
+        using SafeFileHandle process = PInvoke.OpenProcess_SafeHandle(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+        if (process.IsInvalid) return null;
+        Span<char> path = stackalloc char[1024];
+        uint length = (uint)path.Length;
+        return PInvoke.QueryFullProcessImageName(process, PROCESS_NAME_FORMAT.PROCESS_NAME_WIN32, path, ref length)
+            ? path[..(int)length].ToString()
+            : null;
     }
 
     private async Task ListenAsync(CancellationToken token)

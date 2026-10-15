@@ -16,8 +16,9 @@ public sealed class SingleInstanceTests
     {
         string app = "RimlightTests-" + Guid.NewGuid().ToString("N")[..12]; // never the real app's mutex or pipe
         var received = new List<string>();
-        SingleInstance first = SingleInstance.Claim(app, command: null)!;
+        SingleInstance first = SingleInstance.Claim(app, command: null, out string? elsewhere)!;
         Assert.NotNull(first);
+        Assert.Null(elsewhere); // the first copy finds nothing running
         try
         {
             first.CommandReceived += command =>
@@ -43,7 +44,7 @@ public sealed class SingleInstanceTests
         SingleInstance? next = null;
         var thread = new Thread(() =>
         {
-            next = SingleInstance.Claim(app, command: null);
+            next = SingleInstance.Claim(app, command: null, out _);
             next?.Dispose();
         });
         thread.Start();

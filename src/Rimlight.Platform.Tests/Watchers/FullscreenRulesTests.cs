@@ -15,11 +15,11 @@ public sealed class FullscreenRulesTests
     [Fact]
     public void AWindowExactlyCoveringItsMonitorPausesThatMonitorOnly()
     {
-        FullscreenVerdict verdict = FullscreenRules.Decide(NotificationState.Normal, Window(1, LeftBounds, Left), NoneBefore);
+        FullscreenVerdict verdict = Decide(NotificationState.Normal, Window(1, LeftBounds, Left), NoneBefore);
         Assert.False(verdict.Everywhere);
         Assert.Equal(new[] { new FullscreenEntry(1, Left, Loose: false) }, verdict.Entries);
 
-        verdict = FullscreenRules.Decide(NotificationState.Normal, Window(2, RightBounds, Right), NoneBefore);
+        verdict = Decide(NotificationState.Normal, Window(2, RightBounds, Right), NoneBefore);
         Assert.Equal(new[] { new FullscreenEntry(2, Right, Loose: false) }, verdict.Entries);
     }
 
@@ -30,7 +30,7 @@ public sealed class FullscreenRulesTests
     {
         // Its rectangle reaches past the monitor by the resize borders.
         var bounds = new PixelRect(-8, -8, 1928, 1088);
-        FullscreenVerdict verdict = FullscreenRules.Decide((NotificationState)state, Window(1, bounds, Left, maximized: true), NoneBefore);
+        FullscreenVerdict verdict = Decide((NotificationState)state, Window(1, bounds, Left, maximized: true), NoneBefore);
         Assert.Empty(verdict.Entries);
         Assert.False(verdict.Everywhere);
     }
@@ -39,24 +39,37 @@ public sealed class FullscreenRulesTests
     public void BusyCountsAWindowThatCoversItsMonitorLoosely()
     {
         var bounds = new PixelRect(-1, -1, 1921, 1081);
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Normal, Window(1, bounds, Left), NoneBefore).Entries);
-        FullscreenVerdict verdict = FullscreenRules.Decide(NotificationState.Busy, Window(1, bounds, Left), NoneBefore);
+        Assert.Empty(Decide(NotificationState.Normal, Window(1, bounds, Left), NoneBefore).Entries);
+        FullscreenVerdict verdict = Decide(NotificationState.Busy, Window(1, bounds, Left), NoneBefore);
         Assert.Equal(new[] { new FullscreenEntry(1, Left, Loose: true) }, verdict.Entries);
         Assert.False(verdict.Everywhere); // QUNS_BUSY never pauses every monitor
         // A smaller window doesn't count, even when Windows says busy.
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Busy, Window(1, new PixelRect(0, 0, 1920, 1040), Left), NoneBefore).Entries);
+        Assert.Empty(Decide(NotificationState.Busy, Window(1, new PixelRect(0, 0, 1920, 1040), Left), NoneBefore).Entries);
     }
 
     [Fact]
-    public void ExclusiveDirect3DPausesItsMonitorOrEverywhereWithoutAWindow()
+    public void ExclusiveDirect3DPausesAWindowThatCoversItsMonitorOrEverywhereWithoutAForegroundWindow()
     {
-        FullscreenVerdict verdict = FullscreenRules.Decide(NotificationState.D3DFullscreen, Window(1, new PixelRect(0, 0, 800, 600), Left), NoneBefore);
+        // An exclusive-mode window fills its output: it covers its monitor, loosely (K5's review).
+        var covering = new PixelRect(-1, -1, 1921, 1081);
+        FullscreenVerdict verdict = Decide(NotificationState.D3DFullscreen, Window(1, covering, Left), NoneBefore);
         Assert.Equal(new[] { new FullscreenEntry(1, Left, Loose: true) }, verdict.Entries);
         Assert.False(verdict.Everywhere);
+        Assert.Equal(new[] { new FullscreenEntry(1, Left, Loose: false) },
+            Decide(NotificationState.D3DFullscreen, Window(1, LeftBounds, Left), NoneBefore).Entries);
 
-        verdict = FullscreenRules.Decide(NotificationState.D3DFullscreen, null, NoneBefore);
+        // Windows' state alone pauses nothing: a small or maximized foreground window, or one that doesn't count.
+        Assert.Empty(Decide(NotificationState.D3DFullscreen, Window(1, new PixelRect(0, 0, 800, 600), Left), NoneBefore).Entries);
+        Assert.Empty(Decide(NotificationState.D3DFullscreen, Window(1, new PixelRect(-8, -8, 1928, 1088), Left, maximized: true), NoneBefore).Entries);
+        verdict = Decide(NotificationState.D3DFullscreen, null, NoneBefore);
+        Assert.Empty(verdict.Entries);
+        Assert.False(verdict.Everywhere);
+
+        // No foreground window at all: nothing to tie the exclusive-mode app to, so every monitor pauses.
+        verdict = Decide(NotificationState.D3DFullscreen, null, NoneBefore, noForeground: true);
         Assert.True(verdict.Everywhere);
         Assert.Empty(verdict.Entries);
+        Assert.False(Decide(NotificationState.Busy, null, NoneBefore, noForeground: true).Everywhere);
     }
 
     [Theory]
@@ -64,8 +77,8 @@ public sealed class FullscreenRulesTests
     [InlineData(NotificationStateName.PresentationMode)]  // presentation settings
     public void AScreenSaverOrPresentationModePausesEverywhere(NotificationStateName state)
     {
-        Assert.True(FullscreenRules.Decide((NotificationState)state, null, NoneBefore).Everywhere);
-        Assert.True(FullscreenRules.Decide((NotificationState)state, Window(1, new PixelRect(0, 0, 10, 10), Left), NoneBefore).Everywhere);
+        Assert.True(Decide((NotificationState)state, null, NoneBefore).Everywhere);
+        Assert.True(Decide((NotificationState)state, Window(1, new PixelRect(0, 0, 10, 10), Left), NoneBefore).Everywhere);
     }
 
     [Fact]
@@ -73,7 +86,7 @@ public sealed class FullscreenRulesTests
     {
         var video = new FullscreenEntry(1, Left, Loose: false);
         WindowFacts editor = Window(2, new PixelRect(2000, 100, 3000, 900), Right);
-        FullscreenVerdict verdict = FullscreenRules.Decide(NotificationState.Normal, editor, [(video, Window(1, LeftBounds, Left))]);
+        FullscreenVerdict verdict = Decide(NotificationState.Normal, editor, [(video, Window(1, LeftBounds, Left))]);
         Assert.Equal(new[] { video }, verdict.Entries);
     }
 
@@ -83,9 +96,9 @@ public sealed class FullscreenRulesTests
         var video = new FullscreenEntry(1, Left, Loose: false);
         WindowFacts editor = Window(2, new PixelRect(2000, 100, 3000, 900), Right);
         // Left fullscreen (a window again), moved to the other monitor, or closed/minimized/hidden/cloaked (no facts).
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Normal, editor, [(video, Window(1, new PixelRect(100, 100, 900, 700), Left))]).Entries);
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Normal, editor, [(video, Window(1, RightBounds, Right))]).Entries);
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Normal, editor, [(video, null)]).Entries);
+        Assert.Empty(Decide(NotificationState.Normal, editor, [(video, Window(1, new PixelRect(100, 100, 900, 700), Left))]).Entries);
+        Assert.Empty(Decide(NotificationState.Normal, editor, [(video, Window(1, RightBounds, Right))]).Entries);
+        Assert.Empty(Decide(NotificationState.Normal, editor, [(video, null)]).Entries);
     }
 
     [Fact]
@@ -93,9 +106,9 @@ public sealed class FullscreenRulesTests
     {
         var video = new FullscreenEntry(1, Left, Loose: false);
         WindowFacts explorer = Window(3, new PixelRect(100, 100, 900, 700), Left);
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Normal, explorer, [(video, Window(1, LeftBounds, Left))]).Entries);
+        Assert.Empty(Decide(NotificationState.Normal, explorer, [(video, Window(1, LeftBounds, Left))]).Entries);
         // The video itself in the foreground again keeps it (one entry, not two).
-        Assert.Equal(new[] { video }, FullscreenRules.Decide(NotificationState.Normal, Window(1, LeftBounds, Left), [(video, Window(1, LeftBounds, Left))]).Entries);
+        Assert.Equal(new[] { video }, Decide(NotificationState.Normal, Window(1, LeftBounds, Left), [(video, Window(1, LeftBounds, Left))]).Entries);
     }
 
     [Fact]
@@ -103,15 +116,15 @@ public sealed class FullscreenRulesTests
     {
         var game = new FullscreenEntry(1, Left, Loose: true);
         var bounds = new PixelRect(-1, -1, 1921, 1081);
-        Assert.Equal(new[] { game }, FullscreenRules.Decide(NotificationState.Normal, null, [(game, Window(1, bounds, Left))]).Entries);
-        Assert.Empty(FullscreenRules.Decide(NotificationState.Normal, null, [(game, Window(1, new PixelRect(0, 0, 1920, 1000), Left))]).Entries);
+        Assert.Equal(new[] { game }, Decide(NotificationState.Normal, null, [(game, Window(1, bounds, Left))]).Entries);
+        Assert.Empty(Decide(NotificationState.Normal, null, [(game, Window(1, new PixelRect(0, 0, 1920, 1000), Left))]).Entries);
     }
 
     [Fact]
     public void TwoFullscreenAppsPauseBothMonitors()
     {
         var video = new FullscreenEntry(1, Left, Loose: false);
-        FullscreenVerdict verdict = FullscreenRules.Decide(NotificationState.Normal, Window(2, RightBounds, Right), [(video, Window(1, LeftBounds, Left))]);
+        FullscreenVerdict verdict = Decide(NotificationState.Normal, Window(2, RightBounds, Right), [(video, Window(1, LeftBounds, Left))]);
         Assert.Equal(new[] { new FullscreenEntry(2, Right, Loose: false), video }, verdict.Entries);
     }
 
@@ -161,6 +174,13 @@ public sealed class FullscreenRulesTests
         D3DFullscreen = (int)NotificationState.D3DFullscreen,
         PresentationMode = (int)NotificationState.PresentationMode,
     }
+
+    // FullscreenRules.Decide as FullscreenDetector calls it. foreground: null when it doesn't count (the desktop, the
+    // taskbar, our tray menu) or isn't shown; noForeground: Windows reports none at all; mayBeFullscreen: false for
+    // windows that only end a sticky pause (File Explorer, the shell's dialogs, our settings window).
+    private static FullscreenVerdict Decide(NotificationState state, WindowFacts? foreground,
+        IReadOnlyList<(FullscreenEntry Entry, WindowFacts? Now)> previous, bool mayBeFullscreen = true, bool noForeground = false) =>
+        FullscreenRules.Decide(state, noForeground, foreground, mayBeFullscreen, previous);
 
     private static WindowFacts Window(nint handle, PixelRect bounds, string monitor, bool maximized = false) =>
         new(handle, bounds, maximized, monitor, monitor == Left ? LeftBounds : RightBounds);

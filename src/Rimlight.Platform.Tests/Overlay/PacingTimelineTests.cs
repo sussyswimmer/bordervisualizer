@@ -71,14 +71,15 @@ public sealed class PacingTimelineTests(ITestOutputHelper output)
         output.WriteLine($"Visible again {1000 * (back.Time - 26.03):0} ms after the music came back");
         Assert.InRange(back.Time - 26.03, 0, 0.115);
 
-        // An input wakes the loop at once, and the fade it starts begins on that frame: with the time since the last frame,
-        // or one full-rate frame's worth when it comes between 10 Hz frames, never the whole gap.
+        // An input wakes the loop at once from the 10 Hz pace (70.05 s), and the fade it starts begins on that frame with
+        // one full-rate frame's worth of time, never the whole gap. At the full rate (music) it waits for the next
+        // scheduled frame instead (K3's review), so inputs can't add frames past the cap.
         foreach (double input in new[] { 32.005, 38.005, 44.005, 70.05 })
         {
             ModelFrame before = model.Frames.Last(f => f.Time < input);
             ModelFrame woken = model.Frames.First(f => f.Time >= input);
-            Assert.Equal(input, woken.Time, 9);
-            Assert.Equal((float)Math.Min(input - before.Time, 1 / 60.0), woken.Dt, 5);
+            Assert.Equal(before.Pace == Pace.Full ? before.Time + 1 / 60.0 : input, woken.Time, 6);
+            Assert.Equal((float)Math.Min(woken.Time - before.Time, 1 / 60.0), woken.Dt, 5);
             Assert.True(woken.State.Visibility < before.State.Visibility, $"fade starts on the first frame after {input} s");
             // Off and pause end in Block. The fade reaches 0 after 300 ms; with nothing on screen the next frame is a
             // 10 Hz one, where the engine reports static (from the frame after Visibility 0, H-011), and the loop stops.

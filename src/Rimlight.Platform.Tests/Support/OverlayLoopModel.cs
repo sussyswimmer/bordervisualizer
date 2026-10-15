@@ -24,17 +24,20 @@ internal readonly record struct ModelFrame(
 /// <see cref="OverlayRules"/> ("Reduce on battery", the per-monitor 300 ms fades, and when the glow counts as paused
 /// everywhere, also with no overlay), <see cref="GlowConstants"/> and <see cref="OverlaySurface"/>'s half-scale buffer
 /// size. The control flow around them mirrors OverlayHost line for line: <c>Loop</c> (the first frame at once, a frame
-/// when the timer is due or an input arrives), <c>Wait</c> (Block waits for an input only), <c>ApplyPendingInputs</c>
-/// (paused monitors, settings, battery, pause and frame requests, each noted on the pacer), <c>RenderFrame</c> (the
-/// light hidden below <see cref="GlowConstants.MinVisibility"/> after one transparent present, no present while the
-/// screen already shows the frame, half scale under "Reduce") and <see cref="OverlaySurface"/>'s presented-frame
-/// bookkeeping. Inputs are published the way OverlayHost's setters publish them and wake the loop.
+/// when the timer is due or an input arrives, but at the full rate an input waits for the next scheduled frame),
+/// <c>Wait</c> (Block waits for an input only), <c>ApplyPendingInputs</c> (paused monitors, settings, battery, pause
+/// and frame requests, each noted on the pacer), <c>RenderFrame</c> (the light hidden below
+/// <see cref="GlowConstants.MinVisibility"/> after one transparent present, no present while the screen already shows
+/// the frame, the window shown before anything else, and the switch to or from half scale under "Reduce" only on a
+/// shown overlay's frame, which then always presents) and <see cref="OverlaySurface"/>'s presented-frame bookkeeping.
+/// Inputs are published the way OverlayHost's setters publish them and wake the loop.
 /// </summary>
 /// <remarks>
-/// Left out, because they need Windows: windows, the GPU and DirectComposition (every present completes at once, so
-/// FrameReport.AllPresented is always true), vsync (the full rate runs on the timer at the same interval) and device
-/// loss. A display change or a change of the chosen displays is modelled by its outcome (<see cref="Rebuild"/>), not by
-/// Rebuild's monitor matching. Keep the control flow in step with OverlayHost.
+/// Left out, because they need Windows: windows, the GPU and DirectComposition (every present completes at once and
+/// every surface can take a frame, so FrameReport.AllPresented is always true and no surface stalls), vsync (the full
+/// rate runs on the timer at the same interval) and device loss. A display change or a change of the chosen displays is
+/// modelled by its outcome (<see cref="Rebuild"/>), not by Rebuild's monitor matching. Keep the control flow in step
+/// with OverlayHost.
 /// </remarks>
 internal sealed class OverlayLoopModel
 {
@@ -99,6 +102,9 @@ internal sealed class OverlayLoopModel
 
     /// <summary>Overlay windows shown now.</summary>
     public int WindowsShown => overlays.Count(o => o.WindowVisible);
+
+    /// <summary>Overlays whose swap chain is at half scale now.</summary>
+    public int HalfScaleSurfaces => overlays.Count(o => o.IsHalf);
 
     // OverlayHost's public inputs. Each takes effect on the loop turn the wake starts.
     public void ApplySettings(Settings next) => Publish(() => settings = next);
@@ -173,6 +179,9 @@ internal sealed class OverlayLoopModel
 
             bool inputChanged = ApplyPendingInputs(Now);
             if (!frameDue && !inputChanged) continue;
+            // An input brings a frame forward only from the slow or stopped pace (K3's review): at the full rate the next
+            // scheduled frame draws it, so a slider drag can't push frames past the cap.
+            if (!frameDue && pace == Pace.Full && Now - lastFrame < pacer.FullInterval) continue;
 
             double fullInterval = pacer.FullInterval;
             float dt = pacer.FrameDt(Now - lastFrame, frameDue);
@@ -281,8 +290,7 @@ internal sealed class OverlayLoopModel
         int presents = 0;
         bool anyVisible = false;
         bool gpuReady = hasGradient;
-        if (gpuReady)
-            foreach (ModelOverlay overlay in overlays) overlay.SetHalfScale(Reduced);
+        bool half = Reduced;
 
         float visibility = float.IsFinite(state.Visibility) ? Math.Clamp(state.Visibility, 0, 1) : 0;
         foreach (ModelOverlay overlay in overlays)
@@ -302,21 +310,30 @@ internal sealed class OverlayLoopModel
 
             anyVisible = true;
             if (!gpuReady) continue;
-            GlowConstants constants = Constants(state, overlay, shown);
+            // Shown before anything waits for a frame; the render scale switches only on a frame the surface presents
+            // (it always can here), so hidden overlays switch once shown.
             overlay.WindowVisible = true;
-            if (overlay.Shows(constants, gradientVersion)) continue;
+            bool rescaled = false;
+            if (overlay.IsHalf != half)
+            {
+                overlay.SetHalfScale(half);
+                rescaled = true;
+            }
+            GlowConstants constants = Constants(state, overlay, shown);
+            if (!rescaled && overlay.Shows(constants, gradientVersion)) continue;
             overlay.Present(constants, gradientVersion);
             presents++;
         }
 
-        report = new FrameReport(frame.Motion, state, dt, frame.GradientChanged, anyVisible, transitioning, AllPresented: true);
+        report = new FrameReport(frame.Motion, state, dt, frame.GradientChanged, anyVisible, transitioning, AllPresented: true,
+            Stalled: false);
         return presents;
     }
 
     private GlowConstants Constants(in LightState state, ModelOverlay overlay, float visibility)
     {
-        GlowConstants constants = GlowConstants.Create(state, overlay.BufferWidth, overlay.BufferHeight,
-            overlay.Scale * overlay.RenderScale, applied!.CornerRadiusDip, meanColor);
+        GlowConstants constants = GlowConstants.Create(state, overlay.BufferWidth, overlay.BufferHeight, overlay.Scale,
+            overlay.RenderScale, applied!.CornerRadiusDip, meanColor);
         constants.Visibility = visibility;
         return constants;
     }
@@ -339,6 +356,7 @@ internal sealed class OverlayLoopModel
         public bool WindowVisible { get; set; }
         public int BufferWidth { get; private set; } = width;
         public int BufferHeight { get; private set; } = height;
+        public bool IsHalf => half;
         public float RenderScale => OverlaySurface.RenderScaleFor(windowWidth, half);
 
         public bool ShowsNothing => !hasPresented || lastPresented.Visibility < GlowConstants.MinVisibility;
