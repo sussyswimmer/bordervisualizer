@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Benchmarks and (from C12) soak runs for the Core hot paths. Pure .NET, runs on Linux and Windows.
-       Always measure a Release build; see Program.cs for the commands. -->
+  <!-- Benchmarks and soak runs for the Core hot paths (C3, C12; results in docs/PERF.md). Pure .NET, runs on Linux
+       and Windows. Always measure a Release build; see Program.cs for the commands. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
