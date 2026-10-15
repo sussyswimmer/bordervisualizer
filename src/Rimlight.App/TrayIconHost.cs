@@ -67,12 +67,13 @@ internal sealed class TrayIconHost : IDisposable
 
         // "From album art" means the glow shows the album colors, so it also turns off Override album color, which every
         // preset turns on (H-009): that is the way back from a preset. "Manual" is checked whenever the manual or preset
-        // colors show.
+        // colors show. Choices are checkable like "Glow on" so screen readers announce which one is checked (WPF's
+        // automation peer offers the toggle state only then); Refresh resets the marks a click flips.
         var colors = new MenuItem { Header = "_Colors" };
-        albumColors = new MenuItem { Header = "From _album art" };
+        albumColors = new MenuItem { Header = "From _album art", IsCheckable = true };
         albumColors.Click += (_, _) => Update(s => s with { ColorMode = ColorMode.AlbumArt, OverrideAlbumColor = false });
         colors.Items.Add(albumColors);
-        manualColors = new MenuItem { Header = "_Manual" };
+        manualColors = new MenuItem { Header = "_Manual", IsCheckable = true };
         manualColors.Click += (_, _) => Update(s => s with { ColorMode = ColorMode.Manual });
         colors.Items.Add(manualColors);
         menu.Items.Add(colors);
@@ -273,7 +274,7 @@ internal sealed class TrayIconHost : IDisposable
 
     private (MenuItem, AnimationMode) Choice(MenuItem parent, string header, AnimationMode mode)
     {
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, IsCheckable = true };
         item.Click += (_, _) => Update(s => s with { Animation = mode });
         parent.Items.Add(item);
         return (item, mode);
@@ -298,7 +299,8 @@ internal sealed class TrayIconHost : IDisposable
 
     private (MenuItem, Func<Settings, Settings>) PresetChoice(MenuItem parent, string name, Func<Settings, Settings> apply)
     {
-        var item = new MenuItem { Header = name.Replace("_", "__", StringComparison.Ordinal) }; // "_" would be an access key
+        // "_" would be an access key.
+        var item = new MenuItem { Header = name.Replace("_", "__", StringComparison.Ordinal), IsCheckable = true };
         item.Click += (_, _) =>
         {
             try

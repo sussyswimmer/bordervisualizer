@@ -59,6 +59,8 @@ internal partial class WelcomeWindow : Window
                 + "You can pick a different one in Settings.",
             HotkeyState.Invalid => $"\"{hotkey.Text}\" isn't a shortcut Windows can use. You can pick a different one in Settings.",
             HotkeyState.Failed => $"Windows didn't accept {gesture} as a shortcut. You can pick a different one in Settings.",
+            HotkeyState.TypesCharacter => $"With your keyboard layout, {gesture} types a character (it's the same as AltGr), so "
+                + "the glow has no keyboard shortcut yet. You can pick a different one in Settings.",
             _ => "",
         });
     }

@@ -50,7 +50,7 @@ internal static class AppLog
     public static void Start(string[] arguments)
     {
         if (file is not null) return;
-        file = new RollingFileLog(Folder);
+        file = new RollingFileLog(Folder, AppInfo.Name.ToLowerInvariant() + ".log");
         Trace.Listeners.Add(file);
         Trace.WriteLine($"[App] {AppInfo.Name} {Version} started: Windows {Environment.OSVersion.Version}, "
             + $"{RuntimeInformation.ProcessArchitecture}, .NET {Environment.Version}, process {Environment.ProcessId}, "

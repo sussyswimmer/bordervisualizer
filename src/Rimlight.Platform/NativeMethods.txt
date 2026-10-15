@@ -119,3 +119,11 @@ WM_HOTKEY
 HWND_MESSAGE
 GetNamedPipeServerProcessId
 AllowSetForegroundWindow
+
+// Shell (K6 review): Ctrl+Alt shortcuts that a keyboard layout types as AltGr characters, and the running copy's exe
+GetKeyboardLayoutList
+MapVirtualKeyEx
+ToUnicodeEx
+VIRTUAL_KEY
+OpenProcess
+QueryFullProcessImageName
