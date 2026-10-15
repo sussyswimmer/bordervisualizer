@@ -591,6 +591,25 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         Assert.True(engine.Update(Dt, Loud, Palette.Default, reopened, false).Visibility > 0);
     }
 
+    [Fact]
+    public void HidingDropsAPendingBeatPush()
+    {
+        // A beat lands just before the gate closes. Its push keeps turning the phase during the 300 ms fade-out, and
+        // what is left of it once the light is hidden is dropped, so the light comes back drifting from where it stopped.
+        var engine = Settled(Music, Loud);
+        engine.Update(Dt, Loud with { Beat = 1 }, Palette.Default, Music, false);
+        Run(engine, 0.5f, Loud, Music, paused: true);
+        Assert.True(engine.IsStatic);
+        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        double advance = 0;
+        foreach (LightState state in Frames(engine, 60, Loud, Music))
+        {
+            advance += Advance(phase, state.Phase);
+            phase = state.Phase;
+        }
+        Assert.Equal(0.015 * 60 * Dt, advance, 1e-6);
+    }
+
     [Theory]
     [InlineData("when-silent-idle")]
     [InlineData("idle-mode")]
