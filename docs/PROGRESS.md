@@ -180,10 +180,12 @@
     - `Still`: no frames; the thread waits only on the wake event and messages, with no timer.
   - Host overrides:
     - An unfinished present or a per-monitor fade runs at the full rate until it is done.
+    - A surface that has taken no frame for 1 s (display off, DWM stalled) no longer holds the full rate. Its frame is retried at the source's pace, but at least at 10 fps, so the loop never stops while it still has a frame to show. One that should hide is hidden without its transparent frame, so a display that goes dark during a fade-out still lets the loop stop. Shown again, it may show its last frame for a refresh, as it would have shown it when the display came back.
+    - An input draws a frame at once only from 10 fps or stopped. At the full rate the next scheduled frame draws it, so a slider drag stays within the cap (30 fps on battery).
     - `Slow` runs at the full rate for 1 s after an input change, and for 0.5 s after a gradient refill or a state change faster than 0.25/s (idle breathing is about 0.1/s).
     - With nothing on screen, frames run at 10 Hz.
   - **Static:** each surface remembers what it last presented and skips Draw and Present while the new constants look the same: identical geometry, values within half an 8-bit code value, phase within 0.0002.
-  - **Hidden:** an overlay whose visibility drops below 0.5/255 presents one transparent frame, then hides its window. DWM then composes nothing of ours, and fullscreen apps below can flip directly. The window is shown again, topmost, just before its next visible frame; windows are created hidden.
+  - **Hidden:** an overlay whose visibility drops below 0.5/255 presents one transparent frame, then hides its window. DWM then composes nothing of ours, and fullscreen apps below can flip directly. The window is shown again, topmost, before its next visible frame waits for the swap chain (and before a pending scale switch), because DWM may hand back the frame the transparent present holds only once the window is shown. Windows are created hidden.
   - **Time:** a gap over 0.25 s, or a frame that an input brought forward, gets one full-rate frame of dt. There are no dt spikes, and fades start on the frame after the input.
   - **Capture** is closed whenever audio can't change the glow: Off, `Enabled = false`, Idle Glow, and paused. The analyzer then hears silence. With When silent = Hide, a static invisible glow keeps listening at 10 Hz.
   - **No overlay** (Custom monitors unplugged or none selected): the source gets one paused frame, so the capture closes and no stale audio piles up, and then no calls until an overlay exists again.
@@ -193,7 +195,7 @@
   - "Reduce" caps the rate at 30 fps and renders at half scale.
     - Each swap chain is half the window's size, rounded up. Its DirectComposition visual is stretched back by `SetTransform` (an exact window/buffer ratio), with linear interpolation and hard borders so the edge-hugging core stays solid.
     - Constants are computed in swap-chain pixels (DPI scale × render scale), so every pixel measure halves. Only the thin-core fade (`CoreFade`, in the former padding slot) stays in screen pixels, so a 1-DIP core keeps its brightness and its light at half scale. The shader's spread floor is 0.5 px, which is one DIP at half scale.
-    - A surface switches scale only on a frame where it can present at once (its frame-latency object is signaled). It then resizes, rebinds the pipeline (a resize clears the context state), draws, presents and commits the new transform back to back. A surface that can't present yet keeps its old scale, with matching constants, and retries at the full rate. Hidden overlays switch when they are next shown.
+    - A surface switches scale only on a frame where it can present at once (its frame-latency object is signaled). It then resizes, rebinds the pipeline (a resize clears the context state), draws, presents and commits the new transform back to back. A surface that can't present yet keeps its old scale, with matching constants, and retries at the full rate. Hidden overlays switch once shown again: the window is shown first, still transparent, so a battery change while the glow is hidden can't keep it from coming back.
     - Swap-chain presents are not part of the DirectComposition transaction, so the switch is not strictly atomic. A refresh composed between the present and the commit, or before the GPU finishes that frame, could still show one mismatched frame. A fully atomic switch would need a second swap chain (or `SetSourceSize` + `SetMatrixTransform`), which can't be tested here.
   - "Pause" counts as paused.
 - **Per-monitor pause (doc 04 §4):** each overlay fades its own visibility multiplier over 300 ms. Once every overlay is paused and fully faded, the engine also gets `paused`, so it goes static and the loop stops.
@@ -238,6 +240,15 @@
     - fades jumped up to 100 ms ahead when an input arrived between 10 fps frames
     - vsync on a faster secondary monitor could exceed the cap
   - Review fixes (two adversarial reviews, Windows-runtime and spec): render-scale switch gated on a frame that can present; one paused source call when the last overlay goes away; a time-based device check; screen-pixel `CoreFade`; crossfades count as motion; a lock-free save flag; checkable tray items; the status shows the wait actually taken.
+  - Second review round:
+    - A hidden overlay is shown before the scale-switch gate. Before, a battery change while hidden could keep the glow from returning, at 30 fps of retries.
+    - Stalled surfaces drop to 10 fps or hide, so a display-off fade-out no longer spins at the full rate all night.
+    - Inputs at the full rate wait for the next frame. A drag had run frames at the input rate and presents at the refresh, past the battery cap.
+    - Harness 1 now models the frame-latency object, assuming DWM returns it only to a shown window on a lit display. It replays each scenario against the old and the new logic:
+      - resume after a battery change while hidden: never → 17 ms
+      - display off then pause: 30 frames/s all night → stopped 0.57 s after the pause
+      - Idle Glow with the display off: 30 → 10 fps
+      - a 200-inputs/s drag on battery: 200 frames/s and 60 presents/s → 30/30
   - Nothing has run on Windows yet: Maxwell's checklist, with CPU measurement steps, is in #14.
 
 ## Lane B notes

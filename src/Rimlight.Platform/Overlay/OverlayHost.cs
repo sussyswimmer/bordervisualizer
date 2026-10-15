@@ -314,6 +314,9 @@ public sealed class OverlayHost : IDisposable
                     continue;
                 }
                 if (!frameDue && !inputChanged) continue;
+                // An input brings a frame forward only from the slow or stopped pace. At the full rate the next frame
+                // draws it within one interval, so a slider drag can't push frames or presents past the cap.
+                if (!frameDue && pace == Pace.Full && now - lastFrame < (long)(pacer.FullInterval * Stopwatch.Frequency)) continue;
 
                 // The source's time runs on without jumps: a gap in frames (nothing could change, or a stall) counts
                 // as one ordinary frame, so fades and smoothing continue where they stopped (doc 02 idle pacing).
@@ -419,7 +422,7 @@ public sealed class OverlayHost : IDisposable
     }
 
     // Takes the inputs other threads published since the last frame. True when anything changed: a frame is then
-    // drawn at once, and transitions it starts get the full rate for a moment.
+    // drawn at once (or with the next full-rate frame), and transitions it starts get the full rate for a moment.
     private bool ApplyPendingInputs(long now)
     {
         bool changed = false;
@@ -760,8 +763,9 @@ public sealed class OverlayHost : IDisposable
         foreach (Overlay overlay in overlays) transitioning |= overlay.AdvanceFade(dt);
 
         int presents = 0;
-        bool anyVisible = false, allPresented = true;
+        bool anyVisible = false, allPresented = true, stalled = false;
         bool gpuReady = gpu is not null && hasGradient && CheckGpu();
+        long nowMs = Environment.TickCount64;
         bool half = Reduced;
         try
         {
@@ -786,7 +790,9 @@ public sealed class OverlayHost : IDisposable
                 {
                     if (!overlay.Window.IsVisible) continue;
                     // Hidden only once a transparent frame is on screen, so showing the window again never flashes
-                    // an old frame.
+                    // an old frame. A stalled surface (display off) is hidden without it, so the loop can stop
+                    // instead of retrying until DWM takes frames again. Shown again, it may show its last frame for a
+                    // refresh, as it would have shown it when the display came back.
                     if (surface is not null && !surface.ShowsNothing)
                     {
                         GlowConstants clear = Constants(state, overlay, surface, cornerRadiusDip, 0);
@@ -797,12 +803,19 @@ public sealed class OverlayHost : IDisposable
                             allPresented = false;
                             break;
                         }
-                        if (!done)
+                        if (done)
+                        {
+                            presents++;
+                        }
+                        else if (IsStalled(surface, nowMs))
+                        {
+                            surface.RestartSkipClock();
+                        }
+                        else
                         {
                             allPresented = false;
                             continue;
                         }
-                        presents++;
                     }
                     overlay.Window.Hide();
                     continue;
@@ -817,16 +830,22 @@ public sealed class OverlayHost : IDisposable
                     continue;
                 }
 
+                // Shown before anything waits for a frame: DWM may not take frames from a hidden window, so the
+                // surface may get its frame back only once shown (the transparent one presented as it was hidden).
+                // Until the next present the window shows that last frame: transparent (see above) or blank.
+                if (!overlay.Window.IsVisible) overlay.Window.Show();
+
                 // Render scale ("Reduce on battery") changes only on a frame this surface can present at once: its
                 // buffers are resized, drawn, presented and the new transform committed back to back, so DWM gets
                 // the new frame and transform together instead of the transform a frame or more early. Until then it
-                // keeps its old scale, retried at full rate. (Hidden overlays switch when they are next shown.)
+                // keeps its old scale, retried at the full rate (slow once stalled). Hidden overlays switch once shown.
                 bool rescaled = false;
                 if (surface.IsHalf != half)
                 {
                     if (!surface.TryAcquireFrame())
                     {
-                        allPresented = false;
+                        if (IsStalled(surface, nowMs)) stalled = true;
+                        else allPresented = false;
                         continue;
                     }
                     surface.SetHalfScale(half);
@@ -835,9 +854,6 @@ public sealed class OverlayHost : IDisposable
                 }
 
                 GlowConstants constants = Constants(state, overlay, surface, cornerRadiusDip, shown);
-                // Shown before its frame is presented: DWM may not take frames from a hidden window. Until then it
-                // shows its last frame, which is transparent (see above) or blank.
-                if (!overlay.Window.IsVisible) overlay.Window.Show();
                 // Static: nothing new to present (doc 02). A rescaled surface always presents, so its commit follows.
                 if (!rescaled && surface.Shows(constants, gradientVersion)) continue;
 
@@ -850,6 +866,7 @@ public sealed class OverlayHost : IDisposable
                     break;
                 }
                 if (presented) presents++;
+                else if (IsStalled(surface, nowMs)) stalled = true;
                 else allPresented = false;
                 if (rescaled) CommitComposition();
             }
@@ -860,9 +877,14 @@ public sealed class OverlayHost : IDisposable
             allPresented = false;
         }
 
-        report = new FrameReport(frame.Motion, state, dt, frame.GradientChanged, anyVisible, transitioning, allPresented);
+        report = new FrameReport(frame.Motion, state, dt, frame.GradientChanged, anyVisible, transitioning, allPresented, stalled);
         return presents;
     }
+
+    // DWM has taken no frame from this surface for StalledCheckMs (display off, or DWM stalled; CheckGpu looks at the
+    // device). Its unfinished presents are retried at the slow rate rather than the full one.
+    private static bool IsStalled(OverlaySurface surface, long nowMs) =>
+        surface.SkippingSinceMs is long since && nowMs - since >= StalledCheckMs;
 
     // One overlay's constants for this frame. At half scale the swap chain's pixels are twice as large, so every
     // pixel measure is converted at the surface's render scale; only the thin-core fade stays in screen pixels.

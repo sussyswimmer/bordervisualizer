@@ -100,6 +100,10 @@ internal sealed class OverlaySurface : IDisposable
     // or the device is lost. Null once a frame is taken.
     public long? SkippingSinceMs { get; private set; }
 
+    // The window is hidden with a frame DWM hasn't taken. Hidden windows aren't expected to take frames, so the stall
+    // clock starts again once it is shown.
+    public void RestartSkipClock() => SkippingSinceMs = null;
+
     // The swap chain's frame-latency object. With a maximum frame latency of 1 it is signaled once DWM has picked up
     // the previous frame, i.e. once per display refresh while frames keep coming: the overlay thread waits on it to
     // pace frames on the display (vsync). A wait that succeeds takes the frame; report it with FrameAcquired.
