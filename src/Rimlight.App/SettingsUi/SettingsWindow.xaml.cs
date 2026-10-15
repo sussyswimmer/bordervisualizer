@@ -23,6 +23,7 @@ internal partial class SettingsWindow : FluentWindow
     private const int WmDisplayChange = 0x007E;
 
     private readonly AppController app;
+    private readonly AppearancePage appearance;
     private readonly DisplaysPage displays;
     private readonly BehaviorPage behavior;
     private ISettingsPage? selected;
@@ -53,9 +54,10 @@ internal partial class SettingsWindow : FluentWindow
             WelcomeBanner.IsOpen = true;
         }
 
+        appearance = new AppearancePage(app);
         displays = new DisplaysPage(app);
         behavior = new BehaviorPage(app);
-        ISettingsPage[] pages = [new AppearancePage(app), new ColorPage(app), new MotionPage(app), displays, behavior, new AboutPage(app)];
+        ISettingsPage[] pages = [appearance, new ColorPage(app), new MotionPage(app), displays, behavior, new AboutPage(app)];
         Navigation.SetPageProviderService(new PageProvider(pages));
         Navigation.Navigated += (_, e) => OnNavigated(e.Page as ISettingsPage);
         // Windows' "Show animations in Windows" off: no slide between pages.
@@ -226,7 +228,12 @@ internal partial class SettingsWindow : FluentWindow
 
     private IntPtr WindowProcedure(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (message == WmDisplayChange) displays.OnDisplaysChanged();
+        if (message == WmDisplayChange)
+        {
+            // Both read the attached monitors: the Displays page's list, the Appearance preview's caption.
+            appearance.OnDisplaysChanged();
+            displays.OnDisplaysChanged();
+        }
         return IntPtr.Zero;
     }
 

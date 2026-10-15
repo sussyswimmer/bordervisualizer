@@ -43,17 +43,9 @@ internal partial class DisplaysPage : UserControl, ISettingsPage
         AllChoice.IsChecked = settings.Monitors == MonitorSelection.All;
         PrimaryChoice.IsChecked = settings.Monitors == MonitorSelection.PrimaryOnly;
         CustomChoice.IsChecked = settings.Monitors == MonitorSelection.Custom;
-        int lit = 0;
-        foreach ((MonitorInfo monitor, ToggleSwitch toggle) in rows)
-        {
-            bool on = MonitorChoice.IsLit(settings, monitor);
-            toggle.IsChecked = on;
-            if (on) lit++;
-        }
-        int remembered = settings.Monitors == MonitorSelection.Custom
-            ? (settings.CustomMonitorIds ?? []).Count(id => !string.IsNullOrEmpty(id) && !monitors.Any(m => m.StableId == id))
-            : 0;
-        PageEdits.SetMessage(SelectionNote, Note(lit, remembered));
+        foreach ((MonitorInfo monitor, ToggleSwitch toggle) in rows) toggle.IsChecked = MonitorChoice.IsLit(settings, monitor);
+        (int lit, int unplugged) = MonitorChoice.Count(settings, monitors);
+        PageEdits.SetMessage(SelectionNote, DisplayNotes.Selection(lit, unplugged));
 
         FpsBox.SelectedIndex = -1;
         for (int i = 0; i < FpsBox.Items.Count; i++)
@@ -80,14 +72,6 @@ internal partial class DisplaysPage : UserControl, ISettingsPage
         if (!active) return;
         displayChange.Stop();
         displayChange.Start();
-    }
-
-    private static string Note(int lit, int remembered)
-    {
-        if (lit == 0) return "No display is chosen, so the glow isn't shown anywhere.";
-        if (remembered == 1) return "One chosen display isn't connected right now. It lights up again when you plug it back in.";
-        if (remembered > 1) return $"{remembered} chosen displays aren't connected right now. They light up again when you plug them back in.";
-        return "";
     }
 
     // The attached monitors, named and in order, each with its toggle.

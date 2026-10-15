@@ -16,5 +16,7 @@
   <ItemGroup>
     <!-- Platform targets Windows, but its mono conversion has no Windows dependencies: compiled in so it runs here. -->
     <Compile Include="../Rimlight.Platform/Audio/MonoConverter.cs" Link="Platform/MonoConverter.cs" />
+    <!-- The same for Settings' notes about where the glow shows (App targets Windows and WPF; this file uses neither). -->
+    <Compile Include="../Rimlight.App/SettingsUi/DisplayNotes.cs" Link="App/DisplayNotes.cs" />
   </ItemGroup>
 </Project>
