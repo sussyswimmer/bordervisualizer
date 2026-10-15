@@ -61,9 +61,11 @@ internal sealed class PaceModel
             FrameMotion.Listening => Pace.Slow,
             _ => Pace.Block,
         };
-        // Nothing on screen: frames only keep the analysis going.
+        // Nothing on screen and the light hidden (Visibility exactly 0, H-011): frames only keep the analysis going. A
+        // light fading in keeps the full rate even under MinVisibility, as in FramePacer since C13: above about 130 Hz
+        // the first frame of a 300 ms fade-in is still under it.
         bool visible = state.Visibility >= MinVisibility;
-        return pace == Pace.Full && !visible ? Pace.Slow : pace;
+        return pace == Pace.Full && !visible && !(state.Visibility > 0) ? Pace.Slow : pace;
     }
 
     /// <summary>The dt the overlay passes for a frame (OverlayHost's loop): the time since the previous frame, one
