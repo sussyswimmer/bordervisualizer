@@ -28,7 +28,7 @@ internal sealed class UpdateService : IDisposable
     private readonly CancellationTokenSource stop = new();
     private bool autoUpdate;
     private long? lastAttempt; // Environment.TickCount64 when the last check started
-    private bool lastFailed;
+    private UpdateFailure lastFailure; // of the last check or download; None after a success
     private string? lastLoggedFailure; // a failure is logged once until something else happens
     private bool userWaiting; // the tray's check: its outcome is told in a notification
     private VelopackAsset? ready; // the downloaded release that Restart now installs
@@ -184,7 +184,7 @@ internal sealed class UpdateService : IDisposable
     private void Schedule()
     {
         timer.Stop();
-        TimeSpan? next = UpdatePolicy.NextCheckIn(autoUpdate && manager is not null, Status.Phase, lastAttempt, lastFailed,
+        TimeSpan? next = UpdatePolicy.NextCheckIn(autoUpdate && manager is not null, Status.Phase, lastAttempt, lastFailure,
             Environment.TickCount64);
         if (next is not { } delay) return;
         timer.Interval = delay;
@@ -230,11 +230,19 @@ internal sealed class UpdateService : IDisposable
 
         VelopackAsset target = found.TargetFullRelease;
         Post(() => OnDownloading(target));
+        // The stall watchdog: cancels the download after DownloadStallTimeout without progress, and each progress report
+        // re-arms it. Cancelling closes the connection, which ends a read that would otherwise wait forever.
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(token);
+        stall.CancelAfter(UpdatePolicy.DownloadStallTimeout);
         try
         {
             // Velopack downloads deltas when it can, else the full package, and checks its SHA-256. A package already on
             // disk is not downloaded again.
-            await updates.DownloadUpdatesAsync(found, OnProgress, token).ConfigureAwait(false);
+            await updates.DownloadUpdatesAsync(found, percent =>
+            {
+                stall.CancelAfter(UpdatePolicy.DownloadStallTimeout);
+                OnProgress(percent);
+            }, stall.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -242,7 +250,11 @@ internal sealed class UpdateService : IDisposable
         }
         catch (Exception exception)
         {
-            Post(() => OnFailed(exception, whileDownloading: true));
+            // A stall counts as Offline: retried in 1 h, from the start.
+            Exception failure = stall.IsCancellationRequested
+                ? new TimeoutException($"The download made no progress for {UpdatePolicy.DownloadStallTimeout.TotalMinutes:0} minutes.")
+                : exception;
+            Post(() => OnFailed(failure, whileDownloading: true));
             return;
         }
         Post(() => OnReady(target));
@@ -290,8 +302,8 @@ internal sealed class UpdateService : IDisposable
 
     private void OnFailed(Exception exception, bool whileDownloading)
     {
-        lastFailed = true;
         UpdateFailure failure = UpdatePolicy.Classify(exception);
+        lastFailure = failure;
         string what = whileDownloading ? "Downloading the update" : "Checking for updates";
         // Offline and rate limits are expected and need no stack; anything else is logged in full, once.
         string detail = failure == UpdateFailure.Other ? exception.ToString() : $"{exception.GetType().Name}: {exception.Message}";
@@ -303,12 +315,12 @@ internal sealed class UpdateService : IDisposable
         }
         SetStatus(new UpdateStatus(UpdatePhase.Failed, Failure: failure, WhileDownloading: whileDownloading));
         if (TakeUserWaiting()) app.Tell(UpdatePolicy.FailureMessage(failure, whileDownloading));
-        Schedule(); // a background retry in 1 h
+        Schedule(); // a background retry in 1 h for Offline and RateLimited, else in 12 h
     }
 
     private void Succeeded()
     {
-        lastFailed = false;
+        lastFailure = UpdateFailure.None;
         lastLoggedFailure = null;
     }
 

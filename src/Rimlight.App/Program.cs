@@ -25,6 +25,14 @@ internal static class Program
         }
         catch (Exception exception)
         {
+            // A process started only for an install, update or uninstall step must not become a normal start: during an
+            // uninstall it would register "Launch at startup" again. Velopack ends a failed hook with -1 too.
+            string[] args = Environment.GetCommandLineArgs(); // [0] is the exe; Velopack skips it too
+            if (args.Length > 1 && (args[1].StartsWith("--veloapp-", StringComparison.OrdinalIgnoreCase)
+                || args[1].StartsWith("--squirrel-", StringComparison.OrdinalIgnoreCase)))
+            {
+                return -1;
+            }
             // The app still runs, without updates; logged once the log has started.
             updates.OnStartFailed(exception);
         }

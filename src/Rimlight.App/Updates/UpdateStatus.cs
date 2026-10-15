@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -38,7 +39,7 @@ internal enum UpdateFailure
     /// <summary>No failure.</summary>
     None,
 
-    /// <summary>GitHub couldn't be reached: offline, DNS, a timeout, a server error.</summary>
+    /// <summary>GitHub couldn't be reached: offline, DNS, a timeout, a dropped or stalled connection, a server error.</summary>
     Offline,
 
     /// <summary>GitHub refused for now (HTTP 403 or 429: 60 API requests an hour per IP address without a token).</summary>
@@ -92,22 +93,31 @@ internal static class UpdatePolicy
     public static readonly TimeSpan CheckInterval = TimeSpan.FromHours(12);
 
     /// <summary>
-    /// A failed background check is tried again after this long instead of 12 h: right after sign-in or a wake the network
-    /// is often not up yet, and GitHub's rate limit resets hourly.
+    /// A check or download that failed for a passing reason (<see cref="UpdateFailure.Offline"/>,
+    /// <see cref="UpdateFailure.RateLimited"/>) is tried again after this long instead of 12 h: right after sign-in or a
+    /// wake the network is often not up yet, and GitHub's rate limit resets hourly. Other failures (a damaged release file,
+    /// a full disk) wait the usual 12 h, since they would repeat, and each download starts the whole package over.
     /// </summary>
     public static readonly TimeSpan RetryInterval = TimeSpan.FromHours(1);
 
     /// <summary>A check gives up after this long (Velopack's own HTTP timeout is 30 minutes).</summary>
     public static readonly TimeSpan CheckTimeout = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// A download gives up after this long without progress. HttpClient's timeout stops at the response headers, so a
+    /// connection left half-open by a sleep or a network change would otherwise wait forever. Velopack reports progress
+    /// only every 2-3 %, and applying deltas takes up to 5 min without any.
+    /// </summary>
+    public static readonly TimeSpan DownloadStallTimeout = TimeSpan.FromMinutes(10);
+
     /// <summary>When the next background check is due.</summary>
     /// <param name="enabled">Whether background checks run: installed, and the AutoUpdate setting on.</param>
     /// <param name="phase">The current phase. Nothing is scheduled while busy or while an update waits for a restart.</param>
     /// <param name="lastAttempt">When the last check started (milliseconds of <see cref="Environment.TickCount64"/>), or null.</param>
-    /// <param name="lastFailed">Whether that check, or the download after it, failed.</param>
+    /// <param name="lastFailure">Why that check, or the download after it, failed; <see cref="UpdateFailure.None"/> if it didn't.</param>
     /// <param name="now">Now, on the same clock.</param>
     /// <returns>The time from now, or null for no background check.</returns>
-    public static TimeSpan? NextCheckIn(bool enabled, UpdatePhase phase, long? lastAttempt, bool lastFailed, long now)
+    public static TimeSpan? NextCheckIn(bool enabled, UpdatePhase phase, long? lastAttempt, UpdateFailure lastFailure, long now)
     {
         if (!enabled || phase is UpdatePhase.NotInstalled or UpdatePhase.Unavailable or UpdatePhase.Checking
             or UpdatePhase.Downloading or UpdatePhase.Ready)
@@ -115,7 +125,8 @@ internal static class UpdatePolicy
             return null;
         }
         if (lastAttempt is not { } last) return FirstCheckDelay;
-        double due = last + (lastFailed ? RetryInterval : CheckInterval).TotalMilliseconds - now;
+        bool passing = lastFailure is UpdateFailure.Offline or UpdateFailure.RateLimited;
+        double due = last + (passing ? RetryInterval : CheckInterval).TotalMilliseconds - now;
         // At least FirstCheckDelay: turning AutoUpdate on long after the last check checks soon, never in a burst.
         return TimeSpan.FromMilliseconds(Math.Max(due, FirstCheckDelay.TotalMilliseconds));
     }
@@ -132,6 +143,9 @@ internal static class UpdatePolicy
             // No answer at all (StatusCode null: DNS, refused, reset, TLS) or a server error: GitHub can't be reached now.
             HttpRequestException { StatusCode: null or >= HttpStatusCode.InternalServerError } => UpdateFailure.Offline,
             TimeoutException or TaskCanceledException or SocketException => UpdateFailure.Offline,
+            // The connection lost in the middle of a download: the body ended early, or the socket was reset. A disk
+            // error has no SocketException inside, so it stays Other.
+            HttpIOException or IOException { InnerException: SocketException } => UpdateFailure.Offline,
             _ => UpdateFailure.Other,
         };
     }

@@ -534,10 +534,11 @@
 - **Structure:**
   - `src/Rimlight.App/Program.cs`: `[STAThread] Main` (the `StartupObject`) runs `VelopackApp.Build()…Run()` first, then `new App(updates)`, `InitializeComponent()` and `Run()`. `App.xaml` is a `Page`, so WPF generates no `Main`.
     - The hooks: auto-apply off, Velopack's warnings and errors to the log (`VelopackTraceLog`), the uninstall hook (`StartupRegistration.Remove`) and the restarted hook.
+    - If `Run()` throws in a process started for one of Velopack's steps (first argument `--veloapp-…` or `--squirrel-…`), `Main` returns -1 instead of starting the app. Otherwise an uninstall step could register "Launch at startup" again.
   - `src/Rimlight.App/Updates/` (namespace `Rimlight.App.Updates`):
     - `UpdateBootstrap`: what `Main` saw (restarted version, start error), the `UpdateManager` (`GithubSource(repo, null, false)`, no explicit channel; null when not installed), and `ApplyPending`. `App.OnStartup` calls `ApplyPending` right after the single-instance claim.
     - `UpdateService` (UI thread):
-      - the 30 s / 12 h background checks, 1 h after a failure, none while AutoUpdate is off or an update is ready
+      - the 30 s / 12 h background checks, 1 h after an Offline or RateLimited failure, none while AutoUpdate is off or an update is ready
       - the manual check, the background download and the "Update ready" balloon
       - `RestartToUpdate`: the updater, then the usual Quit
       - Velopack runs on the pool, and its results come back through the dispatcher
@@ -552,8 +553,10 @@
   - **Apply on next restart** is done by the app after the single-instance claim, with Velopack's own start-up auto-apply off. `Update.exe` stops every process running from the install folder before applying, so a second start with a pending update would otherwise kill the running copy.
     - The updater is silent for a `--background` start (sign-in).
     - It isn't retried in a start that Velopack itself restarted, which covers a failed install.
-  - **A failed background check retries in 1 h**, not 12 h. Sign-in and wake often come before the network, and GitHub's unauthenticated limit (60 requests/h per IP) resets hourly. A check gives up after 2 min (Velopack's HTTP timeout is 30 min).
-  - **Failures:** offline, timeouts and 5xx count as Offline, 403/429 as RateLimited, the rest as Other. Background failures are logged once until something changes, and no one is told. The tray's manual check gets a notification. About's check shows only on the page.
+  - **A check or download that failed as Offline or RateLimited retries in 1 h**, not 12 h. Sign-in and wake often come before the network, and GitHub's unauthenticated limit (60 requests/h per IP) resets hourly. **Other failures wait the usual 12 h** (a release file whose SHA-256 doesn't match, a full disk, a missing asset). They would fail the same way again, and each retry downloads the whole package from zero: Velopack deletes the `.partial`, and after a failed download its cleanup also deletes the base package that deltas need. A check gives up after 2 min (Velopack's HTTP timeout is 30 min).
+  - **A download gives up after 10 min without progress** (review fix). `HttpClient.Timeout` stops applying once the headers arrive, and nothing else times out a read of the body. So a connection left half-open by a sleep or a network change would keep the service in Downloading for the rest of the session: no background checks, and the manual check only answers "is downloading". The watchdog is a `CancellationTokenSource` linked to the quit token, re-armed by each progress report. Velopack reports every 2-3 %, and applying deltas runs up to 5 min with no report, hence 10 min. Cancelling closes the connection and releases Velopack's update lock. The stall counts as an Offline download failure, retried in 1 h.
+  - **Failures:** offline, timeouts, 5xx, a stalled download and a connection lost mid-download count as Offline. The last one is `HttpIOException` for a premature end, or `IOException` with a `SocketException` inside for a reset; a disk error has no `SocketException` inside, so it stays Other. 403/429 count as RateLimited, the rest as Other. Background failures are logged once until something changes, and no one is told. The tray's manual check gets a notification. About's check shows only on the page. After a failed download Velopack also logs "Failed to extract new Update.exe" (`FileNotFoundException` for the package that never arrived). `VelopackTraceLog` drops that one line, because our own line already gives the real cause.
+  - **About's status line has no `AutomationProperties.Name`** (review fix). A fixed name would be what screen readers read instead of the text, as on K7's other live messages.
   - **Logs** moved from doc 02's `%LOCALAPPDATA%\Rimlight\logs` to `%APPDATA%\Rimlight\logs`. Velopack installs into `%LOCALAPPDATA%\Rimlight`, replaces that folder on install (renaming it for rollback) and deletes it on uninstall, and doc 07 Phase 6 keeps the logs. This answers H-014 item 3 and H-013 item 4. H-021 asks Lane A to update `CONTRIBUTING.md`, the bug form and doc 02.
   - **After an update restart** the app shows "Rimlight updated — You're now running version X", respecting quiet time, because the `--background` restart opens no window.
   - **The test feed:** the user environment variable `RIMLIGHT_UPDATE_FEED` (a folder of packed releases, or an http URL) replaces GitHub, for testing updates without a release. It is logged at start.
@@ -563,7 +566,7 @@
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
   - vpk 1.2.161 cross-packed a self-contained win-x64 publish of this branch and logged "Verified VelopackApp.Run() in 'System.Int32 Rimlight.App.Program::Main()'". The IL entry point is `Program.Main` with `[STAThread]`, and `App.g.cs` has no `Main`.
   - Velopack 1.2.161 was decompiled: `VelopackApp`, `UpdateManager`, `UpdateExe`, `GithubSource`/`GitBase`, `HttpClientFileDownloader` and `WindowsVelopackLocator`. The strings of its `Update.exe`, `Setup.exe` and stub were checked for apply, stopping processes, the install folder and argument forwarding. WPF 8.0.31's `Application.Shutdown` posts the shutdown.
-  - **Scratch harness (not committed), 375 checks:** the real update sources with real Velopack (`TestVelopackLocator`), against the packed 0.1.0 through a local feed and an HTTP feed.
+  - **Scratch harness (not committed), 407 checks:** the real update sources with real Velopack (`TestVelopackLocator`), against the packed 0.1.0 through a local feed and an HTTP feed.
     - check, download, the balloon, the restart arguments and Quit
     - install at the next start, silent or not, with the arguments passed on, and no second try
     - up to date, the schedule, AutoUpdate on and off
@@ -573,7 +576,15 @@
     - asks during a check don't stack
     - the uninstall and restarted hooks
     - 8 of 9 mutations caught; the survivor only coalesces progress posts
-  - Nothing has run on Windows yet: Maxwell's checklist is in #28.
+    - review fixes (with the stall timeout compiled as 3 s):
+      - a feed that sends 8 MB and then hangs: Failed (Offline, while downloading) no earlier than the timeout after the last progress, logged once as the stall, told to the tray, retried in 1 h, with nothing left in `packages`
+      - after that, a new download in the same folder works, so the update lock was released
+      - a slow download that keeps progressing (about 3 times the timeout) reaches Ready
+      - a feed that resets mid-body: `HttpIOException`, Offline, logged once, retried in 1 h
+      - 404 (Other) retries in 12 h
+      - the classifier's new cases, and the extract line dropped while other Velopack errors stay
+      - 3 more mutations were caught: no re-arm, no `HttpIOException`/`IOException` arm, and no stall mapping
+  - Nothing has run on Windows yet: Maxwell's checklist is in #28. Until K10 brings C7's store, settings live in memory only. So every start, the restarts after an update included, shows the welcome window, and AutoUpdate is on again after a restart. The checklist expects both (review fix).
 - **Left for later:**
   - **Lane A (H-021):** drop the dry-run `SkipVelopackAppCheck` in `release.yml`, and update the logs path in `CONTRIBUTING.md`, the bug form and doc 02.
   - **K10:** with C9 merged, run `build/pack.ps1` without `-SkipVelopackAppCheck`, then a real tagged test release: install the older one, publish the newer, and check that the update downloads and installs.

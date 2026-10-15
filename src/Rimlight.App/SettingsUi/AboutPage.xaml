@@ -36,8 +36,9 @@
                                 AutomationProperties.Name="Restart now to install the update" />
                         <Button Content="Open logs folder" Margin="0,0,8,4" Click="OnOpenLogs" AutomationProperties.Name="Open logs folder" />
                     </WrapPanel>
+                    <!-- No AutomationProperties.Name: the text itself is the name screen readers announce. -->
                     <TextBlock x:Name="UpdateStatusText" Style="{StaticResource RowDescription}" Visibility="Collapsed"
-                               AutomationProperties.Name="Update status" AutomationProperties.LiveSetting="Polite" />
+                               AutomationProperties.LiveSetting="Polite" />
                 </StackPanel>
             </Border>
 

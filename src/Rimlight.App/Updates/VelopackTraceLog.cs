@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO;
 using Velopack.Logging;
 
 namespace Rimlight.App.Updates;
@@ -13,6 +14,9 @@ internal sealed class VelopackTraceLog : IVelopackLogger
     public void Log(VelopackLogLevel logLevel, string? message, Exception? exception)
     {
         if (logLevel < VelopackLogLevel.Warning) return;
+        // After every failed download Velopack also tries to unpack Update.exe from the package that never arrived. That
+        // error only repeats the download's failure, which UpdateService logs (once) with its real cause.
+        if (exception is FileNotFoundException && message == "Failed to extract new Update.exe") return;
         string detail = exception is null ? "" : $" ({exception.GetType().Name}: {exception.Message})";
         Trace.WriteLine($"[Velopack] {logLevel}: {message}{detail}");
     }
