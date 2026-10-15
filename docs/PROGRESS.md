@@ -1228,6 +1228,8 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - Scratch harness (not committed): the preview rule and the save retry against the real Core.
   - A static engine field fails the new two-thread test.
   - CI on #29 at `8ec6783`: all green. The Linux job and the Windows full solution passed (0 warnings, 769 tests). The release dry run packed win-x64 and win-arm64 with vpk's entry-point check, which logged "Verified VelopackApp.Run() in 'System.Int32 Rimlight.App.Program::Main()'" for both.
+- **Review fixes (core-seam):**
+  - **Analyzer time after a stall:** a frame that drains more than `OverlayHost.MaxFrameDtSeconds` (0.25 s) of audio now passes the time that audio covers to `IAudioAnalyzer.Process` and the visualizer. The engine, blender, demo and idle timer keep H-011 item 4's capped dt. Every other frame keeps its own dt, because taking the larger of the two on every frame read a 120 BPM track as 76–92 BPM at 144–240 fps. Scratch harness against the real Core: steady state unchanged at 30–240 fps; 0 of 200 stalls differ from the real dt (115 before); silence after a 1 s stall at 5.13 s (6.02 s before). Not covered: a stall in total silence (no packets), and a frame brought forward from 10 fps (under 0.1 s of audio). Windows re-test (K11): after a display change or GPU reset while music plays, the pulse comes back on the next kick.
 - **Left for later:**
   - **Maxwell:** the manual checklist in #29. Then a tagged test release to check an update end to end (K9 notes): install the older release, publish a newer one, and confirm it downloads and installs. Tags and releases are his.
   - **K11:** sleep/wake, RDP, TDR, hotplug, device switching, and the 8-hour `--demo` soak (H-018 item 2).
