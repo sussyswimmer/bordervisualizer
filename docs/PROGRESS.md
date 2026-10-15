@@ -78,7 +78,7 @@
 - [x] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause — PR #19 — effort: M (notes below; Windows manual test pending)
 - [x] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow — PR #22 — effort: M (notes below; Windows manual test pending)
 - [x] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names — PR #24 — effort: L (notes below; Windows manual test pending)
-- [ ] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode
+- [x] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode — PR #26 — effort: M (notes below; Windows manual test pending)
 - [ ] K9 Velopack bootstrap in App (`VelopackApp.Build().Run()`), update checks, "Update ready" toast
 - [ ] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues
 - [ ] K11 Hardening on real Windows: sleep/wake, RDP, TDR, hotplug, device switching. Results go in PROGRESS.md.
@@ -470,6 +470,64 @@
     - Optionally drop the Debug tray items Settings now covers.
   - **K11:** measure CPU with Settings open on Appearance (target: about 3% or less) and with it hidden (idle).
   - **K12:** use the About privacy bullets verbatim in the README.
+
+## K8 notes
+
+- **Structure:**
+  - `src/Rimlight.App/Visualizer/` (namespace `Rimlight.App.Visualizer`):
+    - `DebugVisualizerWindow`: an always-on-top WPF window.
+      - It shows the spectrum (dB over log frequency, with the bands shaded), scrolling Level/Bass/Beat, and flux against the threshold, with beats marked.
+      - Also the beat lamp, BPM, beat count, IsSilent, the device and format, and the analysis rate and frame rate.
+      - A slider and value box for each of the 26 `AudioTuning` fields, plus Copy params as JSON, Paste params and Reset to defaults.
+      - It runs (audio request, probe, 30 Hz timer) only while it is shown and not minimized.
+    - `PlotRaster`, `SpectrumPlot`, `TimelinePlot` and `TimeAxis` draw into `int[]` with no Windows calls and no allocation per frame. `PlotSurface` copies them into a `WriteableBitmap` at device pixels.
+    - `TuningParameters` is the row table, with a reflection check for fields without a row. `TuningJson` handles the JSON.
+  - `src/Rimlight.App/Overlay/`:
+    - `AnalyzerProbe` hands two preallocated `AnalyzerSnapshot` buffers between the UI and the render thread.
+      - The UI lends one; the render thread fills it on its next frame and hands it back. Each buffer has one owner at a time, there are at most 30 copies a second, and nothing is allocated.
+      - Tuning requests go through one `Volatile` slot (`AudioTuning`). The render thread applies them before `Process` and reports a `TuningOutcome`.
+    - `DemoShow` is the synthetic 120 BPM groove and the four palettes.
+    - `MusicGlowSource` gains `AttachProbe`, `SetDemo` and `IsDemo`.
+  - `AppController`:
+    - `ParseArguments` / `LaunchOptions` is the only command-line parser; `App.xaml.cs` uses it for the single-instance claim.
+    - The pipe commands `demo` and `debug-visualizer` let a later start hand its switches over.
+    - `ShowVisualizer`, `StartDemo`, `StopDemo`, `IsDemoRunning`, `AttachVisualizer`. On exit the visualizer closes right after Settings.
+  - Tray: Stop demo while the demo plays. The Debug submenu adds the visualizer and a demo toggle.
+- **Spec clarifications and deviations:**
+  - **Thread safety (H-004):** the UI never touches `AnalyzerDiagnostics` or the analyzer. `Diagnostics` is read on the render thread at every fill, because a `WindowSize` change replaces it. Sensitivity in a tuning request is replaced by the setting's (H-007), and the Sensitivity row edits `Settings.Sensitivity`.
+  - **Analysis rate while open:** motion is `Full`, so the analyzer runs on every frame. The overlay still drops to 10 Hz while nothing is on screen, so the time axis uses each `Process` call's real dt rather than an assumed 60 Hz (CoreFactory remarks).
+  - **JSON (H-015, sync point 2):**
+    - `JsonSerializer` with `WriteIndented` and default naming, every property, byte-for-byte what C3's `TuningJson` writes.
+    - Paste reads like C3: keys in any case, comments and trailing commas allowed, unknown keys refused, missing keys at their defaults.
+    - Tuning lasts for the session only; the defaults stay in Core (H-005).
+  - **Additions:** Paste, Reset and typed values, for round trips with `wav-analyze`. A refused value shows the analyzer's message, and the analyzer keeps its previous tuning.
+  - **Demo:**
+    - Groove: a kick each beat (the downbeat stronger), Beat τ 120 ms, Bass with a 10 ms attack and a 180 ms release, an off-beat hat and a 6 s swell in Level. It repeats exactly every 24 s.
+    - Palettes: violet/cyan (the brand), pink/amber, mint/blue and red/purple, through the blender with the 800 ms album crossfade.
+    - It forces Music Sync for the engine, and `StartDemo` turns "Glow on" on. Pauses still apply.
+    - The capture is closed unless Settings or the visualizer wants audio.
+    - The phase override (Lane B notes) applies only while the engine's phase stands still, i.e. with the fake engine: one turn per loop.
+    - A `--demo` or `--debug-visualizer` start opens no Settings and no welcome.
+  - **Window size:** about 1000×720 rather than "small", so the sliders fit beside the plots.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Decompiled WPF 8.0.31 `Clipboard`: after its retries, any exception type can come through, so both buttons catch everything. WPF-UI 4.3.0's theme BAML has every brush key the window uses.
+  - **Scratch harness (not committed), 114 checks:**
+    - the command line, extracted verbatim from `AppController.cs`
+    - the demo's tempo at 30/60/144 fps with jitter, its palettes and its periodicity
+    - `MusicGlowSource` in demo mode: capture, motion, palettes, pulse, phase, pauses; 0 bytes over 100,000 frames
+    - the probe: exact copies, one fill per lent buffer, tuning applied or refused, WindowSize changes; 0 bytes over 100,000 frames with 50,000 fills
+    - 361,000 snapshots taken across threads, none torn
+    - every tuning row against `AudioTuning`
+    - the JSON against C3's reader and writer
+    - plot geometry, 0 bytes per draw, about 1.1 ms per 30 Hz tick
+  - Demo frames rendered with the Lane A integration branch's real C4–C7 through `GlowRaster`, and the plots for a 120 BPM kick track, were checked by eye.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #26.
+- **Left for later:**
+  - **Sync point 2:** Maxwell tunes with the visualizer and hands the JSON over (HANDOFF). H-005 decides how the defaults change.
+  - **K10:** check the demo with C5's crossfades and C6's drift. Optionally drop the Debug tray demo toggle.
+  - **K11:** the 8-hour `--demo` soak (H-018 item 2).
+  - **K12:** record the README GIF with `--demo`. The loop is 24 s.
 
 ## Lane B notes
 

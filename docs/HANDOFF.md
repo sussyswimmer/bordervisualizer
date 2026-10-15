@@ -1,5 +1,9 @@
 # Handoff
 
+## [DONE] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
+**Need:** K8's "Copy params as JSON" should write what `wav-analyze --tuning` reads. The original entry is on the Lane A branches; this resolution is merged next to it in K10.
+**Resolved (K8, #26):** The visualizer copies the analyzer's live `AudioTuning` with every property, through `JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })` and default naming. A scratch check shows it is byte-for-byte the same as `tools/audio-tools/TuningJson.Serialize`, and C3's `Parse` reads it back exactly. "Paste params" reads with C3's options. Code: `src/Rimlight.App/Visualizer/TuningJson.cs`.
+---
 ## [OPEN] H-012 · from: claude-code · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 **Need:** Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
 **Repro:** `src/Rimlight.App/SettingsUi/GlowPreview.cs` (the preview's pair), `src/Rimlight.App/Overlay/MusicGlowSource.cs` (the overlay's).
