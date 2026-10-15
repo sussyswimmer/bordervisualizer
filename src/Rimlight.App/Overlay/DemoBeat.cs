@@ -6,8 +6,8 @@ namespace Rimlight.App.Overlay;
 /// Demo mode's music (doc 04 §5): a synthetic 120 BPM track as the analyzer would hear it, and four palettes that take
 /// turns every 6 s. It is what the README GIF shows (doc 08 §1), so it aims to look like real music: a kick on every
 /// beat with an accent on each bar's downbeat, an off-beat bass note and open hat, and a level that swells gently over
-/// 12 s, never a flat square wave. Everything is a function of the demo's own time, so a run is
-/// deterministic (no clock, no randomness) and nothing is allocated per frame. Owned by the overlay thread.
+/// 12 s, never a flat square wave. Everything is a function of the demo's own time, so a run is deterministic (no
+/// clock, no randomness) and nothing is allocated per frame. Owned by the overlay thread.
 /// </summary>
 internal sealed class DemoBeat
 {
