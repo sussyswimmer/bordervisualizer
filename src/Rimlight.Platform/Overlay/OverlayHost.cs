@@ -77,6 +77,7 @@ public sealed class OverlayHost : IDisposable
     private Pace pace = Pace.Full;
     private FrameReport report;
     private bool frameRequested;
+    private bool framesStopped; // the source was told no frames come (no overlay) and none came since
     private GpuDevice? gpu;
     private long gpuRetryAtMs;
     private long lastGpuReleaseMs = long.MinValue / 2;
@@ -328,9 +329,17 @@ public sealed class OverlayHost : IDisposable
                 bool inputChanged = ApplyPendingInputs(now);
                 if (overlays.Count == 0)
                 {
+                    // Nothing to draw on, so no frames until a display is chosen or connected: the source lets go of
+                    // what its last frame kept (the audio stream) instead of holding it the whole time.
+                    if (!framesStopped)
+                    {
+                        framesStopped = true;
+                        source.FramesStopped();
+                    }
                     PublishStatus(now, 0, idle: true);
                     continue;
                 }
+                framesStopped = false;
                 if (!frameDue && !inputChanged) continue;
 
                 // The source's time runs on without jumps: a gap in frames (nothing could change, or a stall) counts

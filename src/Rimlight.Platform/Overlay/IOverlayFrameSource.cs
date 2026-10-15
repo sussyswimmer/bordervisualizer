@@ -24,6 +24,15 @@ public interface IOverlayFrameSource
     /// </param>
     /// <returns>The light state to draw on every overlay, and what to expect next.</returns>
     OverlayFrame NextFrame(float dtSeconds, Settings settings, bool paused, Span<float> gradient);
+
+    /// <summary>
+    /// No overlay exists (no display is chosen, or none of the chosen ones is connected), so <see cref="NextFrame"/>
+    /// isn't called until one does. Let go of what only frames use, such as an open audio stream. Called once per such
+    /// stretch, on the overlay thread; the default does nothing.
+    /// </summary>
+    void FramesStopped()
+    {
+    }
 }
 
 /// <summary>One frame from an <see cref="IOverlayFrameSource"/>.</summary>

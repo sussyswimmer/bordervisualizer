@@ -26,7 +26,11 @@ internal sealed class SystemPauseBridge : IDisposable
     {
         fallback = new SystemState { OnBattery = PowerStatus.IsOnBattery() };
         var created = new SystemWatcher(settings.PauseInFullscreen);
-        created.StateChanged += _ => Apply();
+        created.StateChanged += _ =>
+        {
+            Apply();
+            StateChanged?.Invoke();
+        };
         created.Resumed += OnResumed;
         try
         {
@@ -43,6 +47,9 @@ internal sealed class SystemPauseBridge : IDisposable
 
     /// <summary>The system as last reported. Safe to read from any thread.</summary>
     public SystemState State => watcher?.State ?? fallback;
+
+    /// <summary>Raised on the watcher thread after <see cref="State"/> changed. Handlers must be quick and must not block.</summary>
+    public event Action? StateChanged;
 
     /// <summary>Debug stand-ins combined with the real state: battery, a pause everywhere, a paused monitor.</summary>
     public SimulatedSystem Simulated

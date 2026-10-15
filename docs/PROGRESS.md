@@ -460,6 +460,15 @@
   - K6's review fixes (#22) are merged into this branch, so #24 merges cleanly again. In `AppController.Start` the pipe listens first (K6), then WPF-UI loads (K7).
   - The Behavior page names the setting's text when the shortcut has no parsed gesture (no shortcut window), as K6's welcome does. A shortcut in use or refused shows by name only, above its warning.
   - Rebuilt (Release and Debug, 0 warnings), `dotnet test` (165) and the 87-check harness pass again.
+  - Review fixes:
+    - **Settings counts as hidden while nobody can see the screen:** the session is locked or disconnected, the machine is going to sleep, or the display is off (K5's `SystemState`). `SystemPauseBridge.StateChanged`, marshaled to the UI thread, stops the page timers and releases the audio request, so K5's pause closes the capture again. A fullscreen app doesn't count, because the window may be on another monitor.
+    - **No overlay closes the capture:** with no display chosen or connected, `OverlayHost` calls the new `IOverlayFrameSource.FramesStopped()` once (default: nothing). `MusicGlowSource` then closes the loopback stream, also while Settings wants audio, since no frame publishes a reading. The next frame reopens it.
+    - **Preview staleness:** `GlowPreview.Start` restarts its clock, so the reading from before counts as stale until a newer one arrives. A reading that froze minutes ago no longer drives the preview after the page reopens.
+    - **Recorder:** it also refuses keys apps use for typing, editing and moving (letters, digits, Tab, Space, Enter, Backspace, Insert, Delete, Home/End/PageUp/PageDown, arrows, punctuation) unless Win, or Ctrl and Alt together, is held. So Ctrl+C, Ctrl+Z, Ctrl+Tab, Ctrl+Shift+T and Alt+F show a hint instead of becoming a global shortcut. Only the recorder refuses them: `HotkeyGesture` (K6) is unchanged, so a shortcut already in the settings still works.
+    - **High contrast:** `UiTheme.Sync` re-applies when Windows switches from one contrast theme to another. WPF-UI has a dictionary per contrast theme.
+    - **Preview card:** it sits in a `Viewbox` (`DownOnly`), so it shrinks rather than being cut off at the minimum width or 225% text.
+    - The checklist in #24 now says the fake blender switches colors instantly, Silence shows after about 3 s (2 s of silence plus the 1 s status hold), and Alt+Tab only ends recording.
+    - Release and Debug have 0 warnings, `dotnet test` (165) passes, and the harness has 142 checks (new: the capture with no overlay, and 47 recorder cases).
 - **Left for later:**
   - **K8:** use `AppController.RequestAudio()` and `MusicGlowSource.LatestAudio`.
   - **K9:** set `AppController.Updates`; About's button and the tray already call it.

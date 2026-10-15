@@ -175,7 +175,8 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
         }
 
         int virtualKey = KeyInterop.VirtualKeyFromKey(key);
-        if (HotkeyGesture.TryCreate(modifiers, virtualKey, out HotkeyGesture gesture))
+        bool valid = HotkeyGesture.TryCreate(modifiers, virtualKey, out HotkeyGesture gesture);
+        if (valid && !TakenFromApps(gesture))
         {
             string text = gesture.ToString();
             recording = false; // the new shortcut is registered by the settings change, not by resuming the old one
@@ -186,12 +187,27 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
             return;
         }
         bool needsModifier = (modifiers & (HotkeyModifiers.Ctrl | HotkeyModifiers.Alt | HotkeyModifiers.Win)) == 0;
-        PageEdits.SetMessage(HotkeyWarning, HotkeyGesture.KeyName(virtualKey) is null
+        PageEdits.SetMessage(HotkeyWarning, valid
+            ? "Apps use that for typing and editing. Hold Ctrl+Alt or Win with it, for example Ctrl+Alt+L."
+            : HotkeyGesture.KeyName(virtualKey) is null
             ? "That key can't be part of a shortcut. Try a letter, a number or a function key."
             : virtualKey == F12 && modifiers == HotkeyModifiers.None ? "Windows keeps F12 for itself. Add Ctrl, Alt or Win."
             : needsModifier ? "Add Ctrl, Alt or Win to that key, for example Ctrl+Alt+L."
             : "Windows uses that combination itself. Pick a different one.");
         RecordButton.Content = "Press a shortcut…";
+    }
+
+    // Ctrl+C, Ctrl+Z, Ctrl+Tab, Ctrl+Shift+T, Alt+F, Ctrl+Left and the like: a global shortcut takes them from every
+    // app, and the recorder makes them easy to press out of habit. Keys apps use for typing, editing and moving need
+    // Win, or Ctrl and Alt together. Only the recorder refuses them; a shortcut already in the settings still works.
+    private static bool TakenFromApps(HotkeyGesture gesture)
+    {
+        HotkeyModifiers modifiers = gesture.Modifiers;
+        if (modifiers.HasFlag(HotkeyModifiers.Win) || modifiers.HasFlag(HotkeyModifiers.Ctrl | HotkeyModifiers.Alt)) return false;
+        return gesture.VirtualKey is >= 0x30 and <= 0x39 or >= 0x41 and <= 0x5A // digits, letters
+            or 0x08 or 0x09 or 0x0D or 0x20                                     // Backspace, Tab, Enter, Space
+            or >= 0x21 and <= 0x28 or 0x2D or 0x2E                              // PageUp to the arrows, Insert, Delete
+            or >= 0xBA and <= 0xC0 or >= 0xDB and <= 0xDE or 0xE2;              // punctuation
     }
 
     private static HotkeyModifiers Modifiers(ModifierKeys keys)

@@ -128,6 +128,15 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         return new OverlayFrame(state, refill, Motion(listen, wanted, in features, settings));
     }
 
+    // No display shows the glow: close the capture, also while Settings wants audio (its meter then says nothing is
+    // listening, as no frame publishes a reading). The next frame opens it again if needed.
+    public void FramesStopped()
+    {
+        if (!listening) return;
+        listening = false;
+        capture.SetActive(false);
+    }
+
     // How the glow will change: the overlay draws music at the full rate, breathing at 10 fps, and stops drawing a
     // static glow (listening on at 10 Hz when music could bring it back, or while Settings shows the audio).
     private FrameMotion Motion(bool listen, bool wanted, in AudioFeatures features, Settings settings)
