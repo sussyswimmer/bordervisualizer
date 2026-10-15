@@ -71,6 +71,25 @@ public sealed class RollingFileLogTests : IDisposable
         failing.WriteLine("and the next line is queued as usual");
     }
 
+    [Fact]
+    public void TheProfileFolderIsWrittenAsAVariable()
+    {
+        // People attach the log to public bug reports, and the profile folder names their Windows account (K6 review).
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\', '/');
+        if (profile.Length <= 3) return; // no profile, or a bare drive, which the log never replaces
+        using var log = new RollingFileLog(directory, LogName);
+        string music = Path.Combine(profile, "Music", "a.mp3");
+        log.WriteLine($"[Test] opened {music}");
+        log.WriteLine($"[Test] again {music.ToUpperInvariant()}"); // Windows paths ignore case
+        log.WriteLine("[Test] nothing to hide here");
+        log.Flush();
+        string[] lines = File.ReadAllLines(log.FilePath);
+        Assert.EndsWith($"[Test] opened %USERPROFILE%{Path.DirectorySeparatorChar}Music{Path.DirectorySeparatorChar}a.mp3", lines[0]);
+        Assert.Contains("[Test] again %USERPROFILE%", lines[1], StringComparison.Ordinal);
+        Assert.EndsWith("[Test] nothing to hide here", lines[2]);
+        Assert.All(lines, line => Assert.DoesNotContain(profile, line, StringComparison.OrdinalIgnoreCase));
+    }
+
     // A line without its time and thread: "2026-10-15 09:30:00.000 [ 5] text".
     private static string Text(string line) => line[(line.IndexOf("] ", StringComparison.Ordinal) + 2)..];
 }

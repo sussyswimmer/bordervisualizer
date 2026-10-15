@@ -91,6 +91,27 @@ public sealed class FramePacerTests
         Assert.Equal(Pace.Full, pacer.Next(100.1, Report(motion, Hidden, anyVisible: false, allPresented: false)));
     }
 
+    [Theory]
+    // motion, anyVisible → pace while a stalled surface (display off, DWM stalled) still has a frame to show
+    [InlineData(FrameMotion.Still, true, "Slow")]      // never stops with a frame pending: shown within 100 ms of DWM taking frames
+    [InlineData(FrameMotion.Still, false, "Slow")]
+    [InlineData(FrameMotion.Listening, true, "Slow")]
+    [InlineData(FrameMotion.Slow, true, "Slow")]       // the source's own pace, not the full rate an unfinished present held
+    [InlineData(FrameMotion.Full, true, "Full")]
+    [InlineData(FrameMotion.Observed, false, "Full")]
+    public void AStalledSurfaceKeepsFramesComingWithoutHoldingTheFullRate(FrameMotion motion, bool anyVisible, string expected)
+    {
+        // K3's review: OverlayHost reports a stalled surface's unfinished present as Stalled, not as !AllPresented.
+        var pacer = new FramePacer();
+        LightState state = anyVisible ? Shown : Hidden;
+        pacer.Next(99, Report(motion, state, anyVisible));
+        Assert.Equal(expected, pacer.Next(100, Report(motion, state, anyVisible, stalled: true)).ToString());
+        // Without the stall the same frame stops (Still) or keeps its pace.
+        if (motion == FrameMotion.Still) Assert.Equal(Pace.Block, pacer.Next(100.1, Report(motion, state, anyVisible)));
+        // An unfinished present on a surface that isn't stalled still holds the full rate.
+        Assert.Equal(Pace.Full, pacer.Next(100.2, Report(motion, state, anyVisible, allPresented: false)));
+    }
+
     [Fact]
     public void SlowMotionRunsAtTheFullRateForAMomentAfterAnInputOrAFastChange()
     {

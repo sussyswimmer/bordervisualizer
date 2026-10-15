@@ -58,6 +58,20 @@ public sealed class TrayToolTipTests
     }
 
     [Fact]
+    public void AShortTitleLeavesTheArtistTheRestOfTheRoom()
+    {
+        // K4's review: the artist gets whatever the title leaves, and never less than half.
+        string tip = TrayToolTip.Build(Track("Intro", new string('a', 300)));
+        Assert.Equal(ShellLimit, tip.Length);
+        Assert.StartsWith($"{Name} — Intro · aaa", tip, StringComparison.Ordinal);
+        Assert.EndsWith("a…", tip, StringComparison.Ordinal);
+        int room = ShellLimit - $"{Name} — ".Length;
+        int artist = tip.Length - tip.IndexOf(" · ", StringComparison.Ordinal) - " · ".Length;
+        Assert.Equal(room - " · ".Length - "Intro".Length, artist);
+        Assert.True(artist > room / 2);
+    }
+
+    [Fact]
     public void FittingNeverCutsACharacterInHalf()
     {
         // Emoji (surrogate pairs), family emoji (ZWJ sequences), combining accents and flags, at every length.

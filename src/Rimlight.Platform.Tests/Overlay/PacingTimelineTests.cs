@@ -98,6 +98,56 @@ public sealed class PacingTimelineTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ASliderDragStaysWithinTheFrameRateCap()
+    {
+        // K3's review: a drag publishes settings 200 times a second. On battery ("Save power", 30 fps) and at the
+        // display's 60 fps, the inputs ride on the scheduled frames instead of adding their own.
+        var settings = new Settings();
+        using var rig = new GlowRig(settings);
+        var model = new OverlayLoopModel(rig, settings, OneMonitor);
+        model.At(2, () => model.SetOnBattery(true));
+        for (int i = 0; i < 400; i++)
+        {
+            Settings dragged = settings with { Brightness = 0.5f + i / 1000f };
+            model.At(4 + i * 0.005, () => model.ApplySettings(dragged));
+        }
+        for (int i = 0; i < 400; i++)
+        {
+            Settings dragged = settings with { Brightness = 0.9f - i / 1000f };
+            model.At(8 + i * 0.005, () => model.ApplySettings(dragged));
+        }
+        model.At(7, () => model.SetOnBattery(false));
+        model.RunUntil(11);
+
+        Steady(model, 4.25, 5.75, 30, 30, captureOpen: true, windows: 1, "drag on battery");
+        Steady(model, 8.25, 9.75, 60, 60, captureOpen: true, windows: 1, "drag on AC");
+        // No two frames closer than the cap (the one in force once the frame's inputs are applied: AC from 7 s on).
+        ModelFrame[] during = [.. model.Frames.Where(f => f.Time is >= 4 and < 10)];
+        Assert.All(during.Zip(during.Skip(1)), pair => Assert.True(pair.Second.Time - pair.First.Time >= pair.Second.FullInterval * 0.999,
+            $"{pair.Second.Time:0.0000} s came {1000 * (pair.Second.Time - pair.First.Time):0.0} ms after the frame before"));
+    }
+
+    [Fact]
+    public void AHiddenGlowSwitchesRenderScaleOnceShown()
+    {
+        // K3's review: the render scale switches on a frame the surface presents, after its window is shown, so a
+        // battery change while the glow is hidden can't keep it from coming back.
+        Settings off = new() { Animation = AnimationMode.Off };
+        using var rig = new GlowRig(off);
+        var model = new OverlayLoopModel(rig, off, OneMonitor);
+        model.At(2, () => model.SetOnBattery(true));       // "Save power" while nothing is shown
+        model.At(4, () => model.ApplySettings(off with { Animation = AnimationMode.MusicSync }));
+        model.RunUntil(4 - 0.001);
+        Assert.Equal(0, model.HalfScaleSurfaces);           // hidden: still at full scale
+        model.RunUntil(6);
+
+        ModelFrame shown = model.Frames.First(f => f.Time >= 4 && f.AnyVisible);
+        Assert.Equal(1, shown.Presents);                    // the switch presents at once, at half scale
+        Assert.Equal(1, model.HalfScaleSurfaces);
+        Steady(model, 5, 6, 30, 30, captureOpen: true, windows: 1, "on battery, shown again");
+    }
+
+    [Fact]
     public void APausedMonitorFadesAloneWhileTheOtherKeepsTheMusic()
     {
         var settings = new Settings();

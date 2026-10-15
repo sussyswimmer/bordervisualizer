@@ -72,6 +72,43 @@ public sealed class FullscreenRulesTests
         Assert.False(Decide(NotificationState.Busy, null, NoneBefore, noForeground: true).Everywhere);
     }
 
+    [Fact]
+    public void LeavingAnExclusiveGameWhileWindowsStillSaysDirect3DPausesOnlyTheGamesMonitor()
+    {
+        // D3D is still reported for a moment after Alt+Tab out of an exclusive-mode game (K5's review).
+        var game = new FullscreenEntry(1, Left, Loose: true);
+        (FullscreenEntry, WindowFacts?)[] before = [(game, Window(1, new PixelRect(-1, -1, 1921, 1081), Left))];
+        WindowFacts browser = Window(2, new PixelRect(2000, 100, 3000, 900), Right);
+        WindowFacts maximized = Window(3, new PixelRect(1912, -8, 4488, 1408), Right, maximized: true);
+        Assert.Equal(new[] { game }, Decide(NotificationState.D3DFullscreen, browser, before).Entries);
+        Assert.Equal(new[] { game }, Decide(NotificationState.D3DFullscreen, maximized, before).Entries);
+        FullscreenVerdict desktop = Decide(NotificationState.D3DFullscreen, null, before); // a click on the desktop
+        Assert.Equal(new[] { game }, desktop.Entries);
+        Assert.False(desktop.Everywhere);
+    }
+
+    [Fact]
+    public void FileExplorerOrOurSettingsWindowEndsAStickyPauseButNeverPauses()
+    {
+        // K5's review: windows the user works in (File Explorer, Run and Properties in the shell's process, our settings
+        // window) end a sticky pause on their monitor, but never count as a fullscreen app themselves.
+        var video = new FullscreenEntry(1, Left, Loose: false);
+        (FullscreenEntry, WindowFacts?)[] before = [(video, Window(1, LeftBounds, Left))];
+        WindowFacts explorerLeft = Window(4, new PixelRect(100, 100, 900, 700), Left);
+        WindowFacts explorerRight = Window(4, new PixelRect(2000, 100, 3000, 900), Right);
+        Assert.Empty(Decide(NotificationState.Normal, explorerLeft, before, mayBeFullscreen: false).Entries);
+        Assert.Empty(Decide(NotificationState.D3DFullscreen, explorerLeft, before, mayBeFullscreen: false).Entries);
+        Assert.Equal(new[] { video }, Decide(NotificationState.Normal, explorerRight, before, mayBeFullscreen: false).Entries);
+
+        // Even covering a monitor, with Windows calling it fullscreen.
+        foreach (NotificationState state in new[] { NotificationState.Normal, NotificationState.Busy, NotificationState.D3DFullscreen })
+        {
+            FullscreenVerdict verdict = Decide(state, Window(4, RightBounds, Right), NoneBefore, mayBeFullscreen: false);
+            Assert.Empty(verdict.Entries);
+            Assert.False(verdict.Everywhere);
+        }
+    }
+
     [Theory]
     [InlineData(NotificationStateName.NotPresent)]        // a screen saver
     [InlineData(NotificationStateName.PresentationMode)]  // presentation settings
@@ -118,6 +155,8 @@ public sealed class FullscreenRulesTests
         var bounds = new PixelRect(-1, -1, 1921, 1081);
         Assert.Equal(new[] { game }, Decide(NotificationState.Normal, null, [(game, Window(1, bounds, Left))]).Entries);
         Assert.Empty(Decide(NotificationState.Normal, null, [(game, Window(1, new PixelRect(0, 0, 1920, 1000), Left))]).Entries);
+        // Maximized later: its rectangle still covers the monitor, but only by the resize borders.
+        Assert.Empty(Decide(NotificationState.Normal, null, [(game, Window(1, new PixelRect(-8, -8, 1928, 1088), Left, maximized: true))]).Entries);
     }
 
     [Fact]

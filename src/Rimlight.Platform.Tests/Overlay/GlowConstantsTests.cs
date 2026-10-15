@@ -22,7 +22,8 @@ public sealed class GlowConstantsTests
     public void HalfScaleHalvesEveryPixelMeasure(int width, int height, float scale, float cornerDip, float glow)
     {
         // "Reduce on battery" renders into a swap chain half the window's size (OverlaySurface.BufferSize, rounded up),
-        // converts DIPs at the surface's render scale, and the visual stretches it back over the window.
+        // converts DIPs at the surface's render scale, and the visual stretches it back over the window. Only the
+        // thin-core fade stays in screen pixels (K3's review).
         LightState state = State with { Spread = glow };
         int bufferWidth = OverlaySurface.BufferSize(width, half: true);
         int bufferHeight = OverlaySurface.BufferSize(height, half: true);
@@ -56,6 +57,31 @@ public sealed class GlowConstantsTests
         Assert.Equal(full.Phase, half.Phase);
         Assert.Equal(full.Visibility, half.Visibility);
         Assert.Equal(full.MeanRed, half.MeanRed);
+        Assert.Equal(full.CoreFade, half.CoreFade);
+    }
+
+    [Theory]
+    [InlineData(1f)]
+    [InlineData(1.25f)]
+    [InlineData(1.5f)]
+    [InlineData(1.75f)]
+    [InlineData(2f)]
+    public void AThinCoreFadesByItsWidthInScreenPixels(float scale)
+    {
+        // CoreFade is what Glow.hlsl's saturate(CoreThicknessPx) was at full scale: a core under a screen pixel lights
+        // the pixel by its share of it. At half scale a 1-DIP core is half a swap-chain pixel, stretched over two screen
+        // pixels; fading by swap-chain pixels would halve its light, so it fades by screen pixels at either scale.
+        for (float coreDip = 0; coreDip <= 6; coreDip += 0.125f)
+        {
+            LightState state = State with { CoreThicknessDip = coreDip };
+            GlowConstants full = GlowConstants.Create(state, 1920, 1080, scale, 1, 8, Mean);
+            GlowConstants half = GlowConstants.Create(state, 960, 540, scale, 0.5f, 8, Mean);
+            Assert.Equal(Math.Clamp(full.CoreThicknessPx, 0, 1), full.CoreFade, 6);
+            Assert.Equal(full.CoreFade, half.CoreFade);
+            Assert.Equal(full.CoreThicknessPx / 2, half.CoreThicknessPx, 4);
+        }
+        Assert.Equal(0.5f, GlowConstants.Create(State with { CoreThicknessDip = 0.5f }, 960, 540, 1, 0.5f, 8, Mean).CoreFade);
+        Assert.Equal(1f, GlowConstants.Create(State with { CoreThicknessDip = 0.5f }, 960, 540, 2, 0.5f, 8, Mean).CoreFade);
     }
 
     [Fact]
@@ -70,6 +96,7 @@ public sealed class GlowConstantsTests
         Assert.Equal(0, c.Visibility);
         Assert.Equal(0.25f, c.Phase, 6);
         Assert.Equal(0, c.CoreThicknessPx);
+        Assert.Equal(0, c.CoreFade);
         Assert.Equal(0, c.CornerRadiusPx);
         Assert.Equal(0, c.MeanRed);
         Assert.Equal(-0.75f + 1, GlowConstants.Create(State with { Phase = -0.75f }, 100, 100, 1, 1, 0, Mean).Phase, 6);
@@ -110,6 +137,9 @@ public sealed class GlowConstantsTests
         GlowConstants faded = a;
         faded.Visibility -= 1f / 255;
         Assert.False(a.LooksLike(faded));
+        GlowConstants thinner = a;
+        thinner.CoreFade -= 0.001f; // so must the thin-core fade
+        Assert.False(a.LooksLike(thinner));
     }
 
     [Fact]
