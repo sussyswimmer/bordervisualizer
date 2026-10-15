@@ -75,9 +75,9 @@ internal sealed class TrayIconHost : IDisposable
         colorModes = [ColorChoice(colors, "From _album art", ColorMode.AlbumArt), ColorChoice(colors, "_Manual", ColorMode.Manual)];
         menu.Items.Add(colors);
 
-        // The built-in looks. Presets.All is empty until C7 lands, and the item stays greyed out until then.
+        // The built-in looks (doc 06 §1), in Core's order. The item is greyed out only if the catalog is ever empty.
         var presetMenu = new MenuItem { Header = "_Presets" };
-        presets = [.. Presets.All.Select(preset => PresetChoice(presetMenu, preset.Name, preset.Apply))];
+        presets = [.. Presets.All.Select(preset => PresetItem(presetMenu, preset.Name, preset.Apply))];
         presetMenu.IsEnabled = presets.Length > 0;
         menu.Items.Add(presetMenu);
         menu.Items.Add(new Separator());
@@ -316,7 +316,7 @@ internal sealed class TrayIconHost : IDisposable
         return (item, mode);
     }
 
-    private (MenuItem, Func<Settings, Settings>) PresetChoice(MenuItem parent, string name, Func<Settings, Settings> apply)
+    private (MenuItem, Func<Settings, Settings>) PresetItem(MenuItem parent, string name, Func<Settings, Settings> apply)
     {
         var item = new MenuItem { Header = name.Replace("_", "__", StringComparison.Ordinal) }; // "_" would be an access key
         item.Click += (_, _) =>
@@ -350,23 +350,10 @@ internal sealed class TrayIconHost : IDisposable
         demoMode.Visibility = app.IsDemoActive ? Visibility.Visible : Visibility.Collapsed;
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
         foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
-        foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = IsShowing(apply, current);
+        foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = PresetChoice.IsShowing(apply, current);
 #if DEBUG
         debug.Refresh(current);
 #endif
-    }
-
-    // A preset counts as chosen while applying it again would change nothing.
-    private static bool IsShowing(Func<Settings, Settings> apply, Settings current)
-    {
-        try
-        {
-            return apply(current) == current;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
     }
 
 #if DEBUG

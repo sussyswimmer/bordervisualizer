@@ -35,7 +35,7 @@ Close any installed copy of Rimlight first: only one instance runs at a time, an
 
 ### Without Windows
 
-`Rimlight.Core` is plain .NET 8 with no Windows APIs, so the engine, its tests and the offline tools build and run on Linux and macOS too:
+`Rimlight.Core` is plain .NET 8 with no Windows APIs, so the engine, its tests and the offline tools build and run on Linux and macOS too. So do the Windows app's tests (`Rimlight.Platform.Tests`): they cover the parts of the overlay, audio capture, tray and Settings that make no Windows calls, against the real engine.
 
 ```bash
 dotnet build Rimlight.Core.slnf -c Release
@@ -56,6 +56,8 @@ src/
                           media session, monitor and power watchers
   Rimlight.App/           The WPF tray app: startup, tray menu, Settings window, updates
   Rimlight.Tests/         xUnit tests for Core and the tools
+  Rimlight.Platform.Tests/
+                          xUnit tests for the Windows-free parts of Platform and App (run on Linux too)
   Rimlight.Bench/         Benchmarks and long soak runs
 tools/                    Offline tools: WAV analyzer, synthetic test tracks, icon generator
 build/                    Packaging and release scripts
@@ -72,7 +74,7 @@ Rimlight is built in two lanes that meet only at the interfaces in `src/Rimlight
 | Lane | Owns | Checked by |
 |---|---|---|
 | **A: Engine & Pipeline** | `Rimlight.Core` (except `Contracts/`), `Rimlight.Tests`, `Rimlight.Bench`, `tools/`, `build/`, `.github/`, the community files | Unit tests, benchmarks, CI on Linux and Windows |
-| **B: Windows & Experience** | `Rimlight.Platform`, `Rimlight.App`, `assets/`, `README.md` | Running the app on Windows, manual test checklists |
+| **B: Windows & Experience** | `Rimlight.Platform`, `Rimlight.App`, `Rimlight.Platform.Tests`, `assets/`, `README.md` | Unit tests of the Windows-free parts, running the app on Windows, manual test checklists |
 
 - **Contracts are frozen.** Platform and App use only `CoreFactory` and the interfaces in `Contracts/`, never Core internals. Changing a contract takes a `CONTRACT CHANGE` entry in [docs/HANDOFF.md](docs/HANDOFF.md) that the maintainer approves first.
 - **Keep a pull request inside one lane.** If you need something from the other lane, add an entry to [docs/HANDOFF.md](docs/HANDOFF.md) (the format is in doc 09 §5) and work around it locally until it lands.
@@ -120,7 +122,7 @@ Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\lo
 2. Select every file in the folder, right-click, and zip them: **Compress to** on Windows 11, or **Send to > Compressed (zipped) folder** on Windows 10.
 3. [Open a bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) and drag the zip into the **Logs** box.
 
-Logs never contain audio, but they can include device, monitor and track names. Have a quick look before you upload them.
+Logs never contain audio or track titles, but they can include device and monitor names, and file paths that contain your Windows user name. Have a quick look before you upload them.
 
 If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight.
 

@@ -39,8 +39,9 @@ internal static class MonoConverter
     public static int Convert(ReadOnlySpan<byte> data, CaptureFormat format, Span<float> destination)
     {
         int channels = format.Channels;
+        if (channels <= 0) return 0; // before the division below: no frame has zero bytes
         int frames = Math.Min(data.Length / format.BytesPerFrame, destination.Length);
-        if (frames <= 0 || channels <= 0) return 0;
+        if (frames <= 0) return 0;
         data = data[..(frames * format.BytesPerFrame)];
         float average = 1f / channels;
 

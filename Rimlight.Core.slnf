@@ -5,6 +5,8 @@
       "src\\Rimlight.Core\\Rimlight.Core.csproj",
       "src\\Rimlight.Tests\\Rimlight.Tests.csproj",
       "src\\Rimlight.Bench\\Rimlight.Bench.csproj",
+      "src\\Rimlight.Platform\\Rimlight.Platform.csproj",
+      "src\\Rimlight.Platform.Tests\\Rimlight.Platform.Tests.csproj",
       "tools\\audio-tools\\Rimlight.AudioTools.csproj",
       "tools\\wav-analyze\\Rimlight.WavAnalyze.csproj",
       "tools\\icon-gen\\Rimlight.IconGen.csproj",

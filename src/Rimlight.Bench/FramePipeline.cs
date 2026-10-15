@@ -28,7 +28,7 @@ internal readonly record struct StageTicks(long Frame, long Analyzer, long Blend
 
 // One render-thread frame as the app runs it: MusicGlowSource.NextFrame (src/Rimlight.App/Overlay/MusicGlowSource.cs)
 // step for step, with a clock read between the stages. Rimlight.App is Windows-only, so its glue is mirrored here:
-// keep the two in step. What is left out is Windows work, not Core work: the copy out of the loopback ring (one
+// keep the two in step (Rimlight.Platform.Tests' BenchMirrorTests runs both and fails when they differ). What is left out is Windows work, not Core work: the copy out of the loopback ring (one
 // memcpy, done by the caller before the frame), the volatile write that publishes the features to the UI, and the
 // overlay's own drawing (doc 04). The caller plays LoopbackCapture: it says when the captured device changes and
 // passes only the samples that arrived. Settings never shows the audio meter here ("audio wanted" is false), and the

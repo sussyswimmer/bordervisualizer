@@ -183,7 +183,7 @@ The album-art colors need the app to share what's playing with Windows' media co
 
 Open Windows **Settings > Apps > Installed apps** (**Apps & features** on Windows 10), find **Rimlight**, and choose **Uninstall**. That removes the app and its shortcuts.
 
-Your settings and logs stay in `%APPDATA%\Rimlight`, so a reinstall picks up where you left off. For a complete cleanup, delete that folder too: paste `%APPDATA%\Rimlight` into File Explorer's address bar to find it.
+Your settings and logs stay in `%APPDATA%\Rimlight`, so a reinstall picks up where you left off. For a complete cleanup, delete that folder too: paste `%APPDATA%\Rimlight` into File Explorer's address bar to find it. The installer's own log, `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, can go as well.
 
 For a portable copy, turn off **Start with Windows** in **Settings > Behavior**, quit Rimlight from the tray, and delete its folder.
 

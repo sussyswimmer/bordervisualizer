@@ -61,6 +61,12 @@ public sealed class LoopbackCapture : IDisposable
         Signal();
     }
 
+    // Tests stand in for the capture thread, which they never start: whether SetActive asked for a stream, and the
+    // audio a capture session would publish (they write its ring themselves). The app never calls these.
+    internal bool IsActive => active;
+
+    internal void PublishForTesting(CapturedAudio? audio) => Volatile.Write(ref current, audio);
+
     /// <summary>Stops capturing and waits for the capture thread to finish.</summary>
     public void Dispose()
     {

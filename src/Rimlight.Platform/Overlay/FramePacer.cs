@@ -1,3 +1,4 @@
+using System.Numerics;
 using Rimlight.Core;
 
 namespace Rimlight.Platform.Overlay;
@@ -45,6 +46,7 @@ internal sealed class FramePacer
     // visibly step at 10 fps (more than 2.5% per frame).
     public const float FastChangePerSecond = 0.25f;
     public const double DefaultRefreshHz = 60;
+    public const double MaxFrameDtSeconds = 0.25;      // a longer gap (nothing to draw, a stall) counts as one frame
     private const double VsyncTolerance = 0.97;        // a 59 Hz report of a 59.94 Hz display still counts as 60
 
     private LightState previous;
@@ -83,6 +85,20 @@ internal sealed class FramePacer
 
     // Seconds between frames for a pace (Block has no interval).
     public double IntervalFor(Pace pace) => pace == Pace.Slow ? Math.Max(SlowInterval, FullInterval) : FullInterval;
+
+    // The dt the overlay passes to the frame source for a frame elapsedSeconds after the previous one. The source's
+    // time runs on without jumps: a gap in frames (nothing could change, or a stall) counts as one ordinary frame, so
+    // fades and smoothing continue where they stopped (doc 02 idle pacing). So does the time before an input that
+    // brings a frame forward (frameDue false): a fade the input starts begins on this frame instead of jumping ahead by
+    // the time since the last 10 Hz frame.
+    public float FrameDt(double elapsedSeconds, bool frameDue) =>
+        (float)(elapsedSeconds > MaxFrameDtSeconds ? FullInterval : frameDue ? elapsedSeconds : Math.Min(elapsedSeconds, FullInterval));
+
+    // When the frame after one drawn at `now` is due, `period` later, in any time unit the three share (OverlayHost
+    // counts Stopwatch ticks). It keeps a steady cadence, one period after the last deadline; after a stall, or a frame
+    // an input brought forward, the cadence restarts from now.
+    public static T NextDeadline<T>(T now, T deadline, T period) where T : INumber<T> =>
+        now >= deadline && now - deadline < period ? deadline + period : now + period;
 
     // Decides how to wait after a frame.
     public Pace Next(double nowSeconds, in FrameReport frame)

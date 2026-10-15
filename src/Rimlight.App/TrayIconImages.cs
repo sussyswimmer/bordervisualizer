@@ -9,9 +9,10 @@ using Icon = System.Drawing.Icon;
 namespace Rimlight.App;
 
 /// <summary>
-/// The tray icon at the notification area's size, and its 50% opacity variant for when the glow is off (doc 06 §2).
-/// The dimmed one is derived from the app icon at startup, so it matches whatever <c>Assets/Rimlight.ico</c> ships;
-/// an <c>Assets/Rimlight-dim.ico</c> in the build replaces it.
+/// The tray icon at the notification area's size, and its 50% opacity variant for when the glow is off (doc 06 §2):
+/// <c>Assets/Rimlight.ico</c> and <c>Assets/Rimlight-dim.ico</c>, both generated from <c>assets/icon-small.svg</c> and
+/// <c>assets/icon.svg</c> by <c>build/icons.sh</c> (HANDOFF H-012). Only if the dim file is missing from the build, or
+/// its sizes differ, is the dimmed icon derived from the app icon at half opacity.
 /// </summary>
 internal sealed class TrayIconImages : IDisposable
 {

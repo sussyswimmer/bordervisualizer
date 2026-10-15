@@ -94,6 +94,10 @@ public sealed class NowPlayingService : IDisposable
     /// <summary>Raised on a thread-pool thread after <see cref="AlbumPalette"/> or <see cref="Art"/> changed.</summary>
     public event Action? AlbumArtChanged;
 
+    // Tests stand in for the refresh loop, which they never start: an album palette as a refresh would publish it. The
+    // app never calls this.
+    internal void PublishForTesting(Palette? palette) => Volatile.Write(ref albumPalette, palette);
+
     /// <summary>Starts reading media sessions on the thread pool. Failures are handled and logged there; this never throws for them.</summary>
     public void Start()
     {

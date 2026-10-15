@@ -27,8 +27,10 @@ defaults:
 
 jobs:
   core:
-    # The Core solution filter (Core + Tests, later Bench) on exactly the .NET 8 SDK: the minimum
-    # that global.json allows, and what the Linux sandbox builds with.
+    # The Core solution filter on exactly the .NET 8 SDK: the minimum that global.json allows, and
+    # what the Linux sandbox builds with. It holds Core with its tests and Bench, the tools, and
+    # Lane B's Windows-free tests (Rimlight.Platform.Tests, K10): Platform cross-builds here with
+    # EnableWindowsTargeting, and those tests make no Windows calls, so they run on Linux too.
     name: Core (Linux, .NET 8 SDK)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -92,6 +94,7 @@ jobs:
   windows:
     # The full solution, including the WPF app and the Windows-only Platform project, on the
     # newest SDK the runner has (global.json rolls forward), like a current Visual Studio install.
+    # Its test step runs every test project in Rimlight.sln, Rimlight.Platform.Tests included.
     name: Full solution (Windows)
     runs-on: windows-latest
     timeout-minutes: 30

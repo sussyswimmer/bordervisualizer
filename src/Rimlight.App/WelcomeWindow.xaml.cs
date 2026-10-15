@@ -9,7 +9,8 @@ namespace Rimlight.App;
 /// <summary>
 /// The first-run welcome: where the tray icon is and what it does, the glow's keyboard shortcut (or why it has none),
 /// starting at sign-in, and the privacy promise. Follows Windows' light or dark app mode, and keeps the system colors
-/// under high contrast. Until K7 it also stands in for the settings window.
+/// under high contrast. It also stands in for the settings window when that can't open
+/// (<see cref="SettingsUi.SettingsWindowLauncher"/>).
 /// </summary>
 internal partial class WelcomeWindow : Window
 {

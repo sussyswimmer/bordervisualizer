@@ -319,6 +319,7 @@ public sealed class SoakTests
         Assert.Equal(Pace.Slow, pacer.Next(11.1, FrameMotion.Listening, hidden, 0.1f, false));
         Assert.Equal(Pace.Block, pacer.Next(11.2, FrameMotion.Still, hidden, 0.1f, false));
         Assert.Equal(Pace.Slow, pacer.Next(11.3, FrameMotion.Full, hidden, 0.1f, false));   // nothing on screen
+        Assert.Equal(Pace.Full, pacer.Next(11.31, FrameMotion.Full, hidden with { Visibility = 1.6e-3f }, 0.007f, false)); // fading in (C13)
         Assert.Equal(Pace.Full, pacer.Next(12, FrameMotion.Slow, visible, 0.1f, false));    // shown again: 0.5 s at full rate
         Assert.Equal(Pace.Slow, pacer.Next(12.6, FrameMotion.Slow, visible, 0.1f, false));
 

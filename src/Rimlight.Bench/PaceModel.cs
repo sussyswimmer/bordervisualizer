@@ -13,10 +13,11 @@ internal enum Pace
     Block,
 }
 
-// The frame schedule of the overlay thread (doc 02 "Frame pacing"): Platform's FramePacer.Next and the dt rule of
-// OverlayHost's loop, for one monitor that presents every frame it draws. Rimlight.Platform is Windows-only, so the
-// policy is mirrored here: keep the two in step. Per-monitor pause fades and unfinished presents (both keep the full
-// rate in the app) don't occur in a simulation without a display.
+// The frame schedule of the overlay thread (doc 02 "Frame pacing"): Platform's FramePacer.Next and FramePacer.FrameDt
+// (the dt rule of OverlayHost's loop), for one monitor that presents every frame it draws. Rimlight.Platform is
+// Windows-only, so the policy is mirrored here: keep the two in step (Rimlight.Platform.Tests' BenchMirrorTests compares
+// them). Per-monitor pause fades and unfinished presents (both keep the full rate in the app) don't occur in a
+// simulation without a display.
 internal sealed class PaceModel
 {
     /// <summary>Seconds between slow frames: 10 fps for breathing and for listening (FramePacer.SlowInterval).</summary>
@@ -27,7 +28,7 @@ internal sealed class PaceModel
     public const double ChangeHoldSeconds = 0.5;
     /// <summary>A change faster than this per second counts as quick (FramePacer.FastChangePerSecond).</summary>
     public const float FastChangePerSecond = 0.25f;
-    /// <summary>A longer gap between frames is passed as one ordinary frame (OverlayHost.MaxFrameDtSeconds).</summary>
+    /// <summary>A longer gap between frames is passed as one ordinary frame (FramePacer.MaxFrameDtSeconds).</summary>
     public const double MaxFrameDtSeconds = 0.25;
     /// <summary>Below this Visibility nothing is drawn and the overlay is hidden (GlowConstants.MinVisibility).</summary>
     public const float MinVisibility = 0.5f / 255;
@@ -61,12 +62,14 @@ internal sealed class PaceModel
             FrameMotion.Listening => Pace.Slow,
             _ => Pace.Block,
         };
-        // Nothing on screen: frames only keep the analysis going.
+        // Nothing on screen and the light hidden (Visibility exactly 0, H-011): frames only keep the analysis going. A
+        // light fading in keeps the full rate even under MinVisibility, as in FramePacer since C13: above about 130 Hz
+        // the first frame of a 300 ms fade-in is still under it.
         bool visible = state.Visibility >= MinVisibility;
-        return pace == Pace.Full && !visible ? Pace.Slow : pace;
+        return pace == Pace.Full && !visible && !(state.Visibility > 0) ? Pace.Slow : pace;
     }
 
-    /// <summary>The dt the overlay passes for a frame (OverlayHost's loop): the time since the previous frame, one
+    /// <summary>The dt the overlay passes for a frame (FramePacer.FrameDt): the time since the previous frame, one
     /// ordinary frame after a longer gap, and at most one frame when an input brought the frame forward.</summary>
     /// <param name="elapsedSeconds">Time since the previous frame.</param>
     /// <param name="fullInterval">Seconds between frames at the full rate.</param>

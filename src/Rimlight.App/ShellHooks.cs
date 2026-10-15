@@ -6,7 +6,8 @@ namespace Rimlight.App;
 /// <summary>
 /// Opens the settings window (doc 06 §3). Called on the UI thread by the tray (double-click, "Settings…"), by a second
 /// start of the app ("show-settings"), by a normal start without <c>--background</c> and by the welcome window.
-/// K7 implements it with the real window; until then <see cref="AppController"/> shows the welcome window instead.
+/// <see cref="SettingsUi.SettingsWindowLauncher"/> implements it; if the window can't be built, it shows the welcome
+/// window instead.
 /// </summary>
 internal interface IShowSettings
 {
