@@ -5,7 +5,8 @@ using Rimlight.Core.SettingsStorage;
 
 namespace Rimlight.Core;
 
-/// <summary>The sole construction seam for Platform and App; fakes remain until their Lane A tasks land.</summary>
+/// <summary>The sole construction seam for Platform and App. Every method returns the real implementation; the
+/// remarks below are the binding semantics, and <c>docs/CORE-API.md</c> collects them into one guide.</summary>
 public static class CoreFactory
 {
     /// <summary>Creates the real audio analyzer: FFT, auto-gain, spectral-flux beats and silence detection (doc 03).</summary>
