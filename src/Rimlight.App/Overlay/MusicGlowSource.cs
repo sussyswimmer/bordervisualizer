@@ -251,9 +251,10 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         return demoSettings!;
     }
 
-    // The demo turns the gradient itself, with either engine: the fake one never turns it, and the real one (C6) makes
-    // 0.84 of a turn per 24 s loop, which would jump where a recording wraps. DemoShow.PhaseAt makes exactly one turn per
-    // loop with the engine's kicks and a drift. It starts from the engine's phase, so turning the demo on doesn't jump.
+    // The demo owns the gradient's turn, so a 24 s recording loops seamlessly (README GIF, doc 04 §5): the engine's own
+    // drift (0.015 cycles/s plus 0.01 per beat) makes 0.84 of a turn per loop, which would jump where the recording
+    // wraps. DemoShow.PhaseAt makes exactly one turn per loop with the same kicks and a slightly faster drift. It starts
+    // from the engine's phase, so turning the demo on doesn't jump.
     private LightState TurnDemoGradient(LightState state)
     {
         double turn = DemoShow.PhaseAt(demo.Time);

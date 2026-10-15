@@ -145,7 +145,9 @@ internal sealed class AppController : IDisposable
             Trace.WriteLine($"[App] Ignored an unknown argument \"{shown}\".");
         }
 
-        // %APPDATA%\Rimlight (doc 02 "Settings storage"). The store is in memory until C7.
+        // %APPDATA%\Rimlight\settings.json (doc 02 "Settings storage"): C7's store loads it field by field, migrates an
+        // older file, reads a newer one as far as it can, and backs up a corrupt one as settings.bad.json and returns the
+        // defaults. Load never throws, so a bad file can't stop the start.
         string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppInfo.Name);
         settings = new SettingsService(CoreFactory.CreateSettingsStore(directory));
         Settings initial = settings.Current;

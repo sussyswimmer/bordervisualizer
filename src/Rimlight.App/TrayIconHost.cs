@@ -90,7 +90,7 @@ internal sealed class TrayIconHost : IDisposable
         colors.Items.Add(manualColors);
         menu.Items.Add(colors);
 
-        // The built-in looks. Presets.All is empty until C7 lands, and the item stays greyed out until then.
+        // The built-in looks (Presets.All, doc 06 §1); the item would be greyed out if the catalog were ever empty.
         var presetMenu = new MenuItem { Header = "_Presets" };
         presets = [.. Presets.All.Select(preset => PresetChoice(presetMenu, preset.Name, preset.Apply))];
         presetMenu.IsEnabled = presets.Length > 0;
