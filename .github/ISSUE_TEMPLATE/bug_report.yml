@@ -111,7 +111,7 @@ body:
       label: Logs
       description: |
         Logs make most bugs quick to find.
-        1. Right-click the Rimlight tray icon and choose **Open logs folder**. If Rimlight won't start, paste `%LOCALAPPDATA%\Rimlight\logs` into the File Explorer address bar.
+        1. Right-click the Rimlight tray icon and choose **Open logs folder**. If Rimlight won't start, paste `%APPDATA%\Rimlight\logs` into the File Explorer address bar.
         2. Select every file, right-click and zip them: **Compress to** on Windows 11, or **Send to > Compressed (zipped) folder** on Windows 10.
         3. Drag the zip into this box.
 
