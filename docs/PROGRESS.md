@@ -325,8 +325,10 @@
     - With `QUNS_BUSY` or `QUNS_RUNNING_D3D_FULL_SCREEN`, a non-maximized window that covers its monitor also counts. An exclusive-mode window fills its output, so a real game passes.
     - Windows' state alone never pauses a window that doesn't cover its monitor. D3D is still reported for a moment after you switch out of an exclusive-mode game, so Alt+Tab or a click on another monitor must not pause that monitor. D3D pauses everywhere only when `GetForegroundWindow` returns no window at all; an excluded foreground (desktop, taskbar) keeps only the sticky entries.
   - **Sticky (addition):** a fullscreen window keeps its monitor paused while the focus is on another monitor. This lasts until it leaves fullscreen, moves, is minimized, hidden, cloaked or closed, or another window is activated on that monitor.
+    - "Another window" includes File Explorer and Control Panel (`CabinetWClass`) and the shell's dialogs such as Run or Properties (`#32770`), although they run in the shell's process, and our own normal windows (settings, visualizer).
+    - Only the desktop, the taskbar, Alt+Tab, Task View and our tray menu keep the pause. Shell windows are allow-listed by class, so an unknown shell surface keeps the pause. Our tray menu is a WPF popup (`WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`, checked in PresentationFramework 8.0) that H.NotifyIcon makes the foreground window, so our tool and no-activate windows never end a pause.
   - **Private messages:** the watcher window is top-level, so it also gets every `HWND_BROADCAST`, including other apps' `WM_APP` messages. Its stop message works only after `Dispose` has set the stopping flag; the fullscreen-setting message only re-reads its flag.
-  - **Exclusions:** every window of the shell's process (desktop, taskbar, Alt+Tab, Task View; F11 File Explorer as a side effect), `Progman`/`WorkerW`, the desktop window, and every window of our process (the overlays, the future settings window).
+  - **Never a fullscreen app:** every window of the shell's process (desktop, taskbar, Alt+Tab, Task View; F11 File Explorer as a side effect), `Progman`/`WorkerW`, the desktop window, and every window of our process (the overlays, the future settings window). Some of these still end a sticky pause (above).
   - **Detection runs whenever `PauseInFullscreen` is on**, even while the glow is off, so turning the glow on during a fullscreen app never flashes it. The cost is a few user32 calls every 2 s.
   - **Display off** applies only while the session is on the physical console (`WTSGetActiveConsoleSessionId`).
   - **Modern Standby** sends no suspend, and display off covers it. The display coming back also clears a missed suspend.
@@ -337,18 +339,21 @@
 - **Verified here (Linux):**
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
   - Every new Win32 call, struct and constant was checked against CsWin32 0.3.346's generated sources. That includes `GUID_CONSOLE_DISPLAY_STATE`'s value, `POWERBROADCAST_SETTING`'s inline data, `WTSINFOEX_LEVEL1_W`, `QUERY_USER_NOTIFICATION_STATE`, and `WTS_CURRENT_SERVER_HANDLE` living on `HANDLE`.
-  - **Scratch harness (not committed)** linking `FullscreenRules.cs` and `SystemState.cs`, 44 checks:
+  - `GetWindowLong` (`GetWindowLongW`, `int`, `WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE` = -20) is checked against CsWin32's generated sources too.
+  - **Scratch harness (not committed)** linking `FullscreenRules.cs` and `SystemState.cs`, 53 checks:
     - exact and loose cover, and maximized windows never pausing (also a loose entry maximized later)
     - `QUNS_BUSY` never pausing everywhere
     - D3D: a covering window pauses its monitor, a small or maximized one doesn't, an excluded foreground pauses nothing, and no foreground window at all pauses everywhere
     - Alt+Tab out of an exclusive game while D3D is still reported: a small or maximized window on the other monitor, or a click on the desktop, keeps only the game's monitor paused
     - screen saver and presentation mode
     - every sticky keep and drop case
+    - File Explorer or our settings window: ends the sticky pause on its own monitor only (also under D3D), and never pauses itself, even when it covers a monitor with `QUNS_BUSY` or D3D reported
     - `SystemState` equality and `PausesEverywhere`
   - Nothing has run on Windows yet: Maxwell's checklist is in #19.
 - **Left for later:**
   - **K7:** the Behavior page's "Pause in fullscreen apps" toggle (already wired through `settings.Changed`). `SystemState` can feed diagnostics.
   - **K11:** sleep/hibernate, Modern Standby, RDP (bandwidth too), TDR and hotplug on real hardware. Also check whether `QUNS_NOT_PRESENT` ever shows up spuriously, for example in a remote session.
+    - CPU during a fullscreen pause can't be read with Task Manager in front: activating it on that monitor ends the pause. Use Task Manager with "Always on top" and Alt+Tab back to the fullscreen app, or log `typeperf "\Process(Rimlight)\% Processor Time" -si 1`.
   - **C6 (via K10):** global pauses fade over 300 ms once the real engine lands (H-008); with the fake they are instant.
 
 ## Lane B notes

@@ -29,11 +29,12 @@ internal readonly record struct FullscreenVerdict(bool Everywhere, FullscreenEnt
 // Decides what fullscreen apps pause (doc 04 §4). Pure: FullscreenDetector gathers the facts from Windows.
 internal static class FullscreenRules
 {
-    // foreground: null when it doesn't count (the shell's desktop, taskbar, Alt+Tab or Task View, one of our windows),
-    // isn't shown, or there is none. noForeground: Windows reports no foreground window at all. previous: the last
-    // decision's entries, each with its window's facts now (null: closed, hidden, minimized or cloaked).
+    // foreground: null when it doesn't count (the shell's desktop, taskbar, Alt+Tab or Task View, our tray menu), isn't
+    // shown, or there is none. mayBeFullscreen: false for windows that only end a sticky pause (File Explorer and the
+    // shell's dialogs, our settings window). noForeground: Windows reports no foreground window at all. previous: the
+    // last decision's entries, each with its window's facts now (null: closed, hidden, minimized or cloaked).
     public static FullscreenVerdict Decide(NotificationState state, bool noForeground, WindowFacts? foreground,
-        IReadOnlyList<(FullscreenEntry Entry, WindowFacts? Now)> previous)
+        bool mayBeFullscreen, IReadOnlyList<(FullscreenEntry Entry, WindowFacts? Now)> previous)
     {
         // Not tied to a window: a screen saver, presentation settings, or an exclusive-mode app while no window has
         // the focus.
@@ -41,7 +42,7 @@ internal static class FullscreenRules
             || (state == NotificationState.D3DFullscreen && noForeground);
         var entries = new List<FullscreenEntry>(previous.Count + 1);
 
-        if (foreground is { } window)
+        if (mayBeFullscreen && foreground is { } window)
         {
             // Doc 04 §4: the foreground window exactly covers its monitor (borderless games, fullscreen video). When
             // Windows says fullscreen (Busy; D3D: an exclusive-mode app, whose window fills its output), a window that

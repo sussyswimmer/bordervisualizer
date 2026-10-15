@@ -103,6 +103,7 @@ GetForegroundWindow
 GetShellWindow
 GetDesktopWindow
 GetClassName
+GetWindowLong
 GetWindowRect
 GetWindowThreadProcessId
 IsWindow
