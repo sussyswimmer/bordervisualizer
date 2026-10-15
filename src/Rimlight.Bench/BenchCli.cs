@@ -26,6 +26,8 @@ internal static class BenchCli
             --minutes <m>        Simulated minutes instead, for shorter runs
             --fps <n>            Render frames per second (default 60)
             --json <file>        Also write the full report as JSON
+            --shape <name>       day: the listening day (default); compressed: the same structure at about a
+                                 minute per session, so two minutes visit every path (what the test suite runs)
             --rate <Hz> (48000)  --jitter <f> (0.2)  --packet-ms <ms> (10)  --seed <n> (1)
             --warmup-seconds <s> Real seconds of warm-up on a short tour of every path before measuring (default 2)
             --report-every <min> Simulated minutes between progress lines (default: 16 lines)
@@ -99,11 +101,17 @@ internal static class BenchCli
 
     private static int Soak(string[] args, TextWriter output)
     {
-        var a = new CommandLine(args, ["hours", "minutes", "rate", "fps", "jitter", "packet-ms", "seed", "warmup-seconds", "report-every", "json"], []);
+        var a = new CommandLine(args, ["hours", "minutes", "rate", "fps", "jitter", "packet-ms", "seed", "warmup-seconds", "report-every", "json", "shape"], []);
         if (a.Positional.Count != 0) throw new UsageException($"Unexpected argument \"{a.Positional[0]}\".");
         if (a.Has("hours") && a.Has("minutes")) throw new UsageException("Give --hours or --minutes, not both.");
         string? json = a.Text("json");
         if (json is not null && json.Trim().Length == 0) throw new UsageException("--json needs a file name.");
+        SoakProgramShape shape = a.Text("shape") switch
+        {
+            null or "day" => SoakProgramShape.Default,
+            "compressed" => SoakProgramShape.Compressed,
+            _ => throw new UsageException("--shape must be day or compressed."),
+        };
         var options = new SoakOptions
         {
             Hours = a.Has("minutes") ? a.Number("minutes", 0, 0.05, 48 * 60) / 60 : a.Number("hours", 8, 0.001, 48),
@@ -114,8 +122,9 @@ internal static class BenchCli
             Seed = a.Seed("seed", 1),
             WarmupSeconds = a.Number("warmup-seconds", 2, 0, 3600),
             ReportEveryMinutes = a.Number("report-every", 0, 0, 48 * 60),
+            Shape = shape,
         };
-        output.WriteLine(string.Create(C, $"Soak: {SoakRun.Clock(options.Seconds)} simulated at {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.SampleRate} Hz in {options.PacketSeconds * 1000:0.#} ms packets; analyzer + light engine + palette blender (gradient filled every frame)"));
+        output.WriteLine(string.Create(C, $"Soak: {SoakRun.Clock(options.Seconds)} simulated{(shape == SoakProgramShape.Default ? "" : $" ({shape.Name} program)")} at {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.SampleRate} Hz in {options.PacketSeconds * 1000:0.#} ms packets; analyzer + light engine + palette blender (gradient filled every frame)"));
         output.WriteLine(MachineInfo.Describe());
         SoakResult result = SoakRun.Run(options, s => output.WriteLine(SoakRun.Format(s)), program =>
         {

@@ -60,6 +60,7 @@ public sealed class BenchTests
         Assert.Equal(2, BenchCli.Run(["soak", "--json", " "], TextWriter.Null, TextWriter.Null));
         Assert.Equal(2, BenchCli.Run(["soak", "--json"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(2, BenchCli.Run(["soak", "--minutes", "1", "extra"], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--shape", "week"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(0, BenchCli.Run(["--help"], TextWriter.Null, TextWriter.Null));
     }
 }

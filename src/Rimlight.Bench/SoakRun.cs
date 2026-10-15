@@ -78,6 +78,15 @@ internal sealed record SoakResult
     public required long SilentFrames { get; init; }
     public required long HiddenFrames { get; init; }
     public required long StaticFrames { get; init; }
+    /// <summary>Frames where the blender was crossfading (IsAnimating after the frame's Update).</summary>
+    public required long FadingFrames { get; init; }
+    /// <summary>SetTarget calls (new tracks) and Reset calls (new sessions) in the measured frames.</summary>
+    public required long SetTargetCalls { get; init; }
+    public required long ResetCalls { get; init; }
+    /// <summary>The last palette passed to SetTarget, the last frame's ratio and the gradient it filled.</summary>
+    public required Palette FinalPalette { get; init; }
+    public required float FinalRatio { get; init; }
+    public required float[] FinalGradient { get; init; }
     public required IReadOnlyList<SoakSnapshot> Snapshots { get; init; }
 
     public double BytesPerFrame => Frames == 0 ? 0 : AllocatedBytes / (double)Frames;
@@ -95,9 +104,10 @@ internal sealed record SoakResult
 // on every device change. It runs as fast as the CPU allows, so 8 hours take minutes.
 //
 // Per frame, exactly what the app's render thread does (MusicGlowSource.NextFrame, doc 02 steps 1–2) is timed and
-// allocation-counted on this thread: Process, LightEngine.Update, and the blender's Update and FillGradient. The app
-// fills the gradient only while colors change; the soak fills it every frame, an upper bound. Streaming the program
-// between frames replaces draining the ring buffer and is not measured.
+// allocation-counted on this thread: SetTarget and Reset when due, Process, the blender's Update, LightEngine.Update,
+// FillGradient, and the IsAnimating and IsStatic reads of the frame pacing. The app fills the gradient only while
+// colors change; the soak fills it every frame, an upper bound. Streaming the program between frames replaces
+// draining the ring buffer and is not measured.
 //
 // Before measuring, the warm-up tour (every segment kind, both silent behaviors, a device change, palette fades) runs
 // for at least WarmupSeconds of real time, so tiered JIT has optimized every measured path and static constructors
@@ -183,6 +193,12 @@ internal static class SoakRun
             SilentFrames = simulator.SilentFrames,
             HiddenFrames = simulator.HiddenFrames,
             StaticFrames = simulator.StaticFrames,
+            FadingFrames = simulator.FadingFrames,
+            SetTargetCalls = simulator.SetTargetCalls,
+            ResetCalls = simulator.ResetCalls,
+            FinalPalette = simulator.Palette,
+            FinalRatio = simulator.Ratio,
+            FinalGradient = simulator.Gradient.ToArray(),
             Snapshots = snapshots,
         };
     }
@@ -234,7 +250,7 @@ internal static class SoakRun
         w.WriteLine(string.Create(c, $"- **Memory:** live managed heap {Kilo(r.Start.LiveManagedBytes)} → {Kilo(r.End.LiveManagedBytes)} KB ({Signed(r.ManagedGrowthBytes / 1024.0)} KB), working set {Mega(r.Start.WorkingSetBytes)} → {Mega(r.End.WorkingSetBytes)} MB (peak over the process lifetime {Mega(r.PeakWorkingSetBytes)} MB), handles {r.Start.Handles} → {r.End.Handles}."));
         w.WriteLine(string.Create(c, $"- **CPU:** mean frame × {r.Options.Fps:0.##} fps = {r.CorePercent:0.00} % of one core ({r.CorePercent / Environment.ProcessorCount:0.000} % of all {Environment.ProcessorCount} logical CPUs, Task Manager's scale)."));
         w.WriteLine(string.Create(c, $"- **Beats:** {r.Beats:N0} detected for {r.Program.Kicks:N0} kicks ({r.Beats / (double)Math.Max(1, r.Program.Kicks):P1})."));
-        w.WriteLine(string.Create(c, $"- **Light:** silent {Share(r.SilentFrames, r.Frames)}, hidden (Visibility 0) {Share(r.HiddenFrames, r.Frames)}, static {Share(r.StaticFrames, r.Frames)} of frames."));
+        w.WriteLine(string.Create(c, $"- **Light:** silent {Share(r.SilentFrames, r.Frames)}, hidden (Visibility 0) {Share(r.HiddenFrames, r.Frames)}, static {Share(r.StaticFrames, r.Frames)}, crossfading colors {Share(r.FadingFrames, r.Frames)} of frames; {Count(r.SetTargetCalls, "SetTarget call")} (new tracks), {Count(r.ResetCalls, "Reset call")} (new sessions)."));
         w.WriteLine(string.Create(c, $"- **Verdict:** {(r.Passed ? "PASS" : "FAIL")}: {(r.AllocationFree ? "0 B allocated per frame in steady state" : "frames allocated")}; {(r.ManagedMemoryFlat ? "managed memory flat" : $"managed memory grew more than {SoakResult.MaxManagedGrowthBytes / 1024} KB")}."));
         return w.ToString();
     }
@@ -297,6 +313,12 @@ internal static class SoakRun
         public long SilentFrames { get; private set; }
         public long HiddenFrames { get; private set; }
         public long StaticFrames { get; private set; }
+        public long FadingFrames { get; private set; }
+        public long SetTargetCalls { get; private set; }
+        public long ResetCalls { get; private set; }
+        public Palette Palette => palette;
+        public float Ratio { get; private set; }
+        public ReadOnlySpan<float> Gradient => gradient;
 
         public void ClearMeasurements()
         {
@@ -306,6 +328,7 @@ internal static class SoakRun
             Colors.Clear();
             Interval.Clear();
             Frames = Allocated = AllocatingFrames = Beats = SilentFrames = HiddenFrames = StaticFrames = 0;
+            FadingFrames = SetTargetCalls = ResetCalls = 0;
             FirstAllocation = -1;
         }
 
@@ -343,7 +366,8 @@ internal static class SoakRun
 
                 // The calls in MusicGlowSource.NextFrame's order: a new album palette is passed to SetTarget first,
                 // then a device change resets the analyzer, the audio is analyzed, the crossfade advances, the engine
-                // maps the features to a light state and the gradient is filled for the shader.
+                // maps the features to a light state and the gradient is filled for the shader. Last, the frame pacing
+                // reads IsAnimating and IsStatic (to draw at full rate, slowly, or not at all).
                 long bytes = GC.GetAllocatedBytesForCurrentThread();
                 long t0 = Stopwatch.GetTimestamp();
                 if (target is not null) blender.SetTarget(target, AlbumFade);
@@ -356,6 +380,7 @@ internal static class SoakRun
                 LightState state = engine.Update(step, in features, palette, settings, paused: false);
                 long t4 = Stopwatch.GetTimestamp();
                 blender.FillGradient(gradient, state.Ratio);
+                bool fading = blender.IsAnimating, still = engine.IsStatic;
                 long t5 = Stopwatch.GetTimestamp();
                 long allocated = GC.GetAllocatedBytesForCurrentThread() - bytes;
 
@@ -377,7 +402,11 @@ internal static class SoakRun
                 beatCount = beats;
                 if (features.IsSilent) SilentFrames++;
                 if (state.Visibility <= 0) HiddenFrames++;
-                if (engine.IsStatic) StaticFrames++;
+                if (still) StaticFrames++;
+                if (fading) FadingFrames++;
+                if (target is not null) SetTargetCalls++;
+                if (reset) ResetCalls++;
+                Ratio = state.Ratio;
 
                 if (time >= nextReport || time >= end)
                 {

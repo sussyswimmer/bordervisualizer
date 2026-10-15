@@ -36,6 +36,7 @@ internal static class SoakReport
         SoakOptions o = r.Options;
         w.WriteStartObject("options");
         w.WriteNumber("hours", o.Hours);
+        w.WriteString("shape", o.Shape.Name);
         w.WriteNumber("sampleRate", o.SampleRate);
         w.WriteNumber("fps", o.Fps);
         w.WriteNumber("jitter", o.Jitter);
@@ -100,6 +101,9 @@ internal static class SoakReport
         w.WriteNumber("silentFrames", r.SilentFrames);
         w.WriteNumber("hiddenFrames", r.HiddenFrames);
         w.WriteNumber("staticFrames", r.StaticFrames);
+        w.WriteNumber("fadingFrames", r.FadingFrames);
+        w.WriteNumber("setTargetCalls", r.SetTargetCalls);
+        w.WriteNumber("resetCalls", r.ResetCalls);
         w.WriteEndObject();
 
         w.WriteStartArray("snapshots");

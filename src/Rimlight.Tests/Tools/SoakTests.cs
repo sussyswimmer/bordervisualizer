@@ -6,8 +6,10 @@ using Xunit;
 
 namespace Rimlight.Tests.Tools;
 
-// The soak measures process memory (live managed heap after a full collection), so its tests run alone: xUnit runs a
-// collection with DisableParallelization after the parallel ones, with nothing else in flight.
+// The soak tests time frames and count allocations, so they run one at a time, after the parallel collections. Process
+// memory is checked only in a soak of its own process (SoakInItsOwnProcessPasses): in the test host, the runner's own
+// threads allocate and keep memory while a test runs (about 1 MB allocated and 350 KB kept during a 0.3 s soak, seen
+// when the first batch of results was reported), which a process-wide heap sample can't tell apart from a leak.
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class SoakCollection
 {
@@ -15,8 +17,9 @@ public sealed class SoakCollection
 }
 
 // C12: the soak harness. The quick soak is the CI form of the 8-hour run (docs/PERF.md): the same render-thread calls on
-// a compressed program that visits every path in two simulated minutes, asserting zero steady-state allocations and
-// flat managed memory.
+// a compressed program that visits every path in two simulated minutes. In this process it asserts what the program
+// covers and zero steady-state allocations (counted per thread, so the test host can't disturb them); in a process of
+// its own, through the command line, it also asserts flat managed memory.
 [Collection(SoakCollection.Name)]
 public sealed class SoakTests
 {
@@ -29,10 +32,11 @@ public sealed class SoakTests
     };
 
     [Fact]
-    public void QuickSoakAllocatesNothingAndKeepsManagedMemoryFlat()
+    public void QuickSoakCoversEveryPathAndAllocatesNothing()
     {
         var reported = new List<SoakSnapshot>();
-        SoakResult r = SoakRun.Run(Quick, reported.Add);
+        SoakProgram? played = null;
+        SoakResult r = SoakRun.Run(Quick, reported.Add, program => played = program);
 
         // The two minutes cover what the 8 hours do: sessions with both silent behaviors and a device change, tracks
         // with new and same-album palettes, digital silence and no-packet gaps, and a light that fades out and idles.
@@ -45,6 +49,21 @@ public sealed class SoakTests
         Assert.True(p.NoPacketSeconds > 4.5, $"no packets {p.NoPacketSeconds:0.0} s");
         Assert.True(r.SilentFrames > 0 && r.HiddenFrames > 0 && r.StaticFrames > 0, $"silent {r.SilentFrames}, hidden {r.HiddenFrames}, static {r.StaticFrames}");
 
+        // Each new track was passed to SetTarget and each session reset the analyzer, the colors crossfaded (800 ms per
+        // track with new colors), and the gradient the shader gets at the end is the last track's palette, settled.
+        Assert.Equal(p.Tracks, r.SetTargetCalls);
+        Assert.Equal(p.Sessions, r.ResetCalls);
+        Assert.InRange(r.FadingFrames, 1, r.SetTargetCalls * 61);
+        SoakEvent lastTrack = default;
+        foreach (SoakEvent e in played!.Events)
+            if (e.Palette is not null) lastTrack = e;
+        Assert.True(lastTrack.Position / 48000.0 < 120 - 1, "the last crossfade has ended before the end of the run");
+        Assert.Same(lastTrack.Palette, r.FinalPalette);
+        Assert.Equal(new Settings().PrimaryRatio, r.FinalRatio);
+        float[] expected = new float[256];
+        CoreFactory.CreatePaletteBlender(lastTrack.Palette!).FillGradient(expected, r.FinalRatio);
+        Assert.Equal(expected, r.FinalGradient, (a, b) => Math.Abs(a - b) <= 1e-5f);
+
         // Every frame was measured, and the music really drove the light.
         Assert.InRange(r.Frames, 120 * 60 - 200, 120 * 60 + 200);
         Assert.True(r.Analyzer.MeanNs > 0 && r.LightEngine.MeanNs > 0 && r.Palette.MeanNs > 0);
@@ -52,12 +71,11 @@ public sealed class SoakTests
         Assert.InRange(r.Beats, (long)(0.8 * p.Kicks), (long)(1.2 * p.Kicks));
         Assert.True(r.WarmupTours >= 1);
 
-        // The verdict: nothing allocated in steady state, and managed memory flat.
+        // Nothing allocated in steady state (the memory half of the verdict is SoakInItsOwnProcessPasses').
         Assert.Equal(0, r.AllocatedBytes);
         Assert.Equal(0, r.AllocatingFrames);
         Assert.Null(r.FirstAllocationSeconds);
-        Assert.True(r.ManagedGrowthBytes <= SoakResult.MaxManagedGrowthBytes, $"live managed heap grew {r.ManagedGrowthBytes:N0} B");
-        Assert.True(r.Passed);
+        Assert.True(r.AllocationFree);
 
         Assert.Equal(r.Snapshots, reported);
         Assert.Equal(8, r.Snapshots.Count);                   // every 15 s; the last one at the end
@@ -86,8 +104,41 @@ public sealed class SoakTests
         Assert.InRange(r.FirstAllocationSeconds!.Value, 0, 100 / 60.0 * 1.25);
         Assert.Contains(r.Snapshots, s => s.AllocatedBytes > 0);
         Assert.False(r.AllocationFree);
-        Assert.True(r.ManagedMemoryFlat);                     // garbage only: the heap doesn't grow
         Assert.False(r.Passed);
+    }
+
+    [Fact]
+    public void TheVerdictNeedsZeroAllocationsAndFlatMemory()
+    {
+        SoakResult r = SoakRun.Run(Quick with { Hours = 0.1 / 60, WarmupSeconds = 0 });
+        SoakResult clean = r with { AllocatedBytes = 0, AllocatingFrames = 0, FirstAllocationSeconds = null, End = r.Start };
+        Assert.True(clean.Passed);
+        Assert.Contains("Verdict:** PASS", SoakRun.Summarize(clean));
+        Assert.Equal("pass", Verdict(clean));
+
+        SoakResult atLimit = clean with { End = clean.Start with { LiveManagedBytes = clean.Start.LiveManagedBytes + SoakResult.MaxManagedGrowthBytes } };
+        Assert.True(atLimit.Passed);
+
+        // Memory alone fails it, with no allocation at all; so do allocations alone.
+        SoakResult grown = atLimit with { End = atLimit.End with { LiveManagedBytes = atLimit.End.LiveManagedBytes + 1 } };
+        Assert.True(grown.AllocationFree);
+        Assert.False(grown.ManagedMemoryFlat);
+        Assert.False(grown.Passed);
+        Assert.Contains("Verdict:** FAIL: 0 B allocated per frame in steady state; managed memory grew more than 256 KB.", SoakRun.Summarize(grown));
+        Assert.Equal("fail", Verdict(grown));
+
+        SoakResult allocating = clean with { AllocatedBytes = 24, AllocatingFrames = 1, FirstAllocationSeconds = 1.5 };
+        Assert.False(allocating.Passed);
+        Assert.Contains("Verdict:** FAIL: frames allocated; managed memory flat.", SoakRun.Summarize(allocating));
+        Assert.Equal("fail", Verdict(allocating));
+
+        static string Verdict(SoakResult result)
+        {
+            using var stream = new MemoryStream();
+            SoakReport.Write(result, stream);
+            using JsonDocument report = JsonDocument.Parse(stream.ToArray());
+            return report.RootElement.GetProperty("verdict").GetString()!;
+        }
     }
 
     [Fact]
@@ -109,35 +160,113 @@ public sealed class SoakTests
     }
 
     [Fact]
-    public void CommandLineRunsAShortSoakAndWritesTheJsonReport()
+    public void SoakInItsOwnProcessPassesAndWritesTheJsonReport()
+    {
+        // The quick soak through the real command line, in a process of its own: the verdict (0 B allocated per frame,
+        // live managed heap flat), the printed summary and the JSON report.
+        string directory = Path.Combine(Path.GetTempPath(), "rimlight-soak-" + Guid.NewGuid().ToString("N"));
+        string json = Path.Combine(directory, "report.json");
+        try
+        {
+            (int exit, string output) = RunBench("soak", "--minutes", "2", "--shape", "compressed", "--warmup-seconds", "1", "--report-every", "0.25", "--json", json);
+            Assert.True(exit == 0, output);
+            Assert.Contains("Soak: 0:02:00 simulated (compressed program) at 60 fps", output);
+            Assert.Contains("| **whole frame** |", output);
+            Assert.Contains("Verdict:** PASS", output);
+
+            using JsonDocument report = JsonDocument.Parse(File.ReadAllText(json));
+            JsonElement root = report.RootElement;
+            Assert.Equal("pass", root.GetProperty("verdict").GetString());
+            Assert.Equal("compressed", root.GetProperty("options").GetProperty("shape").GetString());
+            Assert.Equal(60, root.GetProperty("options").GetProperty("fps").GetDouble());
+            Assert.InRange(root.GetProperty("frames").GetInt64(), 120 * 60 - 200, 120 * 60 + 200);
+            JsonElement allocations = root.GetProperty("allocations");
+            Assert.Equal(0, allocations.GetProperty("bytes").GetInt64());
+            Assert.Equal(0, allocations.GetProperty("allocatingFrames").GetInt64());
+            JsonElement memory = root.GetProperty("memory");
+            long growth = memory.GetProperty("managedGrowthBytes").GetInt64();
+            Assert.Equal(memory.GetProperty("end").GetProperty("liveManagedBytes").GetInt64() - memory.GetProperty("start").GetProperty("liveManagedBytes").GetInt64(), growth);
+            Assert.True(growth <= SoakResult.MaxManagedGrowthBytes, $"live managed heap grew {growth:N0} B");
+            Assert.True(memory.GetProperty("end").GetProperty("workingSetBytes").GetInt64() > 0);
+            Assert.True(root.GetProperty("light").GetProperty("hiddenFrames").GetInt64() > 0);
+            Assert.True(root.GetProperty("costNs").GetProperty("frame").GetProperty("p99").GetDouble() > 0);
+            Assert.Equal(8, root.GetProperty("snapshots").GetArrayLength());
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CommandLineOptionsReachTheSoakAndTheExitCodeFollowsTheVerdict()
     {
         string directory = Path.Combine(Path.GetTempPath(), "rimlight-soak-" + Guid.NewGuid().ToString("N"));
         string json = Path.Combine(directory, "report.json");
         try
         {
             var output = new StringWriter();
-            int exit = BenchCli.Run(["soak", "--minutes", "0.5", "--fps", "30", "--warmup-seconds", "0", "--report-every", "0.25", "--json", json], output, TextWriter.Null);
+            int exit = BenchCli.Run(["soak", "--minutes", "0.5", "--fps", "30", "--seed", "7", "--warmup-seconds", "0", "--report-every", "0.25", "--json", json], output, TextWriter.Null);
             string text = output.ToString();
-            Assert.True(exit == 0, text);
             Assert.Contains("0:00:30 simulated at 30 fps", text);
-            Assert.Contains("| **whole frame** |", text);
-            Assert.Contains("Verdict:** PASS", text);
+            Assert.Contains("seed 7", text);
 
             using JsonDocument report = JsonDocument.Parse(File.ReadAllText(json));
             JsonElement root = report.RootElement;
-            Assert.Equal("pass", root.GetProperty("verdict").GetString());
-            Assert.Equal(30, root.GetProperty("options").GetProperty("fps").GetDouble());
-            Assert.Equal(0.5 / 60, root.GetProperty("options").GetProperty("hours").GetDouble(), 9);
+            JsonElement options = root.GetProperty("options");
+            Assert.Equal(30, options.GetProperty("fps").GetDouble());
+            Assert.Equal(0.5 / 60, options.GetProperty("hours").GetDouble(), 9);
+            Assert.Equal(7UL, options.GetProperty("seed").GetUInt64());
+            Assert.Equal("day", options.GetProperty("shape").GetString());
             Assert.InRange(root.GetProperty("frames").GetInt64(), 30 * 30 - 30, 30 * 30 + 30);
-            Assert.Equal(0, root.GetProperty("allocations").GetProperty("bytes").GetInt64());
-            Assert.True(root.GetProperty("costNs").GetProperty("frame").GetProperty("p99").GetDouble() > 0);
-            Assert.True(root.GetProperty("memory").GetProperty("end").GetProperty("workingSetBytes").GetInt64() > 0);
             Assert.Equal(2, root.GetProperty("snapshots").GetArrayLength());
+            Assert.Equal(0, root.GetProperty("allocations").GetProperty("bytes").GetInt64());
+            // In the test host the memory half of the verdict can see the runner's threads (see SoakCollection), so
+            // only the link between the verdict and the exit code is checked here.
+            string verdict = root.GetProperty("verdict").GetString()!;
+            Assert.Equal(verdict == "pass" ? 0 : 1, exit);
+            Assert.Contains($"Verdict:** {verdict.ToUpperInvariant()}", text);
         }
         finally
         {
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
+    }
+
+    // Runs Rimlight.Bench (copied next to the tests with its runtimeconfig) with the dotnet host the tests run on.
+    private static (int Exit, string Output) RunBench(params string[] args)
+    {
+        string bench = typeof(SoakRun).Assembly.Location;
+        var start = new System.Diagnostics.ProcessStartInfo(DotnetHost())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add(bench);
+        foreach (string arg in args) start.ArgumentList.Add(arg);
+        using var process = System.Diagnostics.Process.Start(start)!;
+        Task<string> error = process.StandardError.ReadToEndAsync();
+        string output = process.StandardOutput.ReadToEnd();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(5)))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail("The soak did not finish within 5 minutes.\n" + output);
+        }
+        return (process.ExitCode, output + error.Result);
+    }
+
+    // The dotnet host: the one `dotnet test` names, else the one that owns the running runtime
+    // (<root>/shared/Microsoft.NETCore.App/<version>/ → <root>/dotnet).
+    private static string DotnetHost()
+    {
+        string? named = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        if (!string.IsNullOrEmpty(named) && File.Exists(named)) return named;
+        string runtime = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        string root = Path.GetFullPath(Path.Combine(runtime, "..", "..", ".."));
+        string host = Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        Assert.True(File.Exists(host), $"No dotnet host at {host}");
+        return host;
     }
 
     // Wraps the real engine and allocates a 4 KB array on every Nth update, optionally keeping it (a leak).
@@ -231,22 +360,30 @@ public sealed class SoakProgramTests
         Assert.Equal(16000, program.Events[2].Position);
         Assert.True(program.Events[2].SameAlbum);
 
-        // One pass in uneven pieces: music where there is music, zeros for silence, nothing for the no-packet gap.
-        var delivered = new List<float>();
+        // A pass in uneven pieces: music where there is music, zeros for silence, nothing for the no-packet gap. The
+        // first pass runs the code for the first time, and first-time initialization allocates (264 B when this test
+        // is the first in its process to read a SyntheticTrack); the second pass is checked, allocations included.
         float[] buffer = new float[1000];
-        int cursor = 0;
-        long from = 0, allocated = 0;
         int[] pieces = [999, 1, 777, 1000, 0, 333, 1000];
-        for (int i = 0; from < program.Length; i++)
+        (List<float> Delivered, long Allocated, long End) Pass()
         {
-            long to = Math.Min(program.Length, from + pieces[i % pieces.Length]);
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            int count = program.Read(from, to, buffer, ref cursor);
-            allocated += GC.GetAllocatedBytesForCurrentThread() - before;
-            delivered.AddRange(buffer.AsSpan(0, count).ToArray());
-            from = to;
+            var delivered = new List<float>();
+            int cursor = 0;
+            long from = 0, allocated = 0;
+            for (int i = 0; from < program.Length; i++)
+            {
+                long to = Math.Min(program.Length, from + pieces[i % pieces.Length]);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                int count = program.Read(from, to, buffer, ref cursor);
+                allocated += GC.GetAllocatedBytesForCurrentThread() - before;
+                delivered.AddRange(buffer.AsSpan(0, count).ToArray());
+                from = to;
+            }
+            return (delivered, allocated, from);
         }
-        Assert.Equal(program.Length, from);
+        Pass();
+        (List<float> delivered, long allocated, long end) = Pass();
+        Assert.Equal(program.Length, end);
         Assert.Equal(0, allocated);
         Assert.Equal(20000, delivered.Count);
         Assert.Equal(Expected(program, 0, 8000), delivered.GetRange(0, 8000));

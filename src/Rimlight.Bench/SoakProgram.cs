@@ -45,11 +45,14 @@ internal sealed record SoakProgramShape
     /// kind, both silent behaviors, palette changes and device changes (the quick soak test).</summary>
     public static SoakProgramShape Compressed { get; } = new()
     {
+        Name = "compressed",
         TrackSeconds = (12, 20), IntroSeconds = (1, 2), BreakdownSeconds = (2, 4),
         ShortGapSeconds = (0.3, 1.5), LongGapSeconds = (4.5, 7), LongGapEvery = 3,
         SessionSeconds = (45, 60), PauseSeconds = (5, 8),
     };
 
+    /// <summary>The name the command line and the JSON report use: <c>day</c> or <c>compressed</c>.</summary>
+    public string Name { get; init; } = "day";
     /// <summary>Length of one track, gaps excluded.</summary>
     public (double Min, double Max) TrackSeconds { get; init; } = (120, 300);
     /// <summary>A track opens without kick and bass (vocals, hats, noise) for this long.</summary>
