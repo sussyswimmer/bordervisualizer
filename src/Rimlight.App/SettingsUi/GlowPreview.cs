@@ -139,10 +139,7 @@ internal sealed class GlowPreview
     {
         Settings? previous = applied;
         applied = settings;
-        // The preview shows the glow as it looks when it's on: "Glow on" off, or Motion set to Off, shows Idle Glow.
-        shown = settings.Enabled && settings.Animation != AnimationMode.Off
-            ? settings
-            : settings with { Enabled = true, Animation = settings.Animation == AnimationMode.Off ? AnimationMode.IdleGlow : settings.Animation };
+        shown = Shown(settings);
         if (previous is null || previous.PrimaryHex != settings.PrimaryHex || previous.SecondaryHex != settings.SecondaryHex)
             manual = MusicGlowSource.ManualPalette(settings);
         // The overlay's rule (MusicGlowSource): a manual edit fades quickly, a switch between album and manual colors
@@ -150,6 +147,18 @@ internal sealed class GlowPreview
         bool albumBefore = album is not null && ReferenceEquals(palette, album);
         bool albumAfter = album is not null && MusicGlowSource.UsesAlbumColors(settings);
         ShowPalette(albumBefore || albumAfter ? MusicGlowSource.AlbumFade : MusicGlowSource.ManualEditFade);
+    }
+
+    /// <summary>
+    /// The settings the preview draws: the glow as it looks when it's on and showing. "Glow on" off, or Motion set to
+    /// Off, shows Idle Glow; so does silence with When silent set to Hide, which would otherwise leave the card empty
+    /// (the light engine fades the glow out once the sound has stopped for 2 s).
+    /// </summary>
+    internal static Settings Shown(Settings settings)
+    {
+        AnimationMode animation = settings.Animation == AnimationMode.Off ? AnimationMode.IdleGlow : settings.Animation;
+        if (settings.Enabled && animation == settings.Animation && settings.WhenSilent != SilentBehavior.Hide) return settings;
+        return settings with { Enabled = true, Animation = animation, WhenSilent = SilentBehavior.IdleGlow };
     }
 
     private void ShowPalette(TimeSpan fade)

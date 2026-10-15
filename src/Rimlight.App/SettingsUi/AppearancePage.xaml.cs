@@ -76,8 +76,10 @@ internal partial class AppearancePage : UserControl, ISettingsPage
     {
         if (!settings.Enabled) return "The glow is turned off. This is how it looks when it's on.";
         if (settings.Animation == AnimationMode.Off) return "Motion is set to Off. This is how the glow looks in Idle Glow.";
-        return settings.Monitors == MonitorSelection.Custom && (settings.CustomMonitorIds?.Count ?? 0) == 0
-            ? "No display is chosen on the Displays page, so the glow isn't shown anywhere."
+        if (settings.Monitors == MonitorSelection.Custom && (settings.CustomMonitorIds?.Count ?? 0) == 0)
+            return "No display is chosen on the Displays page, so the glow isn't shown anywhere.";
+        return settings.Animation == AnimationMode.MusicSync && settings.WhenSilent == SilentBehavior.Hide
+            ? "When it's quiet, the glow hides. This preview breathes instead."
             : "";
     }
 
