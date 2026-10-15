@@ -1,21 +1,24 @@
 # Release guide (for Maxwell)
 
-The clicks and recordings that only you can do, in order: record the demo and screenshots, set up the repo page, then ship v1.0.0. Doc 08 is the spec behind each step. Everything else (README, banner, release workflow) is already in the repo.
+The clicks and recordings that only you can do, in order: record the demo and screenshots, set up the repo page, then ship v1.0.0 (and, later, turn on code signing). Doc 08 is the spec behind each step. Everything else (README, banner, release workflow) is already in the repo.
 
 ## 1. Record the demo GIF
 
 The GIF sits under the README's download button and at the top of the release notes. Aim for an 8-second loop, 960 px wide, under 8 MB.
 
 1. **Set the stage.** Pick a clean wallpaper with some dark areas, so the glow stands out. Hide the desktop icons (right-click the desktop > **View** > uncheck **Show desktop icons**), and close or minimize every window.
-2. **Start the demo.** Quit Rimlight from the tray first: only one copy runs at a time, and a second launch only opens the running copy's Settings. Then, in PowerShell:
+2. **Start the demo.** In PowerShell:
    ```powershell
    & "$env:LOCALAPPDATA\Rimlight\current\Rimlight.exe" --demo
    ```
-   From a clone of the repo, `dotnet run --project src/Rimlight.App -c Release -- --demo` does the same. Demo mode drives the glow with a synthetic beat and cycles through palettes, so you don't need music.
+   If Rimlight is already running, this starts the demo in that copy, since only one copy runs at a time. From a clone of the repo, `dotnet run --project src/Rimlight.App -c Release -- --demo` does the same with your build; quit any installed copy from the tray first, or the demo starts in that copy instead. Demo mode drives the glow with a synthetic 120 BPM beat and its own palettes, so you don't need music. To end it, uncheck **Demo mode** in the tray menu.
    - Keep **Hide from screen capture** off (**Settings > Behavior**; it's off by default), or the recording won't show the glow.
    - The default look records well. A slightly higher **Glow** or **Brightness** (**Settings > Appearance**) reads better once the GIF is shrunk to 960 px.
-3. **Record with [ScreenToGif](https://www.screentogif.com)** (free). Use the screen recorder on the whole screen, since the glow lives at the edges, and set it to **30 fps**. Record 10 to 15 seconds, then stop to open the editor.
-4. **Trim it to a seamless loop.** Delete the frames before and after an 8-second stretch. Start and end on the same moment of the beat (the demo beats twice a second, so 8 s is 16 beats). If the colors at the two ends differ, add a short fade back to the first frame (**Transitions** tab) so the loop doesn't jump.
+3. **Record with [ScreenToGif](https://www.screentogif.com)** (free). Use the screen recorder on the whole screen, since the glow lives at the edges, and set it to **30 fps**. Record at least 15 seconds, so step 4 has a palette change with 4 seconds on each side, then stop to open the editor.
+4. **Trim it to an 8-second loop.** The demo beats twice a second and changes palette every 6 seconds, always on the first beat of a bar, and its four palettes repeat every 24 seconds. Any 8-second stretch therefore shows a palette change and ends on different colors from the ones it starts with.
+   - Find a frame where the colors start to change, and keep 4 seconds on each side of it (delete the frames before and after). The change then sits in the middle, and the clip is 16 beats long, so its two ends fall on the same moment of the beat.
+   - Always add a short fade from the last frame back to the first (**Transitions** tab), so the loop changes color smoothly instead of jumping.
+   - Only the full 24-second cycle loops without a fade, and that is three times the file size.
 5. **Export.**
    - **GIF:** resize to **960 px wide** (**Image** > **Resize**, keep the aspect ratio), then **File > Save as** a GIF. The Gifski encoder looks best on gradients if ScreenToGif offers it. It must be **under 8 MB**. If it's bigger, drop to 24 fps (**Edit** > **Reduce frame count**), shorten it, or lower the quality.
    - **MP4:** also save the full-size recording as an MP4 video (ScreenToGif downloads FFmpeg for this). Keep it under 10 MB, GitHub's video limit on a free plan.
@@ -26,7 +29,7 @@ The GIF sits under the README's download button and at the top of the release no
 
 The README shows the dark one to visitors using GitHub's dark theme and the light one to everyone else.
 
-1. Start Rimlight normally and play some music, or use `--demo` as above, so the preview glows.
+1. Start Rimlight normally and play some music, so the live preview at the top of the **Appearance** page moves. Demo mode won't help here: it drives only the glow at the screen edges, and the preview always follows the music, in the album art's colors or your own.
 2. Double-click the tray icon to open **Settings**. Stay on **Appearance**, where the live preview is at the top, and don't resize the window: both shots should be the same size.
 3. Switch Windows to dark mode: **Settings > Personalization > Colors > Choose your mode > Dark** (on Windows 10: **Choose your default app mode > Dark**). Rimlight follows it; if its window doesn't change, close Settings and open it again.
 4. Press **Win+Shift+S**, choose **Window** mode, and click the Rimlight Settings window. Open the snip from the notification and save it as **`assets/settings-dark.png`**.
@@ -101,11 +104,18 @@ git push origin v1.0.0
 
 Push only the tag, and don't create the release on GitHub yourself: the workflow creates it, and fails if it already exists.
 
-**What `release.yml` does** (Actions tab > **Release**): it builds and tests on Windows, packs x64 and ARM64 with Velopack (and signs them, once the signing secrets exist), and creates a draft release named "Rimlight 1.0.0". The draft holds `RimlightSetup.exe` and `RimlightSetup-arm64.exe`, then Velopack's upload adds `Rimlight-win-Portable.zip`, `Rimlight-win-arm64-Portable.zip`, the update packages and their `releases.*.json` feeds. Only then is the release published, so the README's download button never meets a half-uploaded release. The notes are `.github/release-notes-intro.md` followed by the pull requests merged since the last release.
+**What `release.yml` does** (Actions tab > **Release**): it builds and tests on Windows, packs x64 and ARM64 with Velopack (and signs them, once the signing secrets exist: section 6), and creates a draft release named "Rimlight 1.0.0" that holds `RimlightSetup.exe` and `RimlightSetup-arm64.exe`. Velopack's upload then adds everything it packed, for each architecture:
+
+- its own copy of the installer, `Rimlight-win-Setup.exe` and `Rimlight-win-arm64-Setup.exe`: the same files as the two above, under Velopack's names;
+- the portable zips, `Rimlight-win-Portable.zip` and `Rimlight-win-arm64-Portable.zip`;
+- the update packages, `Rimlight-1.0.0-full.nupkg` and `Rimlight-1.0.0-win-arm64-full.nupkg`, and their feeds, `releases.win.json` and `releases.win-arm64.json`;
+- a `RELEASES` file, which Velopack adds for compatibility with older updaters.
+
+The README and the release notes link only the `RimlightSetup*.exe` names, and the downloads badge counts `RimlightSetup.exe`; Velopack's copies are harmless. Only when every file is uploaded is the release published, so the README's download button never meets a half-uploaded release. The notes are `.github/release-notes-intro.md` followed by the pull requests merged since the last release.
 
 **After it finishes:**
 
-- [ ] The Release run is green, and **Releases** shows **v1.0.0** marked **Latest**, with the two installers and the two portable zips.
+- [ ] The Release run is green, and **Releases** shows **v1.0.0** marked **Latest**, with the 11 files listed above (four installers, two zips, two packages, two feeds and `RELEASES`) plus GitHub's two **Source code** archives.
 - [ ] The release notes start with the demo GIF and play it, then the short "what it is" and install text, then the generated list of changes. You can fix the notes afterwards with **Edit** on the release.
 - [ ] The README's download links all work. In PowerShell:
   ```powershell
@@ -114,7 +124,7 @@ Push only the tag, and don't create the release on GitHub yourself: the workflow
   }
   ```
   Each line should start with 206 (or 200). A 404 means that file is missing from the release.
-- [ ] The README badges show the release (v1.0.0), a download count and CI passing. Before the first release they read "no releases found", which is expected.
+- [ ] The README badges show the release (v1.0.0), a download count and CI passing. Before the first release they read "no releases found", which is expected. The downloads badge counts `RimlightSetup.exe` across all releases, on purpose: GitHub's total for every file would mostly count update checks, because each installed copy downloads the `releases.*.json` feeds of the newest releases every time it checks. So the badge leaves out the ARM64 installer, the zips and Velopack's installer copies, and errs low.
 - [ ] **Test on a clean account or a second PC.** Add a local user (**Settings > Accounts > Other users > Add account > I don't have this person's sign-in information > Add a user without a Microsoft account**) and sign in as them. Then:
   1. Open the README in a browser and click **Download for Windows**.
   2. Run the installer. SmartScreen's "Windows protected your PC" should offer **More info → Run anyway**, and there should be no admin prompt.
@@ -122,3 +132,11 @@ Push only the tag, and don't create the release on GitHub yourself: the workflow
   4. Rimlight is in the Start menu and on the desktop.
   5. Uninstall it from **Settings > Apps**. The app and its shortcuts go away, and `%APPDATA%\Rimlight` (settings and logs) stays, as the README's FAQ says.
 - [ ] When you ship v1.0.1 later, check that a v1.0.0 install finds it (**Settings > About > Check for updates**) and is on the new version after a restart.
+
+## 6. Later: turn on code signing
+
+Releases are unsigned until you add the six `SIGNING_*` secrets for Azure Trusted Signing in **Settings > Secrets and variables > Actions**; the pack job's comment in `.github/workflows/release.yml` says what each one holds. From then on, every tagged release is signed. Once a signed release is out and a fresh download on a clean account no longer shows *Windows protected your PC*, take the warning out of the docs:
+
+- [ ] `README.md`, **Install** step 2: delete the quoted line about *Windows protected your PC*.
+- [ ] `.github/release-notes-intro.md`, the **Install** line: delete its last two sentences, from "Windows may say" to "**Run anyway**."
+- [ ] This guide: drop the SmartScreen part of step 2 of the clean-account test in section 5.
