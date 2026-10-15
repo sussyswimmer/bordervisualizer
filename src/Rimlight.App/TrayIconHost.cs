@@ -249,7 +249,13 @@ internal sealed class TrayIconHost : IDisposable
     // the icon and its window.
     private void OnNotificationClicked()
     {
-        if (disposed || clicks.Clicked() is not { } clicked) return;
+        if (disposed) return;
+        if (clicks.Clicked() is not { } clicked)
+        {
+            // Rare (a click on a notification); says why "Restart now" did nothing, if it ever doesn't.
+            Trace.WriteLine("[Tray] A notification was clicked; it has no action, or it isn't the one on screen.");
+            return;
+        }
         icon.Dispatcher.InvokeAsync(() =>
         {
             if (disposed) return;
