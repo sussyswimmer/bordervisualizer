@@ -27,7 +27,8 @@ Rimlight/
    │  ├─ System/                  # MonitorWatcher, PowerWatcher, FullscreenDetector, HotkeyService, StartupRegistration
    │  └─ NativeMethods.txt        # CsWin32 API list
    ├─ Rimlight.App/               # WPF exe — composition root, tray, settings UI, Velopack bootstrap
-   └─ Rimlight.Tests/             # xUnit, references Core only
+   ├─ Rimlight.Tests/             # xUnit, references Core only
+   └─ Rimlight.Platform.Tests/    # xUnit, the parts of Platform and App that make no Windows calls (K10)
 ```
 
 ## Threads and data flow
@@ -87,7 +88,7 @@ public readonly record struct LightState(
 - Create a hidden message-only window (`HWND_MESSAGE`) in Platform to receive these messages.
 
 ## Logging
-- `Microsoft.Extensions.Logging` with a small rolling file sink in `%APPDATA%\Rimlight\logs\`, next to `settings.json` (max 5 files × 1 MB). Not in `%LOCALAPPDATA%\Rimlight`: that is Velopack's install folder, which uninstalling deletes, and the logs outlive an uninstall (doc 07 Phase 6).
+- A small rolling file sink in `%APPDATA%\Rimlight\logs\`, next to `settings.json` (max 5 files × 1 MB). It is a `Trace` listener (`App/Logging/RollingFileLog`, K6) rather than `Microsoft.Extensions.Logging`: no package, and every `Trace.WriteLine("[Area] …")` reaches it. Not in `%LOCALAPPDATA%\Rimlight`: that is Velopack's install folder, which uninstalling deletes, and the logs outlive an uninstall (doc 07 Phase 6).
 - Never log in the audio callback or the per-frame path, except rate-limited errors.
 - Add a tray item "Open logs folder" to help with bug reports.
 

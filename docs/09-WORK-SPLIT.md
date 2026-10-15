@@ -19,11 +19,11 @@ LANE A — CODEX                          LANE B — CLAUDE CODE
 src/Rimlight.Core/**    (except Contracts/ after freeze, see §3)
 src/Rimlight.Tests/**                   src/Rimlight.Platform/**
 src/Rimlight.Bench/**   (new)           src/Rimlight.App/**
-tools/**                (new)           assets/**
-build/**                                README.md
-.github/**                              docs/08 visual items
-CONTRIBUTING.md, SECURITY.md,           Phase 0 scaffold (one-time, see §4)
-CODE_OF_CONDUCT.md, CHANGELOG.md
+tools/**                (new)           src/Rimlight.Platform.Tests/** (K10)
+build/**                                assets/**
+.github/**                              README.md
+CONTRIBUTING.md, SECURITY.md,           docs/08 visual items
+CODE_OF_CONDUCT.md, CHANGELOG.md        Phase 0 scaffold (one-time, see §4)
 
 SHARED (append-only, both may edit):    docs/PROGRESS.md, docs/HANDOFF.md
 FROZEN after Step 0:                    src/Rimlight.Core/Contracts/**
