@@ -27,9 +27,12 @@ internal sealed class LightEngine : ILightEngine
     internal const float QuietFadeSeconds = 1.5f;         // doc 01 §2: fade to the WhenSilent behavior
     internal const float WakeFadeSeconds = 0.15f;         // doc 01 §2: back within 150 ms when audio returns
     // Steps above 0.1 s (a stall, sleep) count as 0.1 s, so no fade or kick jumps; under 10 fps everything slows down
-    // instead. The first step of a new engine, and the first after a static frame, counts at most one 60 fps frame
-    // (dt = 0 updates don't use it up): a renderer that spent half a second building swap chains, or idled for an
-    // hour, may pass all of that time, and the fade-in must still start from its first frame.
+    // instead. On a new engine, and after a static frame, each step counts at most one 60 fps frame until the steps
+    // since waking add up to one (dt = 0 updates add nothing): a renderer that spent half a second building swap
+    // chains, or idled for an hour, may pass all of that time, and the fade-in must still start from its first frame.
+    // The total matters, not just the first step: a wake frame of a few microseconds (K3's first frame, before its
+    // GPU setup) or of 1/144 s may be followed by a long one, which would otherwise count 0.1 s, a third of the
+    // fade-in (H-011).
     internal const float MaxStepSeconds = 0.1f;
     internal const float WakeStepSeconds = 1f / 60;
     // A beat is a rise of Beat by more than this; it re-arms once Beat falls. The analyzer jumps from ≤ 0.22 to 1.
@@ -42,7 +45,7 @@ internal sealed class LightEngine : ILightEngine
     private float gate, shown = 1, music = 1, lastBeat;
     private double phase, breath, kick;                   // cycles, seconds, cycles per second
     private bool armed = true, wasHidden;
-    private float stepCap = WakeStepSeconds;              // until the first step that moves time, and again while static
+    private float awakeSeconds;                           // time moved since waking (see above), counted up to WakeStepSeconds
 
     // True after the second Update in a row with the light hidden for good (see CoreFactory.CreateLightEngine).
     public bool IsStatic { get; private set; }
@@ -58,6 +61,7 @@ internal sealed class LightEngine : ILightEngine
     {
         ArgumentNullException.ThrowIfNull(palette);
         ArgumentNullException.ThrowIfNull(settings);
+        float stepCap = awakeSeconds < WakeStepSeconds ? WakeStepSeconds : MaxStepSeconds;
         float step = float.IsFinite(dtSeconds) && dtSeconds > 0 ? MathF.Min(dtSeconds, stepCap) : 0;
 
         // Targets come straight from the inputs every frame, so no settings cache can go stale. An undefined
@@ -142,8 +146,7 @@ internal sealed class LightEngine : ILightEngine
 
         IsStatic = hidden && wasHidden;                   // the frame that reached Visibility 0 is still presented
         wasHidden = hidden;
-        if (IsStatic) stepCap = WakeStepSeconds;
-        else if (step > 0) stepCap = MaxStepSeconds;
+        awakeSeconds = IsStatic ? 0 : MathF.Min(awakeSeconds + step, WakeStepSeconds);
         return new LightState(
             Color(palette.Primary),
             Color(palette.Secondary),

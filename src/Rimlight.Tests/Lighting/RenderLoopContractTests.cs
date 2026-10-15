@@ -11,7 +11,8 @@ namespace Rimlight.Tests.Lighting;
 //   1. IsStatic means time alone changes nothing.
 //   2. Fully hidden is Visibility == 0; anything under 0.5/255 counts as hidden (the overlay windows are hidden then).
 //   3. Idle Glow changes at most about 0.25 per second, and the silence → Idle Glow fade is done 1.75 s after IsSilent.
-//   4. After a gap, Update gets one ordinary frame's dt, so fades start on the first frame after the input.
+//   4. After a gap, Update gets one ordinary frame's dt, so fades start on the first frame after the input; a long frame
+//      right after a short wake frame doesn't skip into the fade either.
 public sealed class RenderLoopContractTests(ITestOutputHelper output)
 {
     private const float Dt = 1f / 60;
@@ -340,8 +341,9 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
     public void AWakeFadeStartsOnTheFirstFrameFromItsBeginning(string reason, float frameDt)
     {
         // After a static gap of any length K3 passes one ordinary frame's dt. The fade that brings the light back starts
-        // on that frame, at its beginning (the engine counts the first step after a static frame as at most 1/60 s), and
-        // runs at the frame rate from there. A host that passed the whole gap instead would get one 60 fps step.
+        // on that frame, at its beginning (after a static frame the engine counts each step as at most 1/60 s until they
+        // add up to 1/60 s), and runs at the frame rate from there. A host that passed the whole gap instead would get
+        // one 60 fps step.
         float fade = WakeFadeSeconds(reason), first = Smooth(MathF.Min(frameDt, Dt) / fade);
         foreach ((float gapDt, float expected) in new[] { (frameDt, first), (5f, Smooth(Dt / fade)), (3600f, Smooth(Dt / fade)) })
         {
@@ -362,6 +364,36 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
         }
         output.WriteLine($"{reason}, frames of {frameDt * 1000:F2} ms: first frame {first:E2}, full after {frames} frames ({elapsed * 1000:F1} ms of fade)");
         Assert.InRange(elapsed, fade - 1e-4f, fade + frameDt);
+    }
+
+    [Theory]
+    [InlineData("start", 50e-6f, 0.2f)]
+    [InlineData("start", 1f / 144, 0.1f)]
+    [InlineData("paused", 50e-6f, 0.25f)]
+    [InlineData("paused", 1f / 144, 0.1f)]
+    [InlineData("disabled", 1f / 240, 0.1f)]
+    [InlineData("off", 1f / 360, 0.1f)]
+    [InlineData("silent-hide", 1f / 240, 0.1f)]
+    public void AShortWakeStepDoesNotLetALongOneJump(string reason, float firstDt, float longDt)
+    {
+        // A wake frame can be short and the next one long, and the second still must not jump into the fade. K3's very
+        // first frame comes microseconds after its loop starts, and the GPU setup that frame runs makes the next dt up to
+        // 0.25 s; above about 130 Hz a 300 ms fade-in's first frame is still under 0.5/255, and a host that then waits
+        // 100 ms passes that. The engine counts each step at most 1/60 s until the steps since waking add up to 1/60 s,
+        // so the long frame continues the fade from its beginning (it used to count 0.1 s: about 26 % at once).
+        bool start = reason == "start";
+        float fade = start ? 0.3f : WakeFadeSeconds(reason);
+        Settings showing = start ? Music : Showing(reason);
+        ILightEngine engine = start ? CoreFactory.CreateLightEngine() : Static(reason).Engine;
+
+        Assert.Equal(Smooth(firstDt / fade), engine.Update(firstDt, Loud, Palette.Default, showing, false).Visibility, 1e-6f);
+        float second = engine.Update(longDt, Loud, Palette.Default, showing, false).Visibility;
+        output.WriteLine($"{reason}: {firstDt * 1000:F2} ms then {longDt * 1000:F0} ms → Visibility {second:E2}");
+        Assert.Equal(Smooth((firstDt + Dt) / fade), second, 1e-5f);
+        Assert.True(second > HiddenVisibility);
+        // Once the steps since waking reach 1/60 s, ordinary steps count in full again (up to 0.1 s).
+        float third = engine.Update(longDt, Loud, Palette.Default, showing, false).Visibility;
+        Assert.Equal(Smooth(MathF.Min(1, (firstDt + Dt + MathF.Min(longDt, 0.1f)) / fade)), third, 1e-5f);
     }
 
     [Theory]
