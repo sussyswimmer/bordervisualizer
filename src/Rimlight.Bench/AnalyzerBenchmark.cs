@@ -76,8 +76,8 @@ internal static class AnalyzerBenchmark
         if (offset >= usable) offset = 0;
     }
 
-    // 20 s of audio, looped. "idle" has none: every frame gets an empty span.
-    private static float[] Signal(string scenario, int sampleRate)
+    // 20 s of audio, looped. "idle" has none: every frame gets an empty span. FrameBenchmark plays "music" too.
+    internal static float[] Signal(string scenario, int sampleRate)
     {
         var track = new SyntheticTrackOptions { SampleRate = sampleRate, Seconds = 20 };
         return scenario switch
