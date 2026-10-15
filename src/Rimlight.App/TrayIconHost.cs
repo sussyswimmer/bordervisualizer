@@ -34,7 +34,9 @@ internal sealed class TrayIconHost : IDisposable
         toolTipSuffix = DpiAwareness.IsPerMonitorV2() ? "" : " (warning: not Per-Monitor V2 DPI aware)";
         var menu = new ContextMenu();
 
-        glowOn = new MenuItem { Header = "Glow on" };
+        // Checkable, not only checked: WPF exposes the on/off state to screen readers only then. Refresh() resets
+        // the check marks from the settings each time the menu opens, so WPF's own toggle on click is harmless.
+        glowOn = new MenuItem { Header = "Glow on", IsCheckable = true };
         glowOn.Click += (_, _) => Update(s => s with { Enabled = !s.Enabled });
         menu.Items.Add(glowOn);
 
@@ -71,6 +73,8 @@ internal sealed class TrayIconHost : IDisposable
         // H.NotifyIcon's default puts the whole process on EcoQoS and Idle priority class, which would starve
         // the render thread and audio capture.
         icon.ForceCreate(enablesEfficiencyMode: false);
+        // Explorer restarted. Raised on this thread, after H.NotifyIcon has put the icon back.
+        icon.TrayIcon.MessageWindow.TaskbarCreated += (_, _) => OnTaskbarCreated();
     }
 
     public void Dispose() => icon.Dispose();
@@ -79,30 +83,54 @@ internal sealed class TrayIconHost : IDisposable
     public void SetNowPlaying(NowPlaying? track)
     {
         string text = TrayToolTip.Build(track, toolTipSuffix);
-        if (text == icon.ToolTipText) return;
+        // TrayIcon.ToolTip is the text the shell last accepted. After a refused update the property already holds the
+        // new text, so setting it again would change nothing: the icon is updated directly then.
+        if (text == icon.TrayIcon.ToolTip) return;
         try
         {
-            icon.ToolTipText = text;
+            if (text == icon.ToolTipText) icon.TrayIcon.UpdateToolTip(text);
+            else icon.ToolTipText = text;
         }
         catch (InvalidOperationException exception)
         {
-            // H.NotifyIcon throws when Shell_NotifyIcon refuses the change (Explorer restarting); the next track retries.
+            // H.NotifyIcon throws when Shell_NotifyIcon refuses the change (Explorer restarting); TaskbarCreated or the
+            // next track retries.
             Trace.WriteLine($"[Tray] Updating the tooltip failed: {exception.Message}");
+        }
+    }
+
+    // The icon came back with the last tooltip the shell accepted; a newer one may have been refused meanwhile. The
+    // media session manager may have gone away with Explorer, so it is asked again too.
+    private void OnTaskbarCreated()
+    {
+        try
+        {
+            app.Media?.Refresh();
+            SetNowPlaying(app.Media?.Current);
+        }
+        catch (Exception exception)
+        {
+            // This runs inside the icon's window procedure, where an exception would end the app.
+            Trace.WriteLine($"[Tray] Restoring the tooltip failed: {exception}");
         }
     }
 
     private (MenuItem, AnimationMode) Choice(MenuItem parent, string header, AnimationMode mode)
     {
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, IsCheckable = true };
         item.Click += (_, _) => Update(s => s with { Animation = mode });
         parent.Items.Add(item);
         return (item, mode);
     }
 
+    // "From album art" also turns Override album color off (every preset sets it, H-009), so it always brings the
+    // album colors back.
     private (MenuItem, ColorMode) ColorChoice(MenuItem parent, string header, ColorMode mode)
     {
         var item = new MenuItem { Header = header };
-        item.Click += (_, _) => Update(s => s with { ColorMode = mode });
+        item.Click += (_, _) => Update(s => mode == ColorMode.AlbumArt
+            ? s with { ColorMode = mode, OverrideAlbumColor = false }
+            : s with { ColorMode = mode });
         parent.Items.Add(item);
         return (item, mode);
     }
@@ -115,7 +143,11 @@ internal sealed class TrayIconHost : IDisposable
         Settings current = app.SettingsService.Current;
         glowOn.IsChecked = current.Enabled;
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
-        foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
+        // The colors the glow uses: with Override album color, the manual ones in Album Art mode too.
+        ColorMode colors = current.ColorMode == ColorMode.AlbumArt && !current.OverrideAlbumColor
+            ? ColorMode.AlbumArt
+            : ColorMode.Manual;
+        foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = colors == mode;
 #if DEBUG
         debug.Refresh(current);
 #endif
