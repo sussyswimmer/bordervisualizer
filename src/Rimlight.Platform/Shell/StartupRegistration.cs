@@ -83,6 +83,8 @@ public static class StartupRegistration
         if (string.IsNullOrEmpty(process)) return null;
         if (!IsInstalled(process)) return process;
         string root = Path.GetDirectoryName(Path.GetDirectoryName(process)!)!;
+        // vpk names the launcher after the package title (--packTitle), which build/pack.ps1 sets to the app's name, the
+        // exe's name too. It passes its arguments on (Update.exe start -- <arguments>), so --background reaches the app.
         string launcher = Path.Combine(root, Path.GetFileName(process));
         return File.Exists(launcher) ? launcher : process; // current\ is stable too, just not the documented entry point
     }
