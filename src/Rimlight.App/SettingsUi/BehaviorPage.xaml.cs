@@ -180,7 +180,7 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
         bool valid = HotkeyGesture.TryCreate(modifiers, virtualKey, out HotkeyGesture gesture);
         // A Ctrl+Alt combination that a keyboard layout types as AltGr would only be refused on registration (K6).
         bool typesCharacter = valid && GlobalHotkey.TypesCharacter(gesture);
-        if (valid && !typesCharacter && !TakenFromApps(gesture))
+        if (valid && !typesCharacter && !ShortcutChoice.TakenFromApps(gesture))
         {
             string text = gesture.ToString();
             recording = false; // the new shortcut is registered by the settings change, not by resuming the old one
@@ -202,19 +202,6 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
             : needsModifier ? "Add Ctrl, Alt or Win to that key, for example Ctrl+Alt+L."
             : "Windows uses that combination itself. Pick a different one.");
         RecordButton.Content = "Press a shortcut…";
-    }
-
-    // Ctrl+C, Ctrl+Z, Ctrl+Tab, Ctrl+Shift+T, Alt+F, Ctrl+Left and the like: a global shortcut takes them from every
-    // app, and the recorder makes them easy to press out of habit. Keys apps use for typing, editing and moving need
-    // Win, or Ctrl and Alt together. Only the recorder refuses them; a shortcut already in the settings still works.
-    private static bool TakenFromApps(HotkeyGesture gesture)
-    {
-        HotkeyModifiers modifiers = gesture.Modifiers;
-        if (modifiers.HasFlag(HotkeyModifiers.Win) || modifiers.HasFlag(HotkeyModifiers.Ctrl | HotkeyModifiers.Alt)) return false;
-        return gesture.VirtualKey is >= 0x30 and <= 0x39 or >= 0x41 and <= 0x5A // digits, letters
-            or 0x08 or 0x09 or 0x0D or 0x20                                     // Backspace, Tab, Enter, Space
-            or >= 0x21 and <= 0x28 or 0x2D or 0x2E                              // PageUp to the arrows, Insert, Delete
-            or >= 0xBA and <= 0xC0 or >= 0xDB and <= 0xDE or 0xE2;              // punctuation
     }
 
     private static HotkeyModifiers Modifiers(ModifierKeys keys)
