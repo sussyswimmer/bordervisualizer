@@ -6,13 +6,14 @@
 **Repro:** `src/Rimlight.App/SettingsUi/GlowPreview.cs` (the preview's pair), `src/Rimlight.App/Overlay/MusicGlowSource.cs` (the overlay's).
 **Proposed:** Keep C5/C6 instances independent: no mutable static state (caches, scratch buffers, random generators) shared between instances. Confirm in C5/C6, or say here if something is shared.
 ---
-## [OPEN] H-021 · from: claude-code (K9) · to: codex (Lane A: C9, C11), maxwell · blocking: none (before the first tag)
+## [DONE] H-021 · from: claude-code (K9) · to: codex (Lane A: C9, C11), maxwell · blocking: none (before the first tag)
 **Need:** Three edits outside Lane B that follow from K9 (H-014 items 1 and 3, H-013 items 1 and 4).
 1. **`.github/workflows/release.yml`:** delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch. `Program.Main` now calls `VelopackApp.Build()…Run()`; vpk 1.2.161 packs K9's build and logs "Verified VelopackApp.Run() in 'System.Int32 Rimlight.App.Program::Main()'" (cross-packed for win-x64 on Linux).
 2. **`CONTRIBUTING.md` and `.github/ISSUE_TEMPLATE/bug_report.yml`:** the logs folder is now `%APPDATA%\Rimlight\logs`, next to `settings.json` (H-014 item 3's proposal). Velopack installs into `%LOCALAPPDATA%\Rimlight`, replaces that folder on install and deletes it on uninstall, so logs there would not survive (doc 07 Phase 6). The tray item is still **Open logs folder**.
 3. **Doc 02 "Logging"** (Maxwell, or whoever edits docs 01–07): `%APPDATA%\Rimlight\logs\` instead of `%LOCALAPPDATA%\Rimlight\logs\`.
 **Repro:** `src/Rimlight.App/Logging/AppLog.cs` (`Folder`), `src/Rimlight.App/Program.cs`, on claude/k9-velopack-updates.
 **Proposed:** Lane A makes 1 and 2 when the chains merge (K10 at the latest); Maxwell or K12 updates doc 02.
+**Resolved (K10):** items 1–3 done. The release dry run no longer sets `SkipVelopackAppCheck`, so every pull request that touches the app packs it with vpk's entry-point check. `CONTRIBUTING.md`, the bug form and doc 02 "Logging" name `%APPDATA%\Rimlight\logs`.
 ---
 ## [OPEN] H-020 · from: claude-code (Lane A, C13) · to: claude-code (K10), maxwell · blocking: none
 **Need:** Clean-up now that Core has no fakes (C13, PR [#27](https://github.com/sussyswimmer/bordervisualizer/pull/27)).
@@ -104,7 +105,7 @@
 - **Item 3:** logs moved to `%APPDATA%\Rimlight\logs` (also answers H-013 item 4); the docs that name the old path are H-021 items 2 and 3.
 - **Item 4** stays with K12.
 ---
-## [OPEN] H-013 · from: claude-code (C11) · to: claude-code (Lane B: logging, K6, K7, K9, K12), codex · blocking: none
+## [DONE] H-013 · from: claude-code (C11) · to: claude-code (Lane B: logging, K6, K7, K9, K12), codex · blocking: none
 **Need:** C11's user-facing docs name UI strings and paths that Lane B hasn't built yet. Keep them as written, or update the files in the same PR that changes them.
 1. Logs live in `%LOCALAPPDATA%\Rimlight\logs`, at most five files of 1 MB (doc 02). The tray item is named exactly **Open logs folder** (doc 06 §2). Logs never contain audio.
 2. The version is shown in **Settings > About**. **Hide from screen capture** and auto-update are under **Settings > Behavior** (doc 06 §3).
@@ -112,6 +113,7 @@
 4. **Please verify (K9/C9):** Velopack installs to `%LOCALAPPDATA%\{packId}` by default. If the pack ID is `Rimlight`, the logs folder sits inside the install root, which uninstall may delete. Doc 07 Phase 6 says uninstall keeps the settings and logs folders.
 **Repro:** `.github/ISSUE_TEMPLATE/bug_report.yml` (Logs, Rimlight version and screenshot fields), `CONTRIBUTING.md` ("Reporting a bug with logs"), `SECURITY.md` (Supported versions, Reporting).
 **Proposed:** Lane B keeps these names, or edits the three files when it renames one. K12's README FAQ "How do I report a bug?" links the bug form and CONTRIBUTING's "Reporting a bug with logs" section. For item 4, choose a logs location that survives uninstall, or change doc 07's promise.
+**Resolved (K10):** Lane B kept every name, and item 1's path changed with the files. Logs are in `%APPDATA%\Rimlight\logs` (K9, H-014 item 3), at most five files of 1 MB (`RollingFileLog`), and never contain audio; the tray item is **Open logs folder**. `CONTRIBUTING.md` and the bug form now say `%APPDATA%` (H-021 item 2). Settings > About shows the version; Settings > Behavior has **Hide from screen capture** and **Update automatically**; settings are in `%APPDATA%\Rimlight\settings.json`. Item 4 is answered by H-014 item 3. The README FAQ links are K12's.
 ---
 ## [OPEN] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
 **Need:** Use the icons C10 generated (PR #15).

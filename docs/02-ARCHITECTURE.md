@@ -87,7 +87,7 @@ public readonly record struct LightState(
 - Create a hidden message-only window (`HWND_MESSAGE`) in Platform to receive these messages.
 
 ## Logging
-- `Microsoft.Extensions.Logging` with a small rolling file sink in `%LOCALAPPDATA%\Rimlight\logs\` (max 5 files × 1 MB).
+- `Microsoft.Extensions.Logging` with a small rolling file sink in `%APPDATA%\Rimlight\logs\`, next to `settings.json` (max 5 files × 1 MB). Not under `%LOCALAPPDATA%\Rimlight`: Velopack installs the app there, replaces that folder on install and deletes it on uninstall, and the logs must stay (doc 07 Phase 6).
 - Never log in the audio callback or the per-frame path, except rate-limited errors.
 - Add a tray item "Open logs folder" to help with bug reports.
 

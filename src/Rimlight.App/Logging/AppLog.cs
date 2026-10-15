@@ -18,9 +18,9 @@ internal static class AppLog
     private static RollingFileLog? file;
 
     /// <summary>
-    /// <c>%APPDATA%\Rimlight\logs</c>, next to the settings, the folder the tray's "Open logs folder" shows. Not doc 02's
-    /// <c>%LOCALAPPDATA%\Rimlight</c>: Velopack installs the app into that folder, replaces it when installing and deletes
-    /// it when uninstalling, and the logs must stay (doc 07 Phase 6).
+    /// <c>%APPDATA%\Rimlight\logs</c>, next to the settings (doc 02 "Logging"), the folder the tray's "Open logs folder"
+    /// shows. Not under <c>%LOCALAPPDATA%\Rimlight</c>: Velopack installs the app into that folder, replaces it when
+    /// installing and deletes it when uninstalling, and the logs must stay (doc 07 Phase 6).
     /// </summary>
     public static string Folder { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppInfo.Name, "logs");
