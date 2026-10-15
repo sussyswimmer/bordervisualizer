@@ -10,14 +10,34 @@ internal sealed record FrameBenchmarkOptions
     /// <summary>Keep warming up at least this long, so tiered JIT has installed optimized code before timing.</summary>
     public double MinWarmupSeconds { get; init; } = 0.5;
     public int Frames { get; init; } = 10000;
+    /// <summary>
+    /// 0: every frame gets exactly one frame of audio (rate / fps samples), which the analyzer handles in one step.
+    /// Above 0: the audio arrives in whole packets this long, as the loopback capture delivers it (doc 03 §1: about
+    /// 10 ms), and each frame gets the packets that arrived since the last one: at 60 fps one or two, and two packets
+    /// are two analyzer steps (C2), so a frame costs more on average.
+    /// </summary>
+    public double PacketSeconds { get; init; }
 }
 
-internal sealed record FrameBenchmarkResult(int SampleRate, string Scenario, int SamplesPerFrame, StageCosts Costs,
+/// <summary>One row of the frame benchmark.</summary>
+/// <param name="SampleRate">The capture rate.</param>
+/// <param name="Scenario">The scenario.</param>
+/// <param name="SamplesPerFrame">Samples per frame on average (rate / fps).</param>
+/// <param name="PacketSamples">The packet length in samples; 0 when each frame gets exactly one frame of audio.</param>
+/// <param name="Costs">The measured frames' cost per stage.</param>
+/// <param name="BytesPerFrame">Bytes allocated per frame.</param>
+/// <param name="Gen0">Gen 0 GCs while measuring.</param>
+/// <param name="Gen1">Gen 1 GCs while measuring.</param>
+/// <param name="Gen2">Gen 2 GCs while measuring.</param>
+/// <param name="Refills">Measured frames that refilled the gradient.</param>
+/// <param name="Beats">Beats detected while measuring.</param>
+internal sealed record FrameBenchmarkResult(int SampleRate, string Scenario, int SamplesPerFrame, int PacketSamples, StageCosts Costs,
     double BytesPerFrame, int Gen0, int Gen1, int Gen2, long Refills, int Beats);
 
 // One render-thread frame as the app runs it (FramePipeline = MusicGlowSource.NextFrame: analyzer, palette blender +
 // gradient, light engine), per stage, at one capture rate. The music is rendered before timing starts and fed in exact
-// frame-sized chunks, so only the frame is measured. Allocations are counted around each NextFrame call alone
+// frame-sized chunks (the analyzer's one-step best case) or, with PacketSeconds, in whole packets on the packet clock
+// (what the app gets), so only the frame is measured. Allocations are counted around each NextFrame call alone
 // (GC.GetAllocatedBytesForCurrentThread), so they must be 0.
 //   steady     the album colors settled during warm-up: the blender has nothing to do and the gradient isn't refilled.
 //   crossfade  new album colors every 0.8 s with an 800 ms fade, so every frame crossfades and refills the gradient:
@@ -38,12 +58,13 @@ internal static class FrameBenchmark
     {
         if (Array.IndexOf(Scenarios, scenario) < 0) throw new ArgumentOutOfRangeException(nameof(scenario));
         int frameSamples = (int)Math.Round(sampleRate / options.Fps);
+        int packet = options.PacketSeconds > 0 ? Math.Max(1, (int)Math.Round(options.PacketSeconds * sampleRate)) : 0;
         float dt = (float)(1 / options.Fps);
         float[] signal = AnalyzerBenchmark.Signal("music", sampleRate);
-        int usable = Math.Max(1, signal.Length - frameSamples);
+        int usable = Math.Max(1, signal.Length - (packet > 0 ? (frameSamples / packet + 2) * packet : frameSamples));
         int changeEvery = scenario == "crossfade" ? Math.Max(1, (int)Math.Round(FramePipeline.AlbumFade.TotalSeconds * options.Fps)) : int.MaxValue;
         Palette[] albums = Albums();
-        SettingsSnapshot settings = SettingsSnapshot.For(new Settings());
+        var settings = new Settings();
         var pipeline = new FramePipeline(settings, Palette.Default);
         int offset = 0;
         long frame = 0;
@@ -64,7 +85,7 @@ internal static class FrameBenchmark
             costs.Record(pipeline.Ticks);
             if (pipeline.Refilled) refills++;
         }
-        return new FrameBenchmarkResult(sampleRate, scenario, frameSamples, costs, allocated / (double)options.Frames,
+        return new FrameBenchmarkResult(sampleRate, scenario, frameSamples, packet, costs, allocated / (double)options.Frames,
             GC.CollectionCount(0) - gen0, GC.CollectionCount(1) - gen1, GC.CollectionCount(2) - gen2, refills,
             pipeline.Analyzer.Diagnostics.BeatCount - beatsBefore);
 
@@ -72,11 +93,15 @@ internal static class FrameBenchmark
         {
             // The first frame opens the capture; the album colors change every changeEvery frames (steady: once, at 0).
             Palette album = albums[(int)(n / changeEvery % albums.Length)];
-            pipeline.NextFrame(signal.AsSpan(offset, frameSamples), sampleRate, dt, settings, album, paused: false, captureChanged: n == 0);
-            offset += frameSamples;
+            int count = packet > 0 ? (int)(Arrived(n + 1) - Arrived(n)) : frameSamples;
+            pipeline.NextFrame(signal.AsSpan(offset, count), sampleRate, dt, settings, album, paused: false, captureChanged: n == 0);
+            offset += count;
             if (offset >= usable) offset = 0;
             n++;
         }
+
+        // The samples of the packets that have arrived when frame `frame` starts.
+        long Arrived(long frame) => (long)(frame * (double)sampleRate / options.Fps) / packet * packet;
     }
 
     // Eight distinct glow-like palettes, built before timing.

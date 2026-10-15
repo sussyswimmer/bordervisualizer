@@ -19,13 +19,17 @@ internal sealed record SoakOptions
     public ulong Seed { get; init; } = 1;
     /// <summary>Simulated seconds processed before measuring starts (JIT and tier-up happen there).</summary>
     public double WarmupSeconds { get; init; } = 5;
-    /// <summary>Simulated minutes between progress lines; 0 = ten lines per run.</summary>
+    /// <summary>Simulated minutes between progress lines; 0 = ten lines per run. At most
+    /// <see cref="SoakRun.MaxProgressLines"/> lines: their snapshots are stored in an array sized before the run.</summary>
     public double ReportEveryMinutes { get; init; }
     /// <summary>The day to simulate, at least <see cref="Minutes"/> long; null: <see cref="SoakSchedule.Generate"/>.</summary>
     public SoakSchedule? Schedule { get; init; }
     /// <summary>
     /// Wall-clock seconds <see cref="SoakSchedule.Scene"/> runs on a throwaway pipeline before the soak (at least once),
-    /// so every path is compiled, tiered up and has run its static initializers before anything is measured.
+    /// so every path of the frame is compiled and has run its static initializers before anything is measured. The
+    /// paths the scene takes only a few times are not tiered up yet (tier 1 takes about 30 calls, twice over with
+    /// dynamic PGO), and a longer warm-up barely changes the soak's one-time growth (docs/PERF.md compares 0.5, 10 and
+    /// 20 s), so the flatness check starts at <see cref="SettleMinutes"/> instead.
     /// </summary>
     public double JitWarmupSeconds { get; init; } = 0.5;
     /// <summary>Simulated seconds between memory readings in the measured part (the progress lines read it too).</summary>
@@ -39,7 +43,9 @@ internal sealed record SoakOptions
     public double SettleMinutes { get; init; } = 60;
 }
 
-internal sealed record SoakSnapshot(double SimulatedSeconds, long Frames, double MeanNs, double P99Ns, long MaxNs,
+/// <summary>A progress line's numbers. A struct, stored in an array allocated before the run, so the progress lines add
+/// nothing to the managed heap the soak measures.</summary>
+internal readonly record struct SoakSnapshot(double SimulatedSeconds, long Frames, double MeanNs, double P99Ns, long MaxNs,
     double BytesPerFrame, long ManagedHeapBytes, long WorkingSetBytes, int Gen0, int Gen1, int Gen2, int Beats, int Tracks);
 
 /// <summary>A memory reading.</summary>
@@ -61,18 +67,25 @@ internal readonly record struct MemoryReading(long WorkingSetBytes, long Managed
 // SoakSchedule: tracks with new album colors, silent gaps with and without packets, settings edits, pauses, the hotkey
 // and stalls. It runs as fast as the CPU allows: 8 simulated hours take minutes.
 //
-// Only NextFrame is timed and allocation-counted (GC.GetAllocatedBytesForCurrentThread around it). Generating the
-// audio, applying events and reading memory happen between frames. The first WarmupSeconds are processed but not
-// measured; before them, SoakSchedule.Scene runs on a throwaway pipeline so one-time costs (JIT, tier-up, static
-// initializers) of paths the soak reaches only hours in don't count either. Memory: the working set and managed heap
-// are read every MemoryEverySeconds (allocation-free, into a MemoryLog), and the live heap after a full GC at the end
-// of warm-up and at the end; see SoakReport for the pass criteria.
+// Only NextFrame is timed and allocation-counted (GC.GetAllocatedBytesForCurrentThread around it; what applying a
+// settings edit allocates is counted apart, see FramePipeline). Generating the audio, applying events, reading memory
+// and the progress lines happen between frames and allocate nothing either (HarnessBytes checks it): the harness's own
+// garbage would grow the working set it measures. The first WarmupSeconds are processed but not measured; before
+// them, SoakSchedule.Scene runs on a throwaway pipeline so first-run costs (JIT, static initializers) of paths the
+// soak reaches only hours in don't count either. Rarely taken paths still tier up during the soak, which the memory
+// check allows for (SoakOptions.SettleMinutes). Memory: the working set and managed heap are read every
+// MemoryEverySeconds (allocation-free, into a MemoryLog), and the live heap after a full GC at the end of warm-up and
+// at the end; see SoakReport for the pass criteria.
 internal static class SoakRun
 {
     /// <summary>The loopback stream opens this long after the capture is asked for it.</summary>
     internal const double CaptureOpenSeconds = 0.1;
     /// <summary>The loopback ring holds this much audio (doc 03 §1), rounded up to a power of two samples.</summary>
     internal const double RingSeconds = 2;
+    /// <summary>The most progress lines one run takes (<see cref="SoakOptions.ReportEveryMinutes"/>).</summary>
+    public const int MaxProgressLines = 10_000;
+    /// <summary>The longest progress line <see cref="Format(SoakSnapshot, Span{char})"/> writes.</summary>
+    public const int MaxLineLength = 256;
 
     /// <summary>Runs a soak and returns its progress snapshots.</summary>
     /// <param name="options">The options.</param>
@@ -89,6 +102,8 @@ internal static class SoakRun
     {
         MemoryReading start = MemoryReading.Now();
         double seconds = options.Minutes * 60;
+        if (ProgressLines(options) > MaxProgressLines)
+            throw new ArgumentOutOfRangeException(nameof(options), $"ReportEveryMinutes gives more than {MaxProgressLines:N0} progress lines.");
         SoakSchedule schedule = options.Schedule ?? SoakSchedule.Generate(seconds, options.SampleRate, options.Seed);
         if (schedule.Seconds < seconds - 1e-9) throw new ArgumentException("The schedule is shorter than the run.", nameof(options));
 
@@ -99,7 +114,8 @@ internal static class SoakRun
         double jitWarmupWall = wall.Elapsed.TotalSeconds;
         double clockRead = StageCosts.ClockReadNanoseconds();
         // The progress line's formatting runs first an hour or so in; compile it now, outside the measured part.
-        _ = Format(new SoakSnapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+        Span<char> line = stackalloc char[MaxLineLength];
+        _ = Format(default, line);
 
         wall.Restart();
         var simulation = new Simulation(schedule, options, seconds, measure: true, progress);
@@ -108,15 +124,103 @@ internal static class SoakRun
         return simulation.Report(start, wallSeconds, jitWarmupWall, clockRead);
     }
 
+    /// <summary>The most progress lines a run takes: one every <see cref="SoakOptions.ReportEveryMinutes"/> after
+    /// warm-up, and one at the end.</summary>
+    /// <param name="options">The options.</param>
+    /// <returns>The count, at most <see cref="int.MaxValue"/>.</returns>
+    public static int ProgressLines(SoakOptions options)
+    {
+        double end = options.Minutes * 60;
+        return ProgressLines(end, WarmupSeconds(options, end), ReportEverySeconds(options));
+    }
+
+    private static int ProgressLines(double end, double warmup, double reportEvery) =>
+        (int)Math.Min(int.MaxValue, Math.Ceiling(Math.Max(0, end - warmup) / reportEvery) + 1);
+
+    private static double WarmupSeconds(SoakOptions options, double end) => Math.Min(options.WarmupSeconds, end / 2);
+
+    private static double ReportEverySeconds(SoakOptions options) =>
+        (options.ReportEveryMinutes > 0 ? options.ReportEveryMinutes : options.Minutes / 10) * 60;
+
+    /// <summary>A progress line, as a new string.</summary>
+    /// <param name="s">The snapshot.</param>
+    /// <returns>The line.</returns>
     public static string Format(SoakSnapshot s)
     {
-        CultureInfo c = CultureInfo.InvariantCulture;
+        Span<char> line = stackalloc char[MaxLineLength];
+        return new string(line[..Format(s, line)]);
+    }
+
+    /// <summary>Writes a progress line into a buffer without allocating, for lines printed while a soak runs.</summary>
+    /// <param name="s">The snapshot.</param>
+    /// <param name="destination">At least <see cref="MaxLineLength"/> characters.</param>
+    /// <returns>The line's length.</returns>
+    public static int Format(SoakSnapshot s, Span<char> destination)
+    {
         var simulated = TimeSpan.FromSeconds(s.SimulatedSeconds);
-        return string.Create(c,
-            $"{(int)simulated.TotalHours}:{simulated.Minutes:00}:{simulated.Seconds:00}  {s.Frames,9} frames  " +
-            $"mean {s.MeanNs / 1000,6:F1} µs  p99 {s.P99Ns / 1000,6:F1} µs  max {s.MaxNs / 1000.0,7:F1} µs  " +
-            $"{s.BytesPerFrame,5:F1} B/frame  heap {s.ManagedHeapBytes / 1048576.0,6:F1} MB  " +
-            $"working set {s.WorkingSetBytes / 1048576.0,6:F1} MB  GCs {s.Gen0}/{s.Gen1}/{s.Gen2}  beats {s.Beats}  tracks {s.Tracks}");
+        var line = new LineWriter(destination);
+        line.Value((int)simulated.TotalHours);
+        line.Text(":");
+        line.Value(simulated.Minutes, 0, "00");
+        line.Text(":");
+        line.Value(simulated.Seconds, 0, "00");
+        line.Text("  ");
+        line.Value(s.Frames, 9);
+        line.Text(" frames  mean ");
+        line.Value(s.MeanNs / 1000, 6, "F1");
+        line.Text(" µs  p99 ");
+        line.Value(s.P99Ns / 1000, 6, "F1");
+        line.Text(" µs  max ");
+        line.Value(s.MaxNs / 1000.0, 7, "F1");
+        line.Text(" µs  ");
+        line.Value(s.BytesPerFrame, 5, "F1");
+        line.Text(" B/frame  heap ");
+        line.Value(s.ManagedHeapBytes / 1048576.0, 6, "F1");
+        line.Text(" MB  working set ");
+        line.Value(s.WorkingSetBytes / 1048576.0, 6, "F1");
+        line.Text(" MB  GCs ");
+        line.Value(s.Gen0);
+        line.Text("/");
+        line.Value(s.Gen1);
+        line.Text("/");
+        line.Value(s.Gen2);
+        line.Text("  beats ");
+        line.Value(s.Beats);
+        line.Text("  tracks ");
+        line.Value(s.Tracks);
+        return line.Length;
+    }
+
+    // Writes with TryFormat calls into a caller's buffer. An interpolated string would allocate the string, and on .NET
+    // 8.0.32 even MemoryExtensions.TryWrite's handler boxed each value-type hole (24 B a hole, measured here).
+    private ref struct LineWriter
+    {
+        private readonly Span<char> buffer;
+
+        public LineWriter(Span<char> buffer) => this.buffer = buffer;
+
+        public int Length { get; private set; }
+
+        public void Text(string text)
+        {
+            text.CopyTo(buffer[Length..]);
+            Length += text.Length;
+        }
+
+        // Right-aligned in `width` characters, like an interpolation's alignment.
+        public void Value<T>(T value, int width = 0, string? format = null) where T : ISpanFormattable
+        {
+            Span<char> rest = buffer[Length..];
+            if (!value.TryFormat(rest, out int written, format, CultureInfo.InvariantCulture))
+                throw new ArgumentException("The progress line doesn't fit its buffer.");
+            if (written < width)
+            {
+                rest[..written].CopyTo(rest[(width - written)..]);
+                rest[..(width - written)].Fill(' ');
+                written = width;
+            }
+            Length += written;
+        }
     }
 
     // One run over a schedule: the simulated capture, media service, overlay loop and render thread.
@@ -141,7 +245,7 @@ internal static class SoakRun
         private double captureOpensAt;
 
         // The app's inputs.
-        private SettingsSnapshot settings;
+        private Settings settings;
         private bool paused;
         private Palette? album;
         private int albumScan;               // the next segment whose album the media service publishes
@@ -150,11 +254,13 @@ internal static class SoakRun
 
         // Measurements.
         private readonly StageCosts costs = new();
-        private readonly List<SoakSnapshot> snapshots;
+        private readonly SoakSnapshot[] snapshots;
+        private int snapshotCount;
         private readonly long[] framesByMotion = new long[4];
         private readonly double[] secondsByPace = new double[3];
         private bool measuring;
         private long frames, warmupFrames, allocated, allocatingFrames, maxFrameBytes;
+        private long settingsEdits, allocatingEdits, editBytes, threadBytesAtStart;
         private long refills, paletteSets, resets, silentFrames, hiddenFrames, staticFrames, stallFrames;
         private int beats, lastBeatCount, tracks;
         private int gen0, gen1, gen2;
@@ -169,8 +275,8 @@ internal static class SoakRun
             this.end = end;
             this.measure = measure;
             this.progress = progress;
-            warmup = Math.Min(options.WarmupSeconds, end / 2);
-            reportEvery = (options.ReportEveryMinutes > 0 ? options.ReportEveryMinutes : options.Minutes / 10) * 60;
+            warmup = WarmupSeconds(options, end);
+            reportEvery = ReportEverySeconds(options);
             fullInterval = 1 / options.Fps;
             settings = schedule.Initial;
             pipeline = new FramePipeline(settings, Palette.Default);
@@ -178,7 +284,8 @@ internal static class SoakRun
             packet = options.PacketSeconds > 0 ? Math.Max(1, (long)Math.Round(options.PacketSeconds * options.SampleRate)) : 1;
             ringCapacity = (long)BitOperations.RoundUpToPowerOf2((uint)Math.Ceiling(RingSeconds * options.SampleRate));
             // Everything the run holds is allocated and touched here, before the memory baseline: the buffer's pages
-            // would otherwise be faulted in one by one as the first long stall fills it, which reads as growth.
+            // would otherwise be faulted in one by one as the first long stall fills it, which reads as growth. The
+            // same goes for the snapshots and the memory log (a large array can come from fresh, untouched pages).
             buffer = new float[ringCapacity];
             buffer.AsSpan().Clear();
             tracksBySegment = new SyntheticTrack?[schedule.Segments.Count];
@@ -186,8 +293,11 @@ internal static class SoakRun
             {
                 if (schedule.Segments[i].Track is { } track) tracksBySegment[i] = new SyntheticTrack(track);
             }
-            snapshots = new List<SoakSnapshot>((int)Math.Min(100_000, end / Math.Max(reportEvery, 1) + 2));
-            memory = new MemoryLog((int)Math.Min(1_000_000, end / Math.Max(options.MemoryEverySeconds, 1) + snapshots.Capacity + 4));
+            int lines = measure ? ProgressLines(end, warmup, reportEvery) : 0;
+            snapshots = new SoakSnapshot[lines];
+            snapshots.AsSpan().Clear();
+            // A reading every MemoryEverySeconds, one per progress line, and the first and last.
+            memory = new MemoryLog(measure ? (int)Math.Ceiling(end / Math.Max(options.MemoryEverySeconds, 1)) + lines + 2 : 2);
         }
 
         public void Run()
@@ -270,7 +380,7 @@ internal static class SoakRun
         // closed otherwise. Fills `buffer` with what arrived since the last frame, in whole packets; returns the count.
         private int Capture(double now, out int sampleRate)
         {
-            bool listen = FramePipeline.Listens(settings.Settings, paused);
+            bool listen = FramePipeline.Listens(settings, paused);
             if (listen != captureActive)
             {
                 captureActive = listen;
@@ -390,19 +500,28 @@ internal static class SoakRun
             GC.Collect();
             GC.WaitForPendingFinalizers();
             liveHeapAfterWarmup = GC.GetTotalMemory(true);
+            threadBytesAtStart = GC.GetAllocatedBytesForCurrentThread();
             memory.Add(now, MemoryReading.Now());
             (gen0, gen1, gen2) = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
         }
 
+        // `bytes` is the whole frame's allocation; applying a settings edit is counted apart (FramePipeline.SettingsBytes).
         private void Record(FrameMotion motion, Pace pace, long bytes, bool reset, double now, double untilNext)
         {
             frames++;
             costs.Record(pipeline.Ticks);
-            allocated += bytes;
-            if (bytes > 0)
+            long frameBytes = bytes - pipeline.SettingsBytes;
+            allocated += frameBytes;
+            if (frameBytes > 0)
             {
                 allocatingFrames++;
-                maxFrameBytes = Math.Max(maxFrameBytes, bytes);
+                maxFrameBytes = Math.Max(maxFrameBytes, frameBytes);
+            }
+            if (pipeline.SettingsApplied)
+            {
+                settingsEdits++;
+                editBytes += pipeline.SettingsBytes;
+                if (pipeline.SettingsBytes > 0) allocatingEdits++;
             }
             framesByMotion[(int)motion]++;
             secondsByPace[(int)pace] += Math.Max(0, untilNext);
@@ -427,13 +546,14 @@ internal static class SoakRun
             var snapshot = new SoakSnapshot(now, frames, frame.Mean, frame.Percentile(0.99), frame.Max,
                 frames == 0 ? 0 : allocated / (double)frames, reading.ManagedHeapBytes, reading.WorkingSetBytes,
                 GC.CollectionCount(0) - gen0, GC.CollectionCount(1) - gen1, GC.CollectionCount(2) - gen2, beats, tracks);
-            snapshots.Add(snapshot);
+            snapshots[snapshotCount++] = snapshot;
             progress?.Invoke(snapshot);
             while (nextReport <= now) nextReport += reportEvery;
         }
 
         public SoakReport Report(MemoryReading start, double wallSeconds, double jitWarmupWallSeconds, double clockReadNs)
         {
+            long harnessBytes = GC.GetAllocatedBytesForCurrentThread() - threadBytesAtStart - allocated - editBytes;
             if (memory.Count == 0 || memory.TimeAt(memory.Count - 1) < end) memory.Add(end, MemoryReading.Now());
             (int g0, int g1, int g2) = (GC.CollectionCount(0) - gen0, GC.CollectionCount(1) - gen1, GC.CollectionCount(2) - gen2);
             GC.Collect();
@@ -446,13 +566,17 @@ internal static class SoakRun
                 Schedule = schedule,
                 SimulatedSeconds = end,
                 MeasuredSeconds = end - measuredFrom,
-                Snapshots = snapshots,
+                Snapshots = new ArraySegment<SoakSnapshot>(snapshots, 0, snapshotCount),
                 Costs = costs,
                 Frames = frames,
                 WarmupFrames = warmupFrames,
                 AllocatedBytes = allocated,
                 AllocatingFrames = allocatingFrames,
                 MaxFrameBytes = maxFrameBytes,
+                SettingsEdits = settingsEdits,
+                AllocatingEdits = allocatingEdits,
+                SettingsEditBytes = editBytes,
+                HarnessBytes = harnessBytes,
                 Gen0 = g0,
                 Gen1 = g1,
                 Gen2 = g2,

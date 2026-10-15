@@ -52,7 +52,7 @@ public sealed class SoakTests
         Assert.Equal("WhenSilent Hide", edits[0].Label);
         foreach (string name in new[] { "WhenSilent IdleGlow", "Brightness", "Sensitivity", "PrimaryRatio" })
             Assert.Contains(edits, e => e.Label.StartsWith(name, StringComparison.Ordinal));
-        Assert.All(events.Where(e => e.Settings is not null), e => Assert.Equal(Math.Clamp(e.Settings!.Settings.Sensitivity, 0.25f, 2f), e.Settings.Tuning.Sensitivity));
+        Assert.All(events.Where(e => e.Settings is not null), e => Assert.InRange(e.Settings!.Sensitivity, 0.25f, 2f));
 
         SoakEvent[] stalls = events.Where(e => e.Kind == SoakEventKind.Stall).ToArray();
         Assert.InRange(stalls.Length, 60, 140);
@@ -75,7 +75,7 @@ public sealed class SoakTests
         {
             if (e.Label == "hotkey: off") enabled = false;
             if (e.Label == "hotkey: on") enabled = true;
-            Assert.Equal(enabled, e.Settings!.Settings.Enabled); // edits while the hotkey is off keep it off
+            Assert.Equal(enabled, e.Settings!.Enabled); // edits while the hotkey is off keep it off
         }
     }
 
@@ -94,7 +94,7 @@ public sealed class SoakTests
     [Fact]
     public void ScheduleRejectsHolesAndDisorder()
     {
-        SettingsSnapshot settings = SettingsSnapshot.For(new Settings());
+        var settings = new Settings();
         var track = new SyntheticTrackOptions { Seconds = 10 };
         Assert.Throws<ArgumentException>(() => new SoakSchedule(10, settings, [new SoakSegment(0, 5, SoakAudio.NoPackets)], []));
         Assert.Throws<ArgumentException>(() => new SoakSchedule(10, settings, [new SoakSegment(0, 5, SoakAudio.NoPackets), new SoakSegment(6, 5, SoakAudio.NoPackets)], []));
@@ -110,6 +110,8 @@ public sealed class SoakTests
     public void SceneTakesEveryPathOfTheFrameWithoutAllocating()
     {
         SoakSchedule scene = SoakSchedule.Scene(Rate);
+        char[] line = new char[SoakRun.MaxLineLength];
+        int lines = 0;
         SoakReport report = SoakRun.Execute(new SoakOptions
         {
             Minutes = scene.Seconds / 60,
@@ -118,10 +120,15 @@ public sealed class SoakTests
             JitWarmupSeconds = 0,
             ReportEveryMinutes = 0.25,
             MemoryEverySeconds = 5,
-        });
+        }, s => lines += SoakRun.Format(s, line) > 0 ? 1 : 0);
 
         Assert.True(report.AllocationFree, report.AllocationVerdict);
         Assert.Equal(0, report.AllocatingFrames);
+        Assert.Equal(5, report.SettingsEdits);       // WhenSilent, Sensitivity + ratio, hotkey off and on, WhenSilent
+        Assert.Equal(1, report.AllocatingEdits);     // the Sensitivity edit rebuilds the AudioTuning record, as in the app
+        Assert.True(report.SettingsEditBytes > 0);
+        Assert.Equal(0, report.HarnessBytes);        // nothing between the frames allocates, progress lines included
+        Assert.Equal(report.Snapshots.Count, lines);
         Assert.Equal(report.Frames, report.Costs.Count);
         Assert.Equal(scene.Seconds - 3, report.MeasuredSeconds, 1);
         Assert.Equal(report.MeasuredSeconds, report.SecondsByPace.Sum(), 1);
@@ -148,6 +155,7 @@ public sealed class SoakTests
         report.WriteSummary(text);
         Assert.Contains("PASS 0 B/frame", text.ToString());
         Assert.Contains("memory flat", text.ToString());
+        Assert.Contains("Settings edits: 5 applied by measured frames; applying them allocated", text.ToString());
         var markdown = new StringWriter();
         report.WriteMarkdown(markdown);
         Assert.Contains("| whole frame |", markdown.ToString());
@@ -184,6 +192,10 @@ public sealed class SoakTests
             AllocatedBytes = allocated,
             AllocatingFrames = allocated > 0 ? 1 : 0,
             MaxFrameBytes = allocated,
+            SettingsEdits = 0,
+            AllocatingEdits = 0,
+            SettingsEditBytes = 0,
+            HarnessBytes = 0,
             Gen0 = 0,
             Gen1 = 0,
             Gen2 = 0,
@@ -229,13 +241,13 @@ public sealed class SoakTests
     [Fact]
     public void PipelineRefillsAndReportsMotionLikeTheApp()
     {
-        SettingsSnapshot settings = SettingsSnapshot.For(new Settings());
+        var settings = new Settings();
         var pipeline = new FramePipeline(settings, Palette.Default);
         float[] music = SyntheticTrack.Render(new SyntheticTrackOptions { SampleRate = Rate, Seconds = 4, Bpm = 120 }.WithFullMix());
         var album = new Palette(new Rgb(1, 0, 0), new Rgb(0, 0, 1), "album");
         const float Dt = 1 / 60f;
         int offset = 0;
-        FrameMotion Frame(SettingsSnapshot s, Palette? latest, bool paused = false, bool changed = false)
+        FrameMotion Frame(Settings s, Palette? latest, bool paused = false, bool changed = false)
         {
             FrameMotion motion = pipeline.NextFrame(music.AsSpan(offset, 800), Rate, Dt, s, latest, paused, changed);
             offset = (offset + 800) % (music.Length - 800);
@@ -265,9 +277,25 @@ public sealed class SoakTests
         Assert.True(pipeline.Gradient[19 * 4] > 0.99f && pipeline.Gradient[19 * 4 + 2] < 0.01f); // mid-Primary: the album's red
 
         // A ratio edit refills; a pause hides the glow and, once it is gone, the frame source asks for no frames.
-        SettingsSnapshot ratio = SettingsSnapshot.For(settings.Settings with { PrimaryRatio = 0.4f });
+        Settings ratio = settings with { PrimaryRatio = 0.4f };
         Frame(ratio, album);
         Assert.True(pipeline.Refilled);
+        Assert.True(pipeline.SettingsApplied);
+        Assert.Equal(0, pipeline.SettingsBytes);                          // a ratio edit allocates nothing
+
+        // A Sensitivity edit retunes the analyzer the way the app does: `with` on the AudioTuning record, one object on
+        // the render thread, which the frame reports as SettingsBytes. Nothing else in the frame allocates.
+        Settings sensitive = ratio with { Sensitivity = 9 };                // clamped to 2, as the app clamps it
+        long frameStart = GC.GetAllocatedBytesForCurrentThread();
+        Frame(sensitive, album);
+        long frameBytes = GC.GetAllocatedBytesForCurrentThread() - frameStart;
+        Assert.Equal(2f, pipeline.Analyzer.Tuning.Sensitivity);
+        Assert.True(pipeline.SettingsApplied);
+        Assert.True(pipeline.SettingsBytes > 0);
+        Assert.Equal(frameBytes, pipeline.SettingsBytes);
+        Frame(sensitive, album);
+        Assert.False(pipeline.SettingsApplied);
+        Assert.Equal(0, pipeline.SettingsBytes);
         FrameMotion motion = FrameMotion.Full;
         for (int i = 0; i < 40 && motion != FrameMotion.Still; i++) motion = Frame(ratio, album, paused: true);
         Assert.Equal(FrameMotion.Still, motion);
@@ -328,6 +356,15 @@ public sealed class SoakTests
         }
         Assert.Equal(800, FrameBenchmark.Run(48000, "steady", options with { Frames = 10 }).SamplesPerFrame);
         Assert.Throws<ArgumentOutOfRangeException>(() => FrameBenchmark.Run(48000, "jazz", options));
+
+        // 10 ms packets, as the capture delivers them: one or two a frame, still 0 B.
+        FrameBenchmarkResult packets = FrameBenchmark.Run(48000, "crossfade", options with { PacketSeconds = 0.01 });
+        Assert.Equal(480, packets.PacketSamples);
+        Assert.Equal(800, packets.SamplesPerFrame);
+        Assert.Equal(0, packets.BytesPerFrame);
+        Assert.Equal(600, packets.Refills);
+        Assert.True(packets.Beats > 10, $"{packets.Beats} beats");
+        Assert.Equal(0, FrameBenchmark.Run(48000, "steady", options with { Frames = 10 }).PacketSamples);
     }
 
     [Fact]
@@ -341,6 +378,42 @@ public sealed class SoakTests
         for (int i = 0; i < 100; i++) ProcessMemory.WorkingSetBytes();
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
         Assert.True(StageCosts.ClockReadNanoseconds() > 0);
+    }
+
+    [Fact]
+    public void MemoryLogKeepsTheLatestReadingWhenFull()
+    {
+        var log = new MemoryLog(3);
+        for (int i = 0; i < 6; i++) log.Add(i * 10, new MemoryReading((10 + i) << 20, 1 << 20));
+        Assert.Equal(3, log.Count);
+        Assert.Equal(0, log.TimeAt(0));                                     // the end of warm-up stays first
+        Assert.Equal(10, log.TimeAt(1));
+        Assert.Equal(50, log.TimeAt(2));                                    // the end stays last
+        Assert.Equal(15 << 20, log[2].WorkingSetBytes);
+        Assert.Equal(15 << 20, log.Peak.WorkingSetBytes);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MemoryLog(1));
+    }
+
+    [Fact]
+    public void ProgressLinesFormatWithoutAllocatingAndAreBounded()
+    {
+        var snapshot = new SoakSnapshot(3 * 3600 + 7 * 60 + 5.4, 1_234_567, 91_678, 281_600, 32_896_267, 0, 2_031_616, 36_175_872, 0, 1, 2, 47_875, 105);
+        const string Expected = "3:07:05    1234567 frames  mean   91.7 µs  p99  281.6 µs  max 32896.3 µs    0.0 B/frame  heap    1.9 MB  working set   34.5 MB  GCs 0/1/2  beats 47875  tracks 105";
+        Assert.Equal(Expected, SoakRun.Format(snapshot));
+        char[] line = new char[SoakRun.MaxLineLength];
+        for (int i = 0; i < 10; i++) SoakRun.Format(snapshot, line);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        int length = 0;
+        for (int i = 0; i < 100; i++) length = SoakRun.Format(snapshot, line);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(Expected, new string(line, 0, length));
+
+        // One line per ReportEveryMinutes after warm-up, plus the end; too many is refused before anything runs.
+        Assert.Equal(11, SoakRun.ProgressLines(new SoakOptions { Minutes = 60, WarmupSeconds = 0 }));
+        Assert.Equal(8 * 60 + 1, SoakRun.ProgressLines(new SoakOptions { ReportEveryMinutes = 1 }));
+        var tooMany = new SoakOptions { Minutes = 60, ReportEveryMinutes = 0.005 };
+        Assert.True(SoakRun.ProgressLines(tooMany) > SoakRun.MaxProgressLines);
+        Assert.Throws<ArgumentOutOfRangeException>(() => SoakRun.Execute(tooMany));
     }
 
     [Theory]
@@ -370,8 +443,13 @@ public sealed class SoakTests
         Assert.Contains("| 48000 | crossfade |", output.ToString());
         Assert.Equal(2, BenchCli.Run(["frame", "--rates", "7000"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(2, BenchCli.Run(["frame", "--rates", ","], TextWriter.Null, TextWriter.Null));
+        var packets = new StringWriter();
+        Assert.Equal(0, BenchCli.Run(["frame", "--rates", "44100", "--packet-ms", "10", "--frames", "200", "--warmup", "10"], packets, TextWriter.Null));
+        Assert.Contains("audio in 10 ms packets", packets.ToString());
+        Assert.Contains("| 44100 | 735 | steady |", packets.ToString());
         Assert.Equal(2, BenchCli.Run(["soak", "--duration", "8"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(2, BenchCli.Run(["soak", "--duration", "1m", "--minutes", "1"], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--duration", "8h", "--report-every", "0.01"], TextWriter.Null, TextWriter.Null));
 
         // The working-set verdict depends on the whole test process (other tests run in parallel), so only the
         // allocation verdict and the output are checked here.

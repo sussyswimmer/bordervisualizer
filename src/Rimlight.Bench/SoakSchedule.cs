@@ -47,7 +47,7 @@ internal enum SoakEventKind
 /// <param name="Label">A short description, e.g. "WhenSilent Hide".</param>
 /// <param name="Settings">The new snapshot, for <see cref="SoakEventKind.Settings"/>.</param>
 /// <param name="StallSeconds">How late the next frame is, for <see cref="SoakEventKind.Stall"/>.</param>
-internal sealed record SoakEvent(double Time, SoakEventKind Kind, string Label, SettingsSnapshot? Settings = null, double StallSeconds = 0);
+internal sealed record SoakEvent(double Time, SoakEventKind Kind, string Label, Settings? Settings = null, double StallSeconds = 0);
 
 // The simulated day of listening a soak runs: back-to-back segments of the loopback stream (tracks and the silent gaps
 // between them) and the events around them (settings edits, pauses, stalls). Everything, settings records and
@@ -67,7 +67,7 @@ internal sealed class SoakSchedule
     /// <param name="segments">Back-to-back segments from 0.</param>
     /// <param name="events">Events in time order.</param>
     /// <exception cref="ArgumentException">The segments leave a hole or don't cover the length, or the events are out of order.</exception>
-    public SoakSchedule(double seconds, SettingsSnapshot initial, IReadOnlyList<SoakSegment> segments, IReadOnlyList<SoakEvent> events)
+    public SoakSchedule(double seconds, Settings initial, IReadOnlyList<SoakSegment> segments, IReadOnlyList<SoakEvent> events)
     {
         if (!(seconds > 0)) throw new ArgumentOutOfRangeException(nameof(seconds));
         double end = 0;
@@ -93,7 +93,7 @@ internal sealed class SoakSchedule
     /// <summary>The simulated length in seconds.</summary>
     public double Seconds { get; }
     /// <summary>The settings at the start.</summary>
-    public SettingsSnapshot Initial { get; }
+    public Settings Initial { get; }
     /// <summary>Back-to-back segments from 0 to at least <see cref="Seconds"/>.</summary>
     public IReadOnlyList<SoakSegment> Segments { get; }
     /// <summary>Events in time order.</summary>
@@ -176,8 +176,8 @@ internal sealed class SoakSchedule
         }
         moments.Sort((a, b) => a.Time.CompareTo(b.Time));
 
-        var initial = SettingsSnapshot.For(new Settings());
-        Settings current = initial.Settings;
+        var initial = new Settings();
+        Settings current = initial;
         var events = new List<SoakEvent>(moments.Count);
         bool firstEdit = true;
         foreach ((double time, int kind, double value) in moments)
@@ -194,18 +194,18 @@ internal sealed class SoakSchedule
                         2 => Edited(current with { Sensitivity = Round(Uniform(0.5, 2)) }, "Sensitivity", current.Sensitivity),
                         _ => Edited(current with { PrimaryRatio = Round(Uniform(0.3, 0.8)) }, "PrimaryRatio", current.PrimaryRatio),
                     };
-                    events.Add(new SoakEvent(time, SoakEventKind.Settings, label, SettingsSnapshot.For(current)));
+                    events.Add(new SoakEvent(time, SoakEventKind.Settings, label, current));
                     break;
                 case AwayStart when value == 1:
                     current = current with { Enabled = false };
-                    events.Add(new SoakEvent(time, SoakEventKind.Settings, "hotkey: off", SettingsSnapshot.For(current)));
+                    events.Add(new SoakEvent(time, SoakEventKind.Settings, "hotkey: off", current));
                     break;
                 case AwayStart:
                     events.Add(new SoakEvent(time, SoakEventKind.Pause, "fullscreen: pause"));
                     break;
                 case AwayEnd when value == 1:
                     current = current with { Enabled = true };
-                    events.Add(new SoakEvent(time, SoakEventKind.Settings, "hotkey: on", SettingsSnapshot.For(current)));
+                    events.Add(new SoakEvent(time, SoakEventKind.Settings, "hotkey: on", current));
                     break;
                 case AwayEnd:
                     events.Add(new SoakEvent(time, SoakEventKind.Resume, "fullscreen: resume"));
@@ -260,19 +260,19 @@ internal sealed class SoakSchedule
             new(60, 4, SoakAudio.SilentPackets),
             new(64, 16, SoakAudio.Music, Track(16, 140, 0.5, true), a with { SourceTrackId = "scene d" }),
         ];
-        var initial = SettingsSnapshot.For(new Settings());
-        Settings hide = initial.Settings with { WhenSilent = SilentBehavior.Hide, Brightness = 0.6f };
+        var initial = new Settings();
+        Settings hide = initial with { WhenSilent = SilentBehavior.Hide, Brightness = 0.6f };
         Settings edited = hide with { Sensitivity = 1.5f, PrimaryRatio = 0.7f };
         SoakEvent[] events =
         [
-            new(26, SoakEventKind.Settings, "WhenSilent Hide", SettingsSnapshot.For(hide)),
-            new(40, SoakEventKind.Settings, "Sensitivity 1.5, PrimaryRatio 0.7", SettingsSnapshot.For(edited)),
+            new(26, SoakEventKind.Settings, "WhenSilent Hide", hide),
+            new(40, SoakEventKind.Settings, "Sensitivity 1.5, PrimaryRatio 0.7", edited),
             new(42, SoakEventKind.Stall, "stall", StallSeconds: 0.4),
             new(44, SoakEventKind.Pause, "fullscreen: pause"),
             new(48, SoakEventKind.Resume, "fullscreen: resume"),
-            new(52, SoakEventKind.Settings, "hotkey: off", SettingsSnapshot.For(edited with { Enabled = false })),
-            new(55, SoakEventKind.Settings, "hotkey: on", SettingsSnapshot.For(edited)),
-            new(66, SoakEventKind.Settings, "WhenSilent IdleGlow", SettingsSnapshot.For(edited with { WhenSilent = SilentBehavior.IdleGlow })),
+            new(52, SoakEventKind.Settings, "hotkey: off", edited with { Enabled = false }),
+            new(55, SoakEventKind.Settings, "hotkey: on", edited),
+            new(66, SoakEventKind.Settings, "WhenSilent IdleGlow", edited with { WhenSilent = SilentBehavior.IdleGlow }),
         ];
         return new SoakSchedule(80, initial, segments, events);
     }

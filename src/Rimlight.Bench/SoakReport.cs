@@ -5,7 +5,9 @@ namespace Rimlight.Bench;
 
 // The result of a soak: frame cost per stage, allocations, GCs, memory, what the schedule exercised, and the two pass
 // criteria (doc 07 Phase 7, AGENTS.md "Definition of done for Lane A"):
-//   0 B/frame     not one byte allocated by any measured frame (GC.GetAllocatedBytesForCurrentThread around NextFrame);
+//   0 B/frame     not one byte allocated by any measured frame (GC.GetAllocatedBytesForCurrentThread around NextFrame),
+//                 applying a settings edit aside: that step runs once per edit, and in the app it allocates too (a
+//                 Sensitivity change rebuilds the analyzer's AudioTuning record), so it is reported on its own line;
 //   memory flat   the working set grew by less than WorkingSetGrowthLimit from the settle point (an hour after warm-up,
 //                 SoakOptions.SettleMinutes) to the end, and the live managed heap after a full GC by less than
 //                 LiveHeapGrowthLimit from the end of warm-up to the end.
@@ -37,12 +39,22 @@ internal sealed class SoakReport
     public required long Frames { get; init; }
     /// <summary>Frames run during warm-up.</summary>
     public required long WarmupFrames { get; init; }
-    /// <summary>Bytes the measured frames allocated (must be 0).</summary>
+    /// <summary>Bytes the measured frames allocated, applying settings edits aside (must be 0).</summary>
     public required long AllocatedBytes { get; init; }
-    /// <summary>Measured frames that allocated anything.</summary>
+    /// <summary>Measured frames that allocated anything, applying settings edits aside.</summary>
     public required long AllocatingFrames { get; init; }
-    /// <summary>The most one measured frame allocated.</summary>
+    /// <summary>The most one measured frame allocated, applying settings edits aside.</summary>
     public required long MaxFrameBytes { get; init; }
+    /// <summary>Measured frames that applied a new settings snapshot.</summary>
+    public required long SettingsEdits { get; init; }
+    /// <summary>Of those, the frames whose settings step allocated (a Sensitivity change, as in the app).</summary>
+    public required long AllocatingEdits { get; init; }
+    /// <summary>What applying the settings edits allocated in all (<see cref="FramePipeline.SettingsBytes"/>).</summary>
+    public required long SettingsEditBytes { get; init; }
+    /// <summary>What the harness itself allocated on the run's thread between measured frames (audio, events, memory
+    /// readings, progress lines). 0 unless the progress callback allocates: garbage there would grow the working set the
+    /// soak measures.</summary>
+    public required long HarnessBytes { get; init; }
     /// <summary>GCs per generation during the measured part (the harness's own allocations between frames included).</summary>
     public required int Gen0 { get; init; }
     /// <summary>Gen 1 GCs during the measured part.</summary>
@@ -115,8 +127,14 @@ internal sealed class SoakReport
 
     /// <summary>The "0 B/frame" verdict line.</summary>
     public string AllocationVerdict => string.Create(C,
-        $"{(AllocationFree ? "PASS" : "FAIL")} 0 B/frame: {AllocatedBytes:N0} bytes allocated in {Frames:N0} measured frames after warm-up") +
+        $"{(AllocationFree ? "PASS" : "FAIL")} 0 B/frame: {AllocatedBytes:N0} bytes allocated in {Frames:N0} measured frames after warm-up, applying settings edits aside") +
         (AllocatingFrames > 0 ? string.Create(C, $" ({AllocatingFrames:N0} frames allocated, at most {MaxFrameBytes:N0} bytes).") : ".");
+
+    /// <summary>The line on settings edits, whose allocations the 0 B/frame verdict leaves out.</summary>
+    public string SettingsEditsLine => string.Create(C,
+        $"Settings edits: {SettingsEdits:N0} applied by measured frames; applying them allocated {SettingsEditBytes:N0} B, in " +
+        $"{AllocatingEdits:N0} of them. That step runs once per edit, as in the app, whose MusicGlowSource.ApplySettings " +
+        $"allocates there too: a Sensitivity change rebuilds the analyzer's AudioTuning record on the render thread.");
 
     /// <summary>The "memory flat" verdict line, with the criterion.</summary>
     public string MemoryVerdict => string.Create(C,
@@ -148,7 +166,8 @@ internal sealed class SoakReport
         WriteCostTable(output);
         output.WriteLine();
         output.WriteLine(string.Create(C, $"CPU: {CoreShare * 100:0.000} % of one core on average over the measured time (sum of whole-frame costs / simulated time)."));
-        output.WriteLine(string.Create(C, $"Allocations: {AllocatedBytes:N0} B in {Frames:N0} measured frames ({(Frames == 0 ? 0 : AllocatedBytes / (double)Frames):0.###} B/frame)."));
+        output.WriteLine(string.Create(C, $"Allocations: {AllocatedBytes:N0} B in {Frames:N0} measured frames ({(Frames == 0 ? 0 : AllocatedBytes / (double)Frames):0.###} B/frame), applying settings edits aside; the harness between frames: {HarnessBytes:N0} B."));
+        output.WriteLine(SettingsEditsLine);
         output.WriteLine(string.Create(C, $"GCs during the measured part (gen 0/1/2): {Gen0}/{Gen1}/{Gen2}."));
         output.WriteLine();
         WriteMemoryTable(output);
@@ -174,7 +193,8 @@ internal sealed class SoakReport
         WriteCostTable(output);
         output.WriteLine();
         output.WriteLine(string.Create(C, $"- CPU: **{CoreShare * 100:0.000} %** of one core on average over the measured time (sum of whole-frame costs / simulated time)."));
-        output.WriteLine(string.Create(C, $"- Allocations: **{AllocatedBytes:N0} B** in {Frames:N0} measured frames ({(Frames == 0 ? 0 : AllocatedBytes / (double)Frames):0.###} B/frame)."));
+        output.WriteLine(string.Create(C, $"- Allocations: **{AllocatedBytes:N0} B** in {Frames:N0} measured frames ({(Frames == 0 ? 0 : AllocatedBytes / (double)Frames):0.###} B/frame), applying settings edits aside; the harness between frames: {HarnessBytes:N0} B."));
+        output.WriteLine($"- {SettingsEditsLine}");
         output.WriteLine(string.Create(C, $"- GCs during the measured part (gen 0/1/2): {Gen0}/{Gen1}/{Gen2}."));
         output.WriteLine();
         WriteMemoryTable(output);

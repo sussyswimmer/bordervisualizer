@@ -1,18 +1,22 @@
 namespace Rimlight.Bench;
 
-// The memory readings of a soak's measured part, in arrays sized up front so recording one never allocates (the
-// harness's own garbage would show up in the working set it measures).
+// The memory readings of a soak's measured part, in arrays sized and touched up front so recording one never allocates
+// or faults in a page (the harness's own memory would show up in the working set it measures).
 internal sealed class MemoryLog
 {
     private readonly double[] times;
     private readonly MemoryReading[] readings;
 
-    /// <summary>Creates a log for up to <paramref name="capacity"/> readings; later readings are dropped.</summary>
-    /// <param name="capacity">The most readings the run takes.</param>
+    /// <summary>Creates a log for up to <paramref name="capacity"/> readings. Once it is full, each new reading replaces
+    /// the last one, so the last reading is always the latest (the end of a run, which the flatness check needs).</summary>
+    /// <param name="capacity">The most readings the run takes; at least 2.</param>
     public MemoryLog(int capacity)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 2);
         times = new double[capacity];
         readings = new MemoryReading[capacity];
+        times.AsSpan().Clear();
+        readings.AsSpan().Clear();
     }
 
     /// <summary>The number of readings.</summary>
@@ -28,10 +32,9 @@ internal sealed class MemoryLog
     {
         Peak = new MemoryReading(Math.Max(Peak.WorkingSetBytes, reading.WorkingSetBytes), Math.Max(Peak.ManagedHeapBytes, reading.ManagedHeapBytes),
             Math.Max(Peak.CompiledMethods, reading.CompiledMethods));
-        if (Count == times.Length) return;
-        times[Count] = seconds;
-        readings[Count] = reading;
-        Count++;
+        int index = Count == times.Length ? Count - 1 : Count++;
+        times[index] = seconds;
+        readings[index] = reading;
     }
 
     /// <summary>The time of reading <paramref name="index"/>.</summary>

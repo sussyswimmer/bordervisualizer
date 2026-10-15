@@ -20,36 +20,22 @@ internal enum FrameMotion
 /// <summary>One frame's cost per stage, in <see cref="Stopwatch"/> ticks.</summary>
 /// <param name="Frame">The whole frame, glue included.</param>
 /// <param name="Analyzer"><see cref="IAudioAnalyzer.Process"/>, plus <see cref="IAudioAnalyzer.Reset"/> on a device change.</param>
-/// <param name="Blender">The palette and settings checks with any <see cref="IPaletteBlender.SetTarget"/>,
-/// <see cref="IPaletteBlender.Update"/>, and <see cref="IPaletteBlender.FillGradient"/> when the gradient is refilled.</param>
+/// <param name="Blender">The settings and palette checks with any <see cref="IPaletteBlender.SetTarget"/> (a new
+/// settings snapshot's analyzer retune included), <see cref="IPaletteBlender.Update"/>, and
+/// <see cref="IPaletteBlender.FillGradient"/> when the gradient is refilled.</param>
 /// <param name="Engine"><see cref="ILightEngine.Update"/>.</param>
 internal readonly record struct StageTicks(long Frame, long Analyzer, long Blender, long Engine);
-
-/// <summary>
-/// A settings snapshot as the app publishes it (doc 02: an immutable record the render thread picks up whole), with the
-/// analyzer tuning that goes with it: Sensitivity is applied by the analyzer alone (H-007). Both records are built off
-/// the measured path, as the app builds them on the UI thread.
-/// </summary>
-/// <param name="Settings">The settings.</param>
-/// <param name="Tuning">The analyzer tuning for <paramref name="Settings"/>.</param>
-internal sealed record SettingsSnapshot(Settings Settings, AudioTuning Tuning)
-{
-    /// <summary>The snapshot for a settings record, with Sensitivity clamped as the app clamps it.</summary>
-    /// <param name="settings">The settings.</param>
-    /// <returns>A new snapshot.</returns>
-    public static SettingsSnapshot For(Settings settings) => new(settings, new AudioTuning { Sensitivity = ClampSensitivity(settings.Sensitivity) });
-
-    private static float ClampSensitivity(float sensitivity) =>
-        float.IsFinite(sensitivity) ? Math.Clamp(sensitivity, 0.25f, 2f) : 1f;
-}
 
 // One render-thread frame as the app runs it: MusicGlowSource.NextFrame (src/Rimlight.App/Overlay/MusicGlowSource.cs)
 // step for step, with a clock read between the stages. Rimlight.App is Windows-only, so its glue is mirrored here:
 // keep the two in step. What is left out is Windows work, not Core work: the copy out of the loopback ring (one
 // memcpy, done by the caller before the frame), the volatile write that publishes the features to the UI, and the
 // overlay's own drawing (doc 04). The caller plays LoopbackCapture: it says when the captured device changes and
-// passes only the samples that arrived. Settings never shows the audio meter here ("audio wanted" is false).
-// Render thread only; NextFrame allocates nothing, like the app's.
+// passes only the samples that arrived. Settings never shows the audio meter here ("audio wanted" is false), and the
+// manual colors stay fixed (the app parses them again when an edit changes them; no schedule edits them).
+// Render thread only. Applying a new settings snapshot does what the app's ApplySettings does, allocation included: a
+// Sensitivity change rebuilds the analyzer's AudioTuning record on the render thread (`with`, one object per edit).
+// SettingsBytes reports that per-edit cost apart; the rest of NextFrame allocates nothing.
 internal sealed class FramePipeline
 {
     /// <summary>The rate passed while no device is captured (MusicGlowSource.FallbackSampleRate).</summary>
@@ -67,7 +53,7 @@ internal sealed class FramePipeline
     private readonly ILightEngine engine;
     private readonly Palette manual;
     private readonly float[] gradient = new float[256];
-    private SettingsSnapshot applied;
+    private Settings applied;
     private Palette? album;
     private Palette palette;
     private bool gradientFilled, paletteChanged;
@@ -76,12 +62,12 @@ internal sealed class FramePipeline
     /// <summary>Creates the Core objects the way MusicGlowSource does.</summary>
     /// <param name="settings">The initial settings.</param>
     /// <param name="manual">The manual colors, shown while there is no album palette.</param>
-    public FramePipeline(SettingsSnapshot settings, Palette manual)
+    public FramePipeline(Settings settings, Palette manual)
     {
         this.manual = manual;
         palette = manual;
         blender = CoreFactory.CreatePaletteBlender(palette);
-        analyzer = CoreFactory.CreateAnalyzer(settings.Tuning);
+        analyzer = CoreFactory.CreateAnalyzer(new AudioTuning { Sensitivity = ClampSensitivity(settings.Sensitivity) });
         engine = CoreFactory.CreateLightEngine();
         applied = settings;
     }
@@ -100,6 +86,11 @@ internal sealed class FramePipeline
     public bool Refilled { get; private set; }
     /// <summary>Whether the last frame started a crossfade (<see cref="IPaletteBlender.SetTarget"/>).</summary>
     public bool PaletteSet { get; private set; }
+    /// <summary>Whether the last frame applied a new settings snapshot.</summary>
+    public bool SettingsApplied { get; private set; }
+    /// <summary>The bytes the last frame allocated while applying a new settings snapshot (a Sensitivity change
+    /// rebuilds the analyzer tuning, as in the app); 0 on frames without one. Part of the frame's own allocations.</summary>
+    public long SettingsBytes { get; private set; }
     /// <summary>The last frame's cost per stage.</summary>
     public StageTicks Ticks { get; private set; }
 
@@ -114,25 +105,33 @@ internal sealed class FramePipeline
     /// <param name="samples">The samples that arrived since the last frame (none while nothing is captured).</param>
     /// <param name="sampleRate">The capture rate, or <see cref="FallbackSampleRate"/> while nothing is captured.</param>
     /// <param name="dtSeconds">Time since the last frame, as the overlay passes it.</param>
-    /// <param name="settings">This frame's settings snapshot.</param>
+    /// <param name="settings">This frame's settings snapshot (a new reference is a new snapshot, as in the app).</param>
     /// <param name="latestAlbum">The album palette the media service publishes; null for none (no art, no session).</param>
     /// <param name="paused">The overlay's pause flag.</param>
     /// <param name="captureChanged">True when the captured device changed since the last frame (opened, closed or
     /// restarted): the analyzer starts over, as the app does on a new <c>LoopbackCapture.Current</c>.</param>
     /// <returns>How the glow will change, for the frame pacer.</returns>
-    public FrameMotion NextFrame(ReadOnlySpan<float> samples, int sampleRate, float dtSeconds, SettingsSnapshot settings,
+    public FrameMotion NextFrame(ReadOnlySpan<float> samples, int sampleRate, float dtSeconds, Settings settings,
         Palette? latestAlbum, bool paused, bool captureChanged)
     {
         long t0 = Stopwatch.GetTimestamp();
         PaletteSet = false;
-        if (!ReferenceEquals(settings, applied)) ApplySettings(settings);
-        Settings current = settings.Settings;
+        SettingsApplied = !ReferenceEquals(settings, applied);
+        SettingsBytes = 0;
+        if (SettingsApplied)
+        {
+            // Counted apart so a caller can tell the once-per-edit cost from per-frame allocations; two counter reads
+            // on edit frames only.
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            ApplySettings(settings);
+            SettingsBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
         if (!ReferenceEquals(latestAlbum, album))
         {
             album = latestAlbum;
-            ShowPalette(current, AlbumFade);
+            ShowPalette(settings, AlbumFade);
         }
-        bool listen = Listens(current, paused);
+        bool listen = Listens(settings, paused);
 
         long t1 = Stopwatch.GetTimestamp();
         if (captureChanged) analyzer.Reset();
@@ -143,7 +142,7 @@ internal sealed class FramePipeline
         bool crossfading = blender.IsAnimating;
         blender.Update(dtSeconds);
         long t3 = Stopwatch.GetTimestamp();
-        LightState state = engine.Update(dtSeconds, listen ? features : Silence, palette, current, paused);
+        LightState state = engine.Update(dtSeconds, listen ? features : Silence, palette, settings, paused);
         long t4 = Stopwatch.GetTimestamp();
 
         // Refill after every SetTarget, after every update that was animating before it (so the crossfade's last frame
@@ -157,7 +156,7 @@ internal sealed class FramePipeline
             filledRatio = state.Ratio;
         }
         long t5 = Stopwatch.GetTimestamp();
-        FrameMotion motion = Motion(listen, in features, current);
+        FrameMotion motion = Motion(listen, in features, settings);
         long t6 = Stopwatch.GetTimestamp();
 
         Features = features;
@@ -178,16 +177,18 @@ internal sealed class FramePipeline
         return idle ? FrameMotion.Slow : FrameMotion.Full;
     }
 
-    // MusicGlowSource.ApplySettings. The schedules never edit the manual colors, so the manual palette is fixed here
-    // (the app parses the hex colors again only when they change).
-    private void ApplySettings(SettingsSnapshot next)
+    // MusicGlowSource.ApplySettings, the analyzer retune included: AudioTuning is a record class, so `with` allocates
+    // one object per Sensitivity edit on the render thread, in the app too. The schedules never edit the manual colors,
+    // so the manual palette is fixed here (the app parses the hex colors again only when they change).
+    private void ApplySettings(Settings next)
     {
-        SettingsSnapshot previous = applied;
+        Settings previous = applied;
         applied = next;
-        if (previous.Settings.Sensitivity != next.Settings.Sensitivity) analyzer.Tuning = next.Tuning;
+        if (previous.Sensitivity != next.Sensitivity)
+            analyzer.Tuning = analyzer.Tuning with { Sensitivity = ClampSensitivity(next.Sensitivity) };
         bool albumBefore = album is not null && ReferenceEquals(palette, album);
-        bool albumAfter = album is not null && UsesAlbumColors(next.Settings);
-        ShowPalette(next.Settings, albumBefore || albumAfter ? AlbumFade : ManualEditFade);
+        bool albumAfter = album is not null && UsesAlbumColors(next);
+        ShowPalette(next, albumBefore || albumAfter ? AlbumFade : ManualEditFade);
     }
 
     private void ShowPalette(Settings settings, TimeSpan fade)
@@ -202,4 +203,8 @@ internal sealed class FramePipeline
 
     private static bool UsesAlbumColors(Settings settings) =>
         settings.ColorMode == ColorMode.AlbumArt && !settings.OverrideAlbumColor;
+
+    // MusicGlowSource.ClampSensitivity.
+    private static float ClampSensitivity(float sensitivity) =>
+        float.IsFinite(sensitivity) ? Math.Clamp(sensitivity, 0.25f, 2f) : 1f;
 }

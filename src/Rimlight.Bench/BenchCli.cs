@@ -22,7 +22,10 @@ internal static class BenchCli
                                engine): ns per stage, bytes/frame and share of one core at each sample rate, with the
                                colors settled and while every frame crossfades
             --rates <list>       Sample rates in Hz, comma-separated (default 48000,44100,192000)
-            --fps <n>            Frames per second; one frame of audio per call (default 60)
+            --fps <n>            Frames per second (default 60)
+            --packet-ms <ms>     Deliver the audio in packets this long, as the loopback capture does (10 is
+                                 realistic: one or two packets a frame); 0 = exactly one frame of audio per frame,
+                                 the analyzer's one-step best case (default 0)
             --frames <n>         Measured frames per row (default 10000)
             --warmup <n>         Unmeasured frames first (default 2000, and at least 0.5 s)
           soak [options]       Simulated hours of the app's render loop over a scripted day of listening (tracks with
@@ -32,7 +35,7 @@ internal static class BenchCli
             --minutes <n>        The same in minutes (instead of --duration)
             --rate <Hz> (48000)  --fps <n> (60)  --jitter <f> (0.2)  --packet-ms <ms> (10)  --seed <n> (1)
             --warmup-seconds <s> Simulated seconds run before measuring starts (default 5)
-            --report-every <min> Simulated minutes between progress lines (default: ten lines)
+            --report-every <min> Simulated minutes between progress lines (default: ten lines; at most 10,000 lines)
             --markdown           Also print the summary as Markdown, for docs/PERF.md
 
         Exit codes: 0 success, 1 allocations found on the measured path (soak: or memory not flat),
@@ -106,16 +109,20 @@ internal static class BenchCli
 
     private static int Frame(string[] args, TextWriter output)
     {
-        var a = new CommandLine(args, ["rates", "fps", "frames", "warmup"], []);
+        var a = new CommandLine(args, ["rates", "fps", "packet-ms", "frames", "warmup"], []);
         if (a.Positional.Count != 0) throw new UsageException($"Unexpected argument \"{a.Positional[0]}\".");
         int[] rates = Rates(a.Text("rates")) ?? FrameBenchmark.DefaultRates;
         var options = new FrameBenchmarkOptions
         {
             Fps = a.Number("fps", 60, 1, 1000),
+            PacketSeconds = a.Number("packet-ms", 0, 0, 1000) / 1000,
             Frames = a.Integer("frames", 10000, 1, 10_000_000),
             WarmupFrames = a.Integer("warmup", 2000, 0, 10_000_000),
         };
-        output.WriteLine(string.Create(C, $"Frame benchmark: the render thread's frame (FramePipeline, as MusicGlowSource.NextFrame), {options.Fps:0.##} fps, {options.WarmupFrames} warm-up frames (at least {options.MinWarmupSeconds:0.#} s) + {options.Frames} measured frames per row"));
+        string audio = options.PacketSeconds > 0
+            ? string.Create(C, $"audio in {options.PacketSeconds * 1000:0.##} ms packets, each frame getting the packets that arrived since the last one")
+            : "exactly one frame of audio per frame (one analyzer step)";
+        output.WriteLine(string.Create(C, $"Frame benchmark: the render thread's frame (FramePipeline, as MusicGlowSource.NextFrame), {options.Fps:0.##} fps, {audio}, {options.WarmupFrames} warm-up frames (at least {options.MinWarmupSeconds:0.#} s) + {options.Frames} measured frames per row"));
         output.WriteLine(Machine());
         var results = new List<FrameBenchmarkResult>();
         foreach (int rate in rates)
@@ -166,9 +173,13 @@ internal static class BenchCli
             WarmupSeconds = a.Number("warmup-seconds", 5, 0, 3600),
             ReportEveryMinutes = a.Number("report-every", 0, 0, 48 * 60),
         };
+        if (SoakRun.ProgressLines(options) > SoakRun.MaxProgressLines)
+            throw new UsageException(string.Create(C, $"--report-every {options.ReportEveryMinutes:0.####} would print more than {SoakRun.MaxProgressLines:N0} progress lines."));
         output.WriteLine(string.Create(C, $"Soak: {SoakReport.Clock(options.Minutes * 60)} simulated of the render thread's frames (FramePipeline) over a scripted day of listening (seed {options.Seed}), {options.SampleRate} Hz, {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.PacketSeconds * 1000:0.#} ms packets, first {options.WarmupSeconds:0.#} s not measured"));
         output.WriteLine(Machine());
-        SoakReport report = SoakRun.Execute(options, s => output.WriteLine(SoakRun.Format(s)));
+        // Progress lines are written from a buffer made here, without allocating while the soak measures memory.
+        char[] line = new char[SoakRun.MaxLineLength];
+        SoakReport report = SoakRun.Execute(options, s => output.WriteLine(line.AsSpan(0, SoakRun.Format(s, line))));
         report.WriteSummary(output);
         if (a.Has("markdown"))
         {
