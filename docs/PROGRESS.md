@@ -513,6 +513,12 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - **HANDOFF number:** C12's entry is H-018, because the Lane B integration branch already uses H-017.
   - PERF.md said two half-hour maximums were over 15 ms. The published run has three (17, 53 and 186 ms).
   - 9 more mutants each fail a test: the list allocated after the start sample, snapshots as classes, exit code always 0, a 0.5-hour default, no interval reset, no line limit in the CLI or in the run, no report file before the run, and a synchronous stdout read in the helper.
+  - **Verification:** 0 warnings. Every soak, program and Bench test passed in every run (669 + 73 tests in all). In 17 full runs of `Rimlight.Tests`, 2 failed, each on a different allocation check outside C12. `PaletteExtractorTests.ExtractionCostIsModest` (C4) failed once; `LightEngineTests.UpdateDoesNotAllocate` (C6) failed once with 7,896 B on the test's thread.
+  - **Those two flakes, ruled out so far:**
+    - First-time initialization: both pass alone in a fresh process.
+    - GCs started by other threads: a scratch probe saw 0 B in 7,441 checked loops over 809 GCs.
+    - Tiered compilation, OSR and the tiering worker restarting: another probe saw nothing.
+    - Instrumented copies passed 20 full runs, so the cause is still open. It is not in C12's code, which runs after the parallel tests.
 
 ## Lane B — Claude Code
 
