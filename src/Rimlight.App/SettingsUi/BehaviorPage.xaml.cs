@@ -56,12 +56,13 @@ internal partial class BehaviorPage : UserControl, ISettingsPage
     public void ShowHotkeyStatus()
     {
         HotkeyStatus status = app.Hotkey;
-        string? gesture = status.Gesture?.ToString();
+        string gesture = status.Gesture?.ToString() ?? status.Text; // no gesture when the shortcut window is missing
         HotkeyText.Text = status.State switch
         {
             HotkeyState.None => "None. Pick one to turn the glow on and off from anywhere.",
+            HotkeyState.Registered => $"Press {gesture} anywhere to turn the glow on or off.",
             HotkeyState.Invalid => $"\"{status.Text}\"",
-            _ => $"Press {gesture} anywhere to turn the glow on or off.",
+            _ => gesture, // in use or refused: the warning below says so
         };
         ClearButton.IsEnabled = status.State != HotkeyState.None || status.Text.Length > 0;
         if (!recording)
