@@ -3,8 +3,8 @@ using Xunit;
 namespace Rimlight.IconGen.Tests;
 
 /// <summary>
-/// The icons in the repo are generated files (build/icons.sh). These tests fail when one is missing, malformed,
-/// or no longer matches its SVG, so an edited SVG can't be merged without regenerating the icons.
+/// The icons and the README banner in the repo are generated files (build/icons.sh). These tests fail when one is
+/// missing, malformed, or no longer matches its SVG, so an edited SVG can't be merged without regenerating them.
 /// </summary>
 public sealed class CommittedIconsTests
 {
@@ -14,6 +14,13 @@ public sealed class CommittedIconsTests
     private const string Svg = "assets/icon.svg";
     private const string SmallSvg = "assets/icon-small.svg";
     private const int SmallMax = 32;
+    private const string Banner = "assets/banner.png";
+    private const string BannerSvg = "assets/banner.svg";
+    private const int BannerWidth = 1280;
+    private const int BannerHeight = 640;
+
+    // GitHub takes a social preview image under 1 MB; 1280×640 is the size it asks for (doc 08 §1).
+    private const int SocialPreviewMaxBytes = 1024 * 1024;
 
     // Skia's rasterizer may round a little differently on another OS or CPU; any real change to the art moves
     // some pixel much further than this (on a 0..255 premultiplied scale).
@@ -97,6 +104,34 @@ public sealed class CommittedIconsTests
             string png = $"assets/icon-{size}.png";
             AssertClose(art.RenderBgra(size), IcoReader.DecodePng(Read(png), size, size), png);
         }
+    }
+
+    [Fact]
+    public void BannerMatchesAFreshRenderOfItsSvg()
+    {
+        using SvgRasterizer banner = SvgRasterizer.FromFile(Path.Combine(Root, BannerSvg));
+        Assert.Equal((BannerWidth, BannerHeight), ((int)banner.Bounds.Width, (int)banner.Bounds.Height));
+        AssertClose(
+            banner.RenderBgra(BannerWidth, BannerHeight, 1f),
+            IcoReader.DecodePng(Read(Banner), BannerWidth, BannerHeight),
+            Banner);
+    }
+
+    [Fact]
+    public void BannerIsASocialPreviewGitHubAccepts()
+    {
+        byte[] png = Read(Banner);
+        Assert.True(png.Length < SocialPreviewMaxBytes, $"{Banner} is {png.Length:N0} bytes; GitHub's limit is 1 MB.");
+
+        // Opaque everywhere: the banner draws its own background, so it looks the same on light and dark pages.
+        byte[] pixels = IcoReader.DecodePng(png, BannerWidth, BannerHeight);
+        int seeThrough = 0;
+        for (int i = 3; i < pixels.Length; i += 4)
+        {
+            seeThrough += pixels[i] == 255 ? 0 : 1;
+        }
+
+        Assert.True(seeThrough == 0, $"{Banner} has {seeThrough:N0} pixels that aren't opaque.");
     }
 
     private static void AssertClose(byte[] expected, byte[] actual, string what)

@@ -48,6 +48,14 @@ public sealed class IconGenCliTests
     [InlineData("png", "out.png", "--svg", "a.svg", "--size", "4097")]
     [InlineData("png", "out.png", "--svg", "a.svg", "--size", "64", "--sizes", "16")]
     [InlineData("png", "out.png", "--svg", "a.svg", "--size", "64", "--small-svg", "b.svg")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--width", "64")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--height", "64")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--size", "64", "--width", "64", "--height", "32")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--size", "64", "--height", "32")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--width", "0", "--height", "32")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--width", "64", "--height", "4097")]
+    [InlineData("png", "out.png", "--svg", "a.svg", "--width", "64", "--height", "wide")]
+    [InlineData("ico", "out.ico", "--svg", "a.svg", "--width", "64", "--height", "32")]
     public void BadCommandLinesExitWith2(params string[] args)
     {
         var (code, output, error) = Run(args);
@@ -64,6 +72,16 @@ public sealed class IconGenCliTests
         Assert.Equal(32, options.SmallMax);
         Assert.Equal(1f, options.Opacity);
         Assert.Null(options.SmallSvg);
+    }
+
+    [Theory]
+    [InlineData(new[] { "--size", "64" }, 64, 64)]
+    [InlineData(new[] { "--width", "1280", "--height", "640" }, 1280, 640)]
+    [InlineData(new[] { "--height", "640", "--width", "1280" }, 1280, 640)]
+    public void PngTakesASizeOrAWidthAndHeight(string[] dimensions, int width, int height)
+    {
+        IconGenCli.Options options = IconGenCli.Parse(["png", "x.png", "--svg", "a.svg", .. dimensions]);
+        Assert.Equal((width, height), (options.Width, options.Height));
     }
 
     [Fact]
@@ -115,5 +133,25 @@ public sealed class IconGenCliTests
         byte[] pixels = IcoReader.DecodePng(File.ReadAllBytes(png), 40, 40);
         Assert.Equal((0, 0, 255, 255), Pixel(pixels, 40, 19, 39));
         Assert.Equal((0, 0, 0, 0), Pixel(pixels, 40, 20, 0));
+    }
+
+    [Fact]
+    public void PngCommandWritesARectangularPngWithTheArtCentered()
+    {
+        using var dir = new TempDir();
+        string png = dir.File("banner.png");
+        var (code, output, error) = Run(
+            "png", png, "--svg", dir.File("art.svg", LeftHalfRed), "--width", "40", "--height", "20");
+
+        Assert.Equal(0, code);
+        Assert.Equal("", error);
+        Assert.Contains("40x20 px", output);
+
+        // 16×16 units scaled to 20×20 px and centered: the red half covers columns 10..19.
+        byte[] pixels = IcoReader.DecodePng(File.ReadAllBytes(png), 40, 20);
+        Assert.Equal((0, 0, 0, 0), Pixel(pixels, 40, 9, 10));
+        Assert.Equal((0, 0, 255, 255), Pixel(pixels, 40, 10, 0));
+        Assert.Equal((0, 0, 255, 255), Pixel(pixels, 40, 19, 19));
+        Assert.Equal((0, 0, 0, 0), Pixel(pixels, 40, 20, 10));
     }
 }

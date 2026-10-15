@@ -11,19 +11,23 @@ internal static class IconGenCli
         Usage:
           icon-gen ico <out.ico> --svg <file> [options]   Write an .ico with one image per size
           icon-gen png <out.png> --svg <file> --size <px> [--opacity <f>]
+          icon-gen png <out.png> --svg <file> --width <px> --height <px> [--opacity <f>]
           icon-gen --help
 
         Options:
-          --svg <file>        The art. Its viewBox (or width and height) is scaled to fill each square image.
+          --svg <file>        The art. Its viewBox (or width and height) is scaled uniformly to fit each
+                              image and centered.
           --small-svg <file>  Simplified art for the small .ico sizes, up to --small-max
           --small-max <px>    Largest size drawn from --small-svg (default 32)
           --sizes <list>      .ico sizes, 1 to 256, e.g. 16,20,24,32 (default 16,20,24,32,40,48,64,256)
-          --size <px>         PNG size, 1 to 4096
+          --size <px>         Square PNG size, 1 to 4096
+          --width <px>        PNG width and height, 1 to 4096 each, instead of --size; for art that
+          --height <px>       isn't square, such as the README banner (1280x640)
           --opacity <f>       Multiply every pixel's alpha by f, 0 to 1; 0.5 gives the tray's
                               "glow off" icon (default 1)
 
         .ico layout: images below 256 px are 32-bpp bitmaps with an alpha channel, 256 px is a PNG.
-        build/icons.sh and build/icons.ps1 regenerate every icon in the repo with this tool.
+        build/icons.sh and build/icons.ps1 regenerate every icon and the banner in the repo with this tool.
 
         Exit codes: 0 success, 1 failed (missing or invalid SVG, unwritable output), 2 bad command line.
 
@@ -83,9 +87,9 @@ internal static class IconGenCli
     private static int WritePng(Options options, TextWriter output)
     {
         using SvgRasterizer art = SvgRasterizer.FromFile(options.Svg);
-        byte[] png = IconBuilder.BuildPng(art, options.Size, options.Opacity);
+        byte[] png = IconBuilder.BuildPng(art, options.Width, options.Height, options.Opacity);
         WriteFile(options.Output, png);
-        output.WriteLine($"Wrote {options.Output} ({png.Length:N0} bytes): {options.Size}x{options.Size} px"
+        output.WriteLine($"Wrote {options.Output} ({png.Length:N0} bytes): {options.Width}x{options.Height} px"
             + (options.Opacity < 1f ? $", opacity {options.Opacity.ToString(CultureInfo.InvariantCulture)}" : ""));
         return 0;
     }
@@ -115,6 +119,8 @@ internal static class IconGenCli
         int? smallMax = null;
         int[]? sizes = null;
         int? size = null;
+        int? width = null;
+        int? height = null;
         float opacity = 1f;
 
         for (int i = 1; i < args.Length; i++)
@@ -135,7 +141,13 @@ internal static class IconGenCli
                     sizes = SizeList(Value(args, ref i));
                     break;
                 case "--size" when command == "png":
-                    size = Int(arg, Value(args, ref i), 1, 4096);
+                    size = Int(arg, Value(args, ref i), 1, SvgRasterizer.MaxSize);
+                    break;
+                case "--width" when command == "png":
+                    width = Int(arg, Value(args, ref i), 1, SvgRasterizer.MaxSize);
+                    break;
+                case "--height" when command == "png":
+                    height = Int(arg, Value(args, ref i), 1, SvgRasterizer.MaxSize);
                     break;
                 case "--opacity":
                     opacity = Opacity(Value(args, ref i));
@@ -166,9 +178,19 @@ internal static class IconGenCli
             throw new UsageException("--svg <file> is required.");
         }
 
-        if (command == "png" && size is null)
+        if (command == "png")
         {
-            throw new UsageException("--size <px> is required for png.");
+            if (size is not null && (width is not null || height is not null))
+            {
+                throw new UsageException("give either --size or --width and --height, not both.");
+            }
+
+            if (size is null && (width is null || height is null))
+            {
+                throw new UsageException(width is null && height is null
+                    ? "--size <px> (or --width <px> --height <px>) is required for png."
+                    : "--width and --height go together.");
+            }
         }
 
         if (smallMax is not null && smallSvg is null)
@@ -183,7 +205,8 @@ internal static class IconGenCli
             smallSvg,
             smallMax ?? DefaultSmallMax,
             sizes ?? [.. IconBuilder.DefaultSizes],
-            size ?? 0,
+            size ?? width ?? 0,
+            size ?? height ?? 0,
             opacity);
     }
 
@@ -231,6 +254,9 @@ internal static class IconGenCli
         return value;
     }
 
+    /// <summary>A parsed command line.</summary>
+    /// <param name="Width">The PNG's width: <c>--size</c> or <c>--width</c>. 0 for <c>ico</c>.</param>
+    /// <param name="Height">The PNG's height: <c>--size</c> or <c>--height</c>. 0 for <c>ico</c>.</param>
     internal sealed record Options(
         string Command,
         string Output,
@@ -238,7 +264,8 @@ internal static class IconGenCli
         string? SmallSvg,
         int SmallMax,
         int[] Sizes,
-        int Size,
+        int Width,
+        int Height,
         float Opacity);
 
     private sealed class UsageException(string message) : Exception(message);
