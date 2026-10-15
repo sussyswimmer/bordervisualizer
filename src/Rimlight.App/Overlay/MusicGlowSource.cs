@@ -199,6 +199,12 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         return idle ? FrameMotion.Slow : FrameMotion.Full;
     }
 
+    // Runs on the frame that first sees a new settings snapshot, so once per edit, never per frame. It allocates there
+    // when the edit needs it: a Sensitivity change makes one AudioTuning (`with`, about 120 B; C12 measured it) and a
+    // manual color change one Palette, both records the contracts define. They are built here rather than on the UI
+    // thread on purpose: the tuning must start from the analyzer's own (the visualizer's live edits, H-004), which only
+    // this thread may read, and a UI-built copy could put back a tuning the overlay thread has since replaced. A slider
+    // drag makes at most a few dozen such records a second, all short-lived.
     private void ApplySettings(Settings settings)
     {
         Settings? previous = applied;
