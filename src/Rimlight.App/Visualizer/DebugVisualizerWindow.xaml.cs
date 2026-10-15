@@ -23,7 +23,7 @@ namespace Rimlight.App.Visualizer;
 /// "Copy params as JSON". It shows the overlay's own analyzer through an <see cref="AnalyzerProbe"/>, so what it shows
 /// is what drives the glow. Runs (keeps the capture open, the analyzer at the full rate and its timer going) only
 /// while it is on screen: not hidden, minimized or on another virtual desktop. Closing it really closes it. Always on
-/// top. UI thread only.
+/// top, and follows Windows' light or dark theme. UI thread only.
 /// </summary>
 internal partial class DebugVisualizerWindow : Window
 {
@@ -112,9 +112,14 @@ internal partial class DebugVisualizerWindow : Window
     {
         base.OnSourceInitialized(e);
         nint handle = new WindowInteropHelper(this).Handle;
-        ShellTheme.UseDarkTitleBar(handle, UiTheme.Current == ApplicationTheme.Dark);
+        // The content follows the theme through WPF-UI's brushes once it is synced; the title bar is this window's own.
+        // Nothing else syncs the theme in a --debug-visualizer session, which has no settings window.
+        ApplyTitleBar();
+        UiTheme.Follow(this, ApplyTitleBar);
         // A switch to another virtual desktop changes neither IsVisible nor the window state.
         cloak = new CloakWatcher(handle, () => Dispatcher.InvokeAsync(UpdateRunning));
+
+        void ApplyTitleBar() => ShellTheme.UseDarkTitleBar(handle, UiTheme.Current == ApplicationTheme.Dark);
     }
 
     // Runs only while on screen: the capture request, the probe on the overlay thread and the timer.

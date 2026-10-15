@@ -1,10 +1,8 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
 using Rimlight.Core;
 using Rimlight.Platform.Shell;
 using Wpf.Ui.Abstractions;
@@ -22,9 +20,6 @@ namespace Rimlight.App.SettingsUi;
 internal partial class SettingsWindow : FluentWindow
 {
     private const int WmDisplayChange = 0x007E;
-    private const int WmSettingChange = 0x001A;
-    private const int WmThemeChanged = 0x031A;
-    private const int WmSysColorChange = 0x0015;
 
     private readonly AppController app;
     private readonly DisplaysPage displays;
@@ -34,7 +29,6 @@ internal partial class SettingsWindow : FluentWindow
     private IDisposable? audio;
     private CloakWatcher? cloak; // kept with the window: its callback must outlive the hook
     private bool subscribed;
-    private bool themeQueued;
     private int systemQueued; // set by the watcher thread, cleared on this one
     private bool sized;
     private bool toastShown;
@@ -83,6 +77,7 @@ internal partial class SettingsWindow : FluentWindow
         nint handle = new WindowInteropHelper(this).Handle;
         // Top-level windows get display and theme broadcasts, also while hidden.
         HwndSource.FromHwnd(handle)?.AddHook(WindowProcedure);
+        UiTheme.Follow(this); // WPF-UI restyles this window's backdrop and title bar itself (it is the main window)
         // A switch to another virtual desktop changes neither IsVisible nor the window state.
         cloak = new CloakWatcher(handle, () => Dispatcher.InvokeAsync(UpdateActivity));
     }
@@ -221,31 +216,8 @@ internal partial class SettingsWindow : FluentWindow
 
     private IntPtr WindowProcedure(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        switch (message)
-        {
-            case WmDisplayChange:
-                displays.OnDisplaysChanged();
-                break;
-            case WmThemeChanged or WmSysColorChange:
-                QueueThemeSync();
-                break;
-            case WmSettingChange when lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet":
-                QueueThemeSync(); // "Choose your app mode"
-                break;
-        }
+        if (message == WmDisplayChange) displays.OnDisplaysChanged();
         return IntPtr.Zero;
-    }
-
-    // Outside the window procedure, once per burst of broadcasts.
-    private void QueueThemeSync()
-    {
-        if (themeQueued) return;
-        themeQueued = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-        {
-            themeQueued = false;
-            UiTheme.Sync();
-        });
     }
 
     // Windows' "Text size" (Accessibility > Text size, up to 225%): WPF doesn't follow it by itself, so the content

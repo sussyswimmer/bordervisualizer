@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 using Wpf.Ui.Markup;
@@ -14,6 +17,10 @@ namespace Rimlight.App.SettingsUi;
 /// </summary>
 internal static class UiTheme
 {
+    private const int WmSettingChange = 0x001A;
+    private const int WmThemeChanged = 0x031A;
+    private const int WmSysColorChange = 0x0015;
+
     // #7C5CFF, the brand violet (doc 08, Palette.Default's primary). WPF-UI derives lighter shades for dark mode and
     // darker ones for light mode, and picks black or white text on it.
     private static readonly Color BrandAccent = Color.FromRgb(0x7C, 0x5C, 0xFF);
@@ -51,8 +58,9 @@ internal static class UiTheme
     }
 
     /// <summary>
-    /// Follows Windows' theme if it changed: the settings window calls it when Windows announces a theme change, the
-    /// tray when its menu opens. Cheap when nothing changed (a registry read, a few more in high contrast).
+    /// Follows Windows' theme if it changed: the app's windows call it when Windows announces a theme change
+    /// (<see cref="Follow"/>), the tray when its menu opens. Cheap when nothing changed (a registry read, a few more in
+    /// high contrast).
     /// </summary>
     public static void Sync()
     {
@@ -72,6 +80,36 @@ internal static class UiTheme
         catch (Exception exception)
         {
             Trace.WriteLine($"[Ui] Following the system theme failed: {exception.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Lets a window follow Windows' theme: a theme, system color or app mode broadcast to it runs <see cref="Sync"/>,
+    /// once per burst and outside the window procedure, then <paramref name="followed"/>. Top-level windows get these
+    /// broadcasts also while hidden. Call from the window's <c>OnSourceInitialized</c>.
+    /// </summary>
+    /// <param name="window">The window; its handle exists.</param>
+    /// <param name="followed">What the window updates itself after a sync (its title bar), or null.</param>
+    public static void Follow(Window window, Action? followed = null)
+    {
+        if (HwndSource.FromHwnd(new WindowInteropHelper(window).Handle) is not { } source) return;
+        bool queued = false;
+        source.AddHook(OnMessage);
+
+        IntPtr OnMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            bool changed = message is WmThemeChanged or WmSysColorChange
+                // "Choose your app mode"
+                || (message == WmSettingChange && lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet");
+            if (!changed || queued) return IntPtr.Zero;
+            queued = true;
+            window.Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+            {
+                queued = false;
+                Sync();
+                followed?.Invoke();
+            });
+            return IntPtr.Zero;
         }
     }
 
