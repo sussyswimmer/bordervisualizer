@@ -569,14 +569,14 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
     - **Check:** each of the 11 allocation-measuring tests then passed alone in a fresh process, twice. The fix was followed by 5 more full runs: all 695 + 73 passed.
   - **CI on #27:** `06c807b` passed on Linux (SDK 8) and Windows. The next run, on `86253af` (only docs and the Oklab test changed), failed one test on each:
     - **Linux, `SoakTests.RetainedMemoryFailsTheSoak` (C12):** "grew −331,784 B". This test checks that a leak fails the soak. Its leak (180 arrays of 4 KB, about 740 KB) was smaller than the test host's own heap swing: the sample is process-wide and also sees memory other tests release meanwhile, such as pooled scratch that the array pool trims after a gen-2 GC. C12 already moved the positive memory check to a child process for this reason.
-      - **Fix:** the kept arrays are now 256 KB each (about 46 MB). With nothing retained the test still fails (8,928 B growth). `TheVerdictNeedsZeroAllocationsAndFlatMemory` still covers the 256 KB limit itself.
+      - **Fix (C12 branch, `baff8d5`, merged here):** the kept arrays are now 64 KB each (about 11.8 MB, 45 times the limit). A local fix with 256 KB arrays gave way to it in the merge, so the two branches carry the same file. With nothing retained the test still fails (checked here: 8,928 B growth). `TheVerdictNeedsZeroAllocationsAndFlatMemory` still covers the 256 KB limit itself.
     - **Windows, `PaletteExtractorTests.ExtractionCostIsModest` (C4), one of C12's two open flakes:** 2,091 B per call at 512 × 512, against a 1 KB limit.
       - Locally the counts are deterministic: 520 B per call at 64 × 64 and 528 B at 512 × 512. That run therefore had about 6.6 KB extra in the 64 × 64 loop (50 calls) and 7.8 KB extra in the 512 × 512 loop (5 calls). This is close to the 7,896 B C12 saw in `UpdateDoesNotAllocate`.
       - Array-pool trimming can't explain it: a trimmed buffer is re-allocated whole (82 KB or MBs).
       - **Two more causes ruled out by scratch probes:**
         - Crossing the tier-1 call-count threshold, including after the tiering worker has idled out, allocates nothing on the calling thread.
         - `GetAllocatedBytesForCurrentThread` stays exact (0 B drift) while other threads force 576,291 GCs and the measured thread allocates every iteration.
-      - The cause is still open, so the test is unchanged.
+      - **Change (`57c702d`, pushed to this branch by another session):** the test now asserts the smallest per-call figure of three batches. A per-call allocation still shows in every batch and fails. The one-off cost itself is still unexplained: tier-up on the calling thread is ruled out above, while on-stack replacement and a first type load remain candidates.
   - **C12's two open flakes** (`ExtractionCostIsModest`, `UpdateDoesNotAllocate`) didn't recur in 9 local full runs.
 
 ## Lane B — Claude Code
