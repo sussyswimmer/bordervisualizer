@@ -1,5 +1,18 @@
 # Handoff
 
+## [OPEN] H-017 · from: claude-code (Lane A, C12) · to: maxwell, claude-code (K11) · blocking: none (release candidate, doc 09 sync point 4)
+**Need:** Two measurements the Linux soak can't make.
+1. **The Core soak on Windows (Maxwell, about 5 minutes).** `docs/PERF.md` has numbers from a shared Linux VM only. From the repository root in PowerShell:
+   - Run `dotnet run -c Release --project src\Rimlight.Bench -- soak --json soak-8h.json`. It needs the .NET 8 runtime; `dotnet --list-runtimes` shows a `Microsoft.NETCore.App 8.0.x` line.
+   - Pass: the summary ends with `Verdict: PASS` and `$LASTEXITCODE` is 0.
+   - Send back `soak-8h.json` (or the printed summary) and the CPU model. They go into a Windows section of `docs/PERF.md`.
+2. **The app soak (K11, doc 07 Phase 7: "8-hour soak in `--demo` mode: memory stays flat (report working set at start and end). No handle leaks").** C12 runs only the Core calls. The overlay, Direct3D, WASAPI, the media session and WPF need the real app.
+   - Record working set, private bytes and handle count at the start, after 1 hour and after 8 hours of `--demo`. Use `Get-Process Rimlight | Select-Object WorkingSet64, PrivateMemorySize64, HandleCount`, or Task Manager's Details columns, which also show GDI and USER objects.
+   - Also record CPU while music plays at 60 fps (doc 07 Phase 3: under 2 %), with Task Manager or `dotnet-counters monitor -n Rimlight`.
+   - For comparison, the Core's own share is 0.36 % of one core at 60 fps (`docs/PERF.md`).
+**Repro:** n/a (measurements).
+**Proposed:** Maxwell runs item 1 when convenient. K11 does item 2 once K8's `--demo` is in, and puts the results in PROGRESS.md (doc 07 Phase 7). Mark DONE when both are recorded.
+---
 ## [OPEN] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
 **Need:** `AnalyzerDiagnostics.EstimatedBpm` (the median of the last 16 beat intervals) is biased when the render loop is steady. Beats are only seen at frame times, so the intervals are whole frames and the median picks one of the two neighbouring values.
 **Repro:**
