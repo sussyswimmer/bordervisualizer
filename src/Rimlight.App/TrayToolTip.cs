@@ -35,8 +35,9 @@ internal static class TrayToolTip
         }
         else
         {
-            // Long titles (video names) give way first; the artist keeps at least half the room.
-            string shortArtist = Fit(artist, Math.Max(0, (room - Separator.Length) / 2));
+            // Long titles (video names) give way first: the artist gets what the title leaves, and at least half.
+            int artistRoom = Math.Max((room - Separator.Length) / 2, room - Separator.Length - title.Length);
+            string shortArtist = Fit(artist, Math.Max(0, artistRoom));
             int titleRoom = room - Separator.Length - shortArtist.Length;
             body = titleRoom > 0 ? Fit(title, titleRoom) + Separator + shortArtist : Fit(title, room);
         }

@@ -7,14 +7,15 @@ using System.Text;
 namespace Rimlight.App.Logging;
 
 /// <summary>
-/// A trace listener that writes every <see cref="Trace"/> line to <c>rimlight.log</c> and keeps at most five files of
-/// 1 MB each (doc 02 "Logging"): <c>rimlight.log</c>, then <c>rimlight.1.log</c> (newest) to <c>rimlight.4.log</c>.
+/// A trace listener that writes every <see cref="Trace"/> line to a log file and keeps at most five files of 1 MB each
+/// (doc 02 "Logging"): <c>{name}.log</c>, then <c>{name}.1.log</c> (newest) to <c>{name}.4.log</c>.
 /// </summary>
 /// <remarks>
 /// Writing a line only queues it, so a caller on the overlay or audio thread never waits for the disk. A pool timer
 /// writes the queue 500 ms after the first new line, opening the file for each batch (so it can be read or deleted
 /// at any time). The listener never throws: lines that can't be written are dropped. The app logs only events and
-/// rate-limited errors, never per frame.
+/// rate-limited errors, never per frame. People attach the log to public bug reports, so the user's profile folder
+/// (which names their Windows account) is written as <c>%USERPROFILE%</c>.
 /// </remarks>
 internal sealed class RollingFileLog : TraceListener
 {
@@ -33,6 +34,7 @@ internal sealed class RollingFileLog : TraceListener
 
     private readonly string directory;
     private readonly string baseName;
+    private readonly string? userProfile; // e.g. C:\Users\<name>, replaced in every line
     private readonly ConcurrentQueue<string> pending = new();
     private readonly Timer flushTimer;
     private readonly object writeGate = new(); // one batch at a time; never taken by a caller of Trace
@@ -42,10 +44,12 @@ internal sealed class RollingFileLog : TraceListener
     /// <summary>Creates the listener; the folder is created on the first write.</summary>
     /// <param name="directory">The logs folder.</param>
     /// <param name="fileName">The current file's name; rolled-over files insert .1 to .4 before the extension.</param>
-    public RollingFileLog(string directory, string fileName = "rimlight.log")
+    public RollingFileLog(string directory, string fileName)
     {
         this.directory = directory;
         baseName = Path.GetFileNameWithoutExtension(fileName);
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile).TrimEnd('\\', '/');
+        userProfile = profile.Length > 3 ? profile : null; // never a bare drive, which would mangle every path
         FilePath = Path.Combine(directory, fileName);
         flushTimer = new Timer(_ => WritePending(), null, Timeout.Infinite, Timeout.Infinite);
     }
@@ -69,6 +73,7 @@ internal sealed class RollingFileLog : TraceListener
             text = partial.Append(text).ToString();
             partial.Clear();
         }
+        if (userProfile is not null) text = text.Replace(userProfile, "%USERPROFILE%", StringComparison.OrdinalIgnoreCase);
         if (text.Length > MaxLineChars) text = string.Concat(text.AsSpan(0, MaxLineChars), " … (cut)");
         pending.Enqueue(string.Create(CultureInfo.InvariantCulture,
             $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{Environment.CurrentManagedThreadId,2}] {text}{Environment.NewLine}"));
@@ -141,7 +146,7 @@ internal sealed class RollingFileLog : TraceListener
     // Opened per batch and shared, so the file can be read, copied or deleted while the app runs.
     private FileStream Open() => new(FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
 
-    // rimlight.3.log → .4, … rimlight.log → .1; the oldest goes.
+    // {name}.3.log → .4, … {name}.log → .1; the oldest goes.
     private void RollOver()
     {
         File.Delete(Numbered(MaxFiles - 1));

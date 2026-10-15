@@ -17,6 +17,8 @@ public interface IOverlayFrameSource
     /// <param name="paused">
     /// True while the glow should be paused: <see cref="OverlayHost.SetPaused"/>, "Pause on battery", or every overlay
     /// paused on its monitor (<see cref="OverlayHost.SetPausedMonitors"/>). Pass it to <see cref="ILightEngine.Update"/>.
+    /// Also true for the one call made when the last overlay goes away (no monitor selected or connected);
+    /// <see cref="FramesStopped"/> follows it, and no calls follow until an overlay exists again.
     /// </param>
     /// <param name="gradient">
     /// 64 linear RGBA texels (256 floats), as <see cref="IPaletteBlender.FillGradient"/> writes them. The buffer keeps
@@ -28,7 +30,8 @@ public interface IOverlayFrameSource
     /// <summary>
     /// No overlay exists (no display is chosen, or none of the chosen ones is connected), so <see cref="NextFrame"/>
     /// isn't called until one does. Let go of what only frames use, such as an open audio stream. Called once per such
-    /// stretch, on the overlay thread; the default does nothing.
+    /// stretch, on the overlay thread, right after that stretch's one paused <see cref="NextFrame"/>; the default does
+    /// nothing.
     /// </summary>
     void FramesStopped()
     {

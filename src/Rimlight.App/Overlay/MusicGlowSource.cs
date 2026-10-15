@@ -128,8 +128,9 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         return new OverlayFrame(state, refill, Motion(listen, wanted, in features, settings));
     }
 
-    // No display shows the glow: close the capture, also while Settings wants audio (its meter then says nothing is
-    // listening, as no frame publishes a reading). The next frame opens it again if needed.
+    // No display shows the glow: after the paused frame that ends the frames, close the capture, also while Settings
+    // wants audio (its meter then says nothing is listening, as no further frame publishes a reading). The next frame
+    // opens it again if needed.
     public void FramesStopped()
     {
         if (!listening) return;
@@ -138,10 +139,11 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     }
 
     // How the glow will change: the overlay draws music at the full rate, breathing at 10 fps, and stops drawing a
-    // static glow (listening on at 10 Hz when music could bring it back, or while Settings shows the audio).
+    // static glow (listening on at 10 Hz when music could bring it back, or while Settings shows the audio). A palette
+    // crossfade runs in the blender, not the engine, so it is motion even while the engine is static: it changes the
+    // colors every frame, at the full rate.
     private FrameMotion Motion(bool listen, bool wanted, in AudioFeatures features, Settings settings)
     {
-        // A crossfade changes the colors every frame, even on a glow that is otherwise static.
         if (blender.IsAnimating) return FrameMotion.Full;
         if (engine.IsStatic) return listen || wanted ? FrameMotion.Listening : FrameMotion.Still;
         if (!listen) return FrameMotion.Slow; // Idle Glow (or a fade the overlay sees as fast change)
