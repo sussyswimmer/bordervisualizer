@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using Rimlight.AudioTools;
 
 namespace Rimlight.Bench;
@@ -18,13 +17,20 @@ internal static class BenchCli
             --fps <n>            Frames per second; one frame of audio per call (default 60)
             --frames <n>         Measured frames per scenario (default 10000)
             --warmup <n>         Unmeasured frames first (default 2000, and at least 0.5 s)
-          soak [options]       Simulated-time run over a long synthetic track, with progress lines
-            --minutes <n>        Simulated minutes (default 1)
-            --rate <Hz>  --fps <n> (60)  --jitter <f> (0.2)  --packet-ms <ms> (10)  --seed <n> (1)
-            --warmup-seconds <s> Simulated seconds run before measuring starts (default 5)
-            --report-every <min> Simulated minutes between progress lines (default: ten lines)
+          soak [options]       The C12 soak: the analyzer, light engine and palette blender, exactly as the render
+                               thread runs them, over hours of simulated time on a synthetic listening program
+                               (tracks with tempo, level and palette changes, silence and no-packet gaps, pauses).
+                               Reports allocations, frame cost (mean, p50, p99, p99.9, max) and memory at start
+                               and end. CPU-bound, not real time: 8 hours take minutes.
+            --hours <h>          Simulated hours (default 8)
+            --minutes <m>        Simulated minutes instead, for shorter runs
+            --fps <n>            Render frames per second (default 60)
+            --json <file>        Also write the full report as JSON
+            --rate <Hz> (48000)  --jitter <f> (0.2)  --packet-ms <ms> (10)  --seed <n> (1)
+            --warmup-seconds <s> Real seconds of warm-up on a short tour of every path before measuring (default 2)
+            --report-every <min> Simulated minutes between progress lines (default: 16 lines)
 
-        Exit codes: 0 success, 1 allocations found on the measured path, 2 bad command line.
+        Exit codes: 0 success, 1 allocations on the measured path (or, for soak, managed memory growth), 2 bad command line.
 
         """;
 
@@ -73,7 +79,7 @@ internal static class BenchCli
         };
         int frameSamples = (int)Math.Round(options.SampleRate / options.Fps);
         output.WriteLine(string.Create(C, $"Analyzer benchmark: {options.SampleRate} Hz, {options.Fps:0.##} fps ({frameSamples} samples per frame), {options.WarmupFrames} warm-up frames (at least {options.MinWarmupSeconds:0.#} s) + {options.Frames} measured frames per scenario"));
-        output.WriteLine(Machine());
+        output.WriteLine(MachineInfo.Describe());
         output.WriteLine();
         output.WriteLine("| scenario | mean ns/frame | p50 | p99 | max | bytes/frame | core % | GCs (0/1/2) | beats | signal |");
         output.WriteLine("|---|---:|---:|---:|---:|---:|---:|---|---:|---|");
@@ -93,34 +99,36 @@ internal static class BenchCli
 
     private static int Soak(string[] args, TextWriter output)
     {
-        var a = new CommandLine(args, ["minutes", "rate", "fps", "jitter", "packet-ms", "seed", "warmup-seconds", "report-every"], []);
+        var a = new CommandLine(args, ["hours", "minutes", "rate", "fps", "jitter", "packet-ms", "seed", "warmup-seconds", "report-every", "json"], []);
         if (a.Positional.Count != 0) throw new UsageException($"Unexpected argument \"{a.Positional[0]}\".");
+        if (a.Has("hours") && a.Has("minutes")) throw new UsageException("Give --hours or --minutes, not both.");
+        string? json = a.Text("json");
+        if (json is not null && json.Trim().Length == 0) throw new UsageException("--json needs a file name.");
         var options = new SoakOptions
         {
-            Minutes = a.Number("minutes", 1, 0.05, 48 * 60),
+            Hours = a.Has("minutes") ? a.Number("minutes", 0, 0.05, 48 * 60) / 60 : a.Number("hours", 8, 0.001, 48),
             SampleRate = a.Integer("rate", 48000, 8000, 384000),
             Fps = a.Number("fps", 60, 1, 1000),
             Jitter = a.Number("jitter", 0.2, 0, 0.9),
             PacketSeconds = a.Number("packet-ms", 10, 0, 1000) / 1000,
             Seed = a.Seed("seed", 1),
-            WarmupSeconds = a.Number("warmup-seconds", 5, 0, 3600),
+            WarmupSeconds = a.Number("warmup-seconds", 2, 0, 3600),
             ReportEveryMinutes = a.Number("report-every", 0, 0, 48 * 60),
         };
-        output.WriteLine(string.Create(C, $"Soak: {options.Minutes:0.##} simulated minutes of synthetic music (124 BPM full mix), {options.SampleRate} Hz, {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.PacketSeconds * 1000:0.#} ms packets, first {options.WarmupSeconds:0.#} s not measured"));
-        output.WriteLine(Machine());
-        IReadOnlyList<SoakSnapshot> snapshots = SoakRun.Run(options, s => output.WriteLine(SoakRun.Format(s)));
-        bool allocationFree = snapshots.Count > 0 && snapshots[^1].BytesPerFrame == 0;
-        return allocationFree ? 0 : 1;
-    }
-
-    private static string Machine()
-    {
-        string build =
-#if DEBUG
-            "DEBUG build: timings are not representative";
-#else
-            "Release";
-#endif
-        return $"{RuntimeInformation.FrameworkDescription}, {RuntimeInformation.OSDescription.Trim()} {RuntimeInformation.ProcessArchitecture}, {Environment.ProcessorCount} logical CPUs, {build}";
+        output.WriteLine(string.Create(C, $"Soak: {SoakRun.Clock(options.Seconds)} simulated at {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.SampleRate} Hz in {options.PacketSeconds * 1000:0.#} ms packets; analyzer + light engine + palette blender (gradient filled every frame)"));
+        output.WriteLine(MachineInfo.Describe());
+        SoakResult result = SoakRun.Run(options, s => output.WriteLine(SoakRun.Format(s)), program =>
+        {
+            output.WriteLine(SoakRun.Describe(program.Summary, options));
+            output.WriteLine();
+        });
+        output.WriteLine();
+        output.Write(SoakRun.Summarize(result));
+        if (json is not null)
+        {
+            SoakReport.Write(result, json);
+            output.WriteLine($"JSON report: {Path.GetFullPath(json)}");
+        }
+        return result.Passed ? 0 : 1;
     }
 }

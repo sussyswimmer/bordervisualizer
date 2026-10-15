@@ -3,7 +3,7 @@ using Xunit;
 
 namespace Rimlight.Tests.Tools;
 
-// C3: Rimlight.Bench's measurement plumbing. The timings themselves are informational; allocations are not.
+// C3/C12: Rimlight.Bench's measurement plumbing (the soak itself is in SoakTests). The timings themselves are informational; allocations are not.
 public sealed class BenchTests
 {
     [Fact]
@@ -18,20 +18,6 @@ public sealed class BenchTests
             Assert.True(result.Cost.Mean > 0, scenario);
         }
         Assert.True(AnalyzerBenchmark.Run("music", options).Beats > 20); // the signal really has beats
-    }
-
-    [Fact]
-    public void SoakReportsSnapshotsWithoutAllocating()
-    {
-        var reported = new List<SoakSnapshot>();
-        IReadOnlyList<SoakSnapshot> snapshots = SoakRun.Run(new SoakOptions { Minutes = 0.25, WarmupSeconds = 3, ReportEveryMinutes = 0.05 }, reported.Add);
-        Assert.Equal(snapshots, reported);
-        Assert.InRange(snapshots.Count, 4, 5);                              // every 3 s after the 3 s warm-up
-        Assert.Equal(15, snapshots[^1].SimulatedSeconds, 1);
-        Assert.InRange(snapshots[^1].Frames, 12 * 60 - 20, 12 * 60 + 20);  // only measured frames count
-        Assert.All(snapshots, s => Assert.Equal(0, s.BytesPerFrame));
-        Assert.True(snapshots[^1].Beats > 20);
-        Assert.Contains("B/frame", SoakRun.Format(snapshots[^1]));
     }
 
     [Fact]
@@ -69,6 +55,11 @@ public sealed class BenchTests
         Assert.Contains("| idle |", output.ToString());
         Assert.Equal(2, BenchCli.Run(["analyzer", "--scenario", "jazz"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(2, BenchCli.Run(["sock"], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--hours", "1", "--minutes", "5"], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--hours", "0"], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--json", " "], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--json"], TextWriter.Null, TextWriter.Null));
+        Assert.Equal(2, BenchCli.Run(["soak", "--minutes", "1", "extra"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(0, BenchCli.Run(["--help"], TextWriter.Null, TextWriter.Null));
     }
 }
