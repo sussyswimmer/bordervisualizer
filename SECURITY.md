@@ -52,5 +52,5 @@ Rimlight is a tray app that draws a glow around the edges of your screens and fo
 
 - Bugs in Windows, GPU drivers, .NET or the libraries Rimlight uses. Please report those to their maintainers. If Rimlight ships a version with a known vulnerability, that *is* in scope.
 - Attacks that need administrator rights, or that already control your user account (for example, replacing Rimlight's files in your user profile).
-- The *Windows protected your PC* (SmartScreen) warning when installing. Rimlight isn't code-signed yet; choose **More info**, then **Run anyway**.
+- The *Windows protected your PC* (SmartScreen) warning when installing. Rimlight isn't code-signed yet; choose **More info**, then **Run anyway**. If Windows says *Smart App Control blocked* it instead, there's no Run anyway: unsigned apps can't run while Smart App Control is on (Windows Security > App & browser control > Smart App Control settings). That ends when releases are code-signed.
 - Crashes, visual glitches and high CPU use with no security impact. Those are regular bugs: please use the [bug report form](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml).

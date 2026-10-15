@@ -113,7 +113,8 @@ jobs:
       #                          an Entra ID app registration with the "Trusted Signing
       #                          Certificate Profile Signer" role on that profile
       # Without them releases are unsigned, and SmartScreen asks first-time users to click
-      # "More info", then "Run anyway" (README).
+      # "More info", then "Run anyway" (README). Smart App Control, on by default on some new
+      # Windows 11 PCs, blocks unsigned releases outright, with no "Run anyway" (HANDOFF H-023).
       SIGN: ${{ github.event_name == 'push' && secrets.SIGNING_ENDPOINT != '' && secrets.SIGNING_ACCOUNT != '' && secrets.SIGNING_PROFILE != '' && secrets.SIGNING_TENANT_ID != '' && secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_CLIENT_SECRET != '' }}
     steps:
       - uses: actions/checkout@v4
