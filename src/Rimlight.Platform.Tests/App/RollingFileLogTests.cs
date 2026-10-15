@@ -26,7 +26,8 @@ public sealed class RollingFileLogTests : IDisposable
         Assert.Equal(2, lines.Length);
         Assert.Matches(@"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[ ?\d+\] \[Test\] one$", lines[0]);
         Assert.EndsWith("[Test] two", lines[1]);
-        Assert.True(SpinWait.SpinUntil(() => File.ReadAllLines(log.FilePath).Length == 2, 100)); // the timer adds nothing twice
+        Thread.Sleep(700); // past the flush timer, which the first line armed for 500 ms
+        Assert.Equal(2, File.ReadAllLines(log.FilePath).Length); // it found the queue empty and wrote nothing twice
     }
 
     [Fact]

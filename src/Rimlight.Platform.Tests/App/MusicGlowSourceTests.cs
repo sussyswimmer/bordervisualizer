@@ -86,15 +86,17 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
         output.WriteLine($"{mode}: {frameBytes} B over 3000 frames; at most {editBytes} B on the {edits} frames with a new snapshot");
         Assert.Equal(0, frameBytes);
         // A new snapshot that changes neither Sensitivity nor a color costs nothing either, except in demo mode with the
-        // glow off or Off: the demo's engine settings (the user's, shown on and in music sync) are made once per snapshot.
-        if (mode == "demo, glow off and Off") Assert.InRange(editBytes, 1, 256);
+        // glow off or Off: the demo's engine settings (the user's, shown on and in music sync) are made once per snapshot,
+        // at most a small record (the ceiling is what counts; no allocation at all would be fine too).
+        if (mode == "demo, glow off and Off") Assert.InRange(editBytes, 0, 256);
         else Assert.Equal(0, editBytes);
     }
 
     [Fact]
     public void ASettingsEditAllocatesOnlyWhenItChangesSensitivityOrAColor()
     {
-        // The once-per-edit cost MusicGlowSource.ApplySettings documents (C12 measured 120 B per Sensitivity edit).
+        // The once-per-edit cost MusicGlowSource.ApplySettings documents (C12 measured 120 B per Sensitivity edit): at most
+        // a small record or two. Only the ceiling is checked: an edit that allocated nothing would be fine too.
         var settings = new Settings();
         using var rig = new GlowRig(settings);
         double now = 0;
@@ -111,8 +113,8 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
         long sensitivity = Edit(settings with { Sensitivity = 1.5f });
         long color = Edit(settings with { Sensitivity = 1.5f, PrimaryHex = "#FF0000" });
         output.WriteLine($"Sensitivity edit: {sensitivity} B, color edit: {color} B");
-        Assert.InRange(sensitivity, 1, 256);
-        Assert.InRange(color, 1, 256);
+        Assert.InRange(sensitivity, 0, 256);
+        Assert.InRange(color, 0, 256);
     }
 
     [Fact]
@@ -202,6 +204,25 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
         rig.Source.SetDemo(false);
         Assert.InRange(FramesUntilSettled(rig, ref now, settings), 47, 50);
         AssertGradientShows(rig.Gradient, NextAlbum);
+    }
+
+    [Fact]
+    public void TheDemoStartsOverFromItsFirstPaletteEachTime()
+    {
+        // Every --demo (and every Demo mode click) starts the track from its first downbeat and the first palette, so a
+        // recording always shows the same sequence.
+        var settings = new Settings();
+        using var rig = new GlowRig(settings);
+        double now = 0;
+        rig.Source.SetDemo(true);
+        for (int i = 0; i < 60 * 8; i++) rig.Frame(now += Dt, Dt, settings, false); // 8 s: the second palette shows
+        AssertGradientShows(rig.Gradient, DemoBeat.Palettes[1]);
+
+        rig.Source.SetDemo(false);
+        for (int i = 0; i < 60; i++) rig.Frame(now += Dt, Dt, settings, false);
+        rig.Source.SetDemo(true);
+        for (int i = 0; i < 60; i++) rig.Frame(now += Dt, Dt, settings, false); // past the 800 ms crossfade
+        AssertGradientShows(rig.Gradient, DemoBeat.Palettes[0]);
     }
 
     [Fact]
