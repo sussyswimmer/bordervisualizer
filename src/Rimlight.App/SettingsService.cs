@@ -50,7 +50,10 @@ internal sealed class SettingsService : IDisposable
         Changed?.Invoke(after);
     }
 
-    /// <summary>Saves a pending change now. Safe from any thread; a failed save is logged and dropped.</summary>
+    /// <summary>
+    /// Saves a pending change now. Safe from any thread. A failed save is logged and stays pending, without a retry
+    /// timer: the next change or the save at Quit tries again.
+    /// </summary>
     public void Flush()
     {
         lock (saveGate)
@@ -62,8 +65,10 @@ internal sealed class SettingsService : IDisposable
             }
             catch (Exception exception)
             {
-                // ISettingsStore.Save writes atomically, so a failure leaves the previous file intact.
+                // ISettingsStore.Save writes atomically, so a failure (IOException, UnauthorizedAccessException: the
+                // folder is read-only, the disk full, the file held by another program) leaves the previous file intact.
                 Trace.WriteLine($"[Settings] Saving to {store.Path} failed: {exception.Message}");
+                Volatile.Write(ref savePending, 1);
             }
         }
     }
