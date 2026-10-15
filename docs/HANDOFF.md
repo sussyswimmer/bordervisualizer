@@ -15,6 +15,7 @@
 2. **K12:** the README's Install steps and FAQ (doc 08 §2, items 3 and 6) get the Smart App Control sentence that `.github/release-notes-intro.md` and `SECURITY.md` now have. Drop both sentences once releases are signed (H-014 item 4).
 **Repro:** n/a (documented Windows behaviour; nothing in the repo signs a release unless the secrets exist).
 **Proposed:** Maxwell decides whether to sign before 1.0 (create the account and add the six secrets; nothing else changes) or to ship unsigned with the note. K12 adds the sentence while releases are unsigned.
+**K12 (#30):** item 2 done. The README's Install note has the Smart App Control sentence, and a new FAQ entry, "Why does Windows warn about the installer, or block it?", says where the setting is. Item 1 stays with Maxwell, so this stays open.
 ---
 ## [DONE] H-022 · from: claude-code (K7) · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 *Numbered H-012 on the K7–K9 branches; renumbered in K10 because C10's H-012 came first.*

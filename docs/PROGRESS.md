@@ -1307,6 +1307,18 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - Record `assets/demo.gif` (one 24 s demo loop) and `settings-dark.png`/`settings-light.png`, then uncomment the README blocks.
   - Set the description, website, topics and social preview. Turn on Discussions, then the commented "Ask a question" link in `.github/ISSUE_TEMPLATE/config.yml` can be switched on. Pin the repo.
   - After tagging v1.0.0, check that the download links and badges resolve (doc 08 §5).
+- **Re-check against the release candidate (after merging #29, with K10's review fixes and K11):** every feature and FAQ claim, the defaults, the shortcut, the asset names and the links, read against the final code.
+  - **Fixed:**
+    - "Brightness and width follow the loudness": the width is the Glow setting, and only the beat pulse widens it (`Glow.hlsl`: spread × (1 + 0.35 × Pulse)); brightness follows Level (Brightness × (0.35 + 0.65 × Level)). Now "Brightness follows the loudness, and every beat sends a pulse that flares the glow brighter and wider."
+    - Install step 2 says Settings opens with a short welcome on the first start (K10's first-run change in `AppController`: Settings with the banner).
+    - "To switch it off for a session, press Ctrl+Alt+L": the shortcut toggles `Enabled`, which is saved, so the glow stays off after a restart. Now "To turn the glow off, press …; press it again to turn it back on."
+    - H-023 item 2: Install's SmartScreen note gets the Smart App Control sentence (as in `.github/release-notes-intro.md` and `SECURITY.md`), and a new FAQ entry, "Why does Windows warn about the installer, or block it?", says where the setting is. Both go once releases are signed (H-014 item 4).
+  - **Confirmed, unchanged:**
+    - Defaults: a 60 fps frame rate limit (Settings > Displays), Pause in fullscreen apps on, On battery = Save power (30 fps, half scale), Update automatically on, Start with Windows on, Ctrl+Alt+L. The five preset names, the six Settings pages, the 12 h update check ("twice a day"), and the 0.36 % figure in `docs/PERF.md`.
+    - The privacy bullets match doc 01 word for word.
+    - Asset names: `build/pack.ps1` copies `Rimlight-<channel>-Setup.exe` to `RimlightSetup.exe` and `RimlightSetup-arm64.exe`, which `release.yml` attaches to the draft release (`gh release create … artifacts/installers/*`), and `vpk upload github` adds `Rimlight-win-Portable.zip` and `Rimlight-win-arm64-Portable.zip`.
+    - The CI badge names `ci.yml`, which exists. Every image has alt text, and no other app is named.
+    - Links (checked by script): every relative link and anchor resolves; all seven badge URLs return 200; the credit links match each NuGet package's repository URL; the four download links return 404 until the first release; `maxwellolander.com` still doesn't resolve.
 
 ## Lane B notes
 

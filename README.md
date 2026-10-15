@@ -36,7 +36,7 @@ and, for the sharper MP4, the video link GitHub gives when the file is dropped i
 
 <table>
   <tr>
-    <td width="50%" valign="top">🥁 <b>Beat-synced</b><br>Brightness and width follow the loudness, and a pulse fires on each beat.</td>
+    <td width="50%" valign="top">🥁 <b>Beat-synced</b><br>Brightness follows the loudness, and every beat sends a pulse that flares the glow brighter and wider.</td>
     <td width="50%" valign="top">🎨 <b>Album-art colors</b><br>Two colors from the cover of whatever is playing, crossfading on every new track.</td>
   </tr>
   <tr>
@@ -69,8 +69,8 @@ Settings has six pages (Appearance, Color, Motion, Displays, Behavior and About)
 ## Install
 
 1. **Download [RimlightSetup.exe](https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/RimlightSetup.exe).** On Windows on ARM, get [RimlightSetup-arm64.exe](https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/RimlightSetup-arm64.exe) instead.
-2. **Run it.** It installs for your user account, with no admin prompt, and Rimlight starts in the notification area next to the clock.
-   > Windows may say *Windows protected your PC* because the app isn't code-signed yet. Click **More info → Run anyway**.
+2. **Run it.** It installs for your user account, with no admin prompt. Rimlight starts in the notification area next to the clock and opens its Settings with a short welcome.
+   > Windows may say *Windows protected your PC* because the app isn't code-signed yet. Click **More info → Run anyway**. If it says *Smart App Control blocked* the app instead, there's no Run anyway: Rimlight can't run while Smart App Control is on until releases are code-signed ([more in the FAQ](#faq)).
 3. **Play some music** and look at the edges of your screen. Click the tray icon (or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>) to turn the glow on or off, double-click it for Settings, and right-click it for modes, colors and presets.
 
 You need Windows 10 version 2004 or later, or Windows 11. The .NET runtime is included, so there is nothing else to install. Rimlight checks for a new version twice a day and installs it the next time it starts; turn that off with **Update automatically** in **Settings > Behavior**.
@@ -113,7 +113,7 @@ No. Rimlight captures only what your PC plays, through WASAPI loopback on the de
 <details>
 <summary><b>Will it slow down games?</b></summary>
 
-It's built to stay out of the way. With **Pause in fullscreen apps** on (the default), a game that fills a screen pauses the glow on that screen, and Rimlight hides its window there. On other screens it draws at most at your frame rate limit (60 fps unless you change it in **Settings > Displays**) and skips frames while the light doesn't change. Its audio and light engine takes about 0.36 % of one CPU core at 60 fps; that was [measured](docs/PERF.md) on the engine alone, in an 8-hour run on a Linux VM. To switch it off for a session, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>.
+It's built to stay out of the way. With **Pause in fullscreen apps** on (the default), a game that fills a screen pauses the glow on that screen, and Rimlight hides its window there. On other screens it draws at most at your frame rate limit (60 fps unless you change it in **Settings > Displays**) and skips frames while the light doesn't change. Its audio and light engine takes about 0.36 % of one CPU core at 60 fps; that was [measured](docs/PERF.md) on the engine alone, in an 8-hour run on a Linux VM. To turn the glow off, press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>L</kbd>; press it again to turn it back on.
 </details>
 
 <details>
@@ -132,6 +132,12 @@ That's on purpose. With **Pause in fullscreen apps** on (the default), anything 
 <summary><b>Which music apps work?</b></summary>
 
 The glow moves with anything your PC plays (music apps, browsers, videos and games), because Rimlight listens to the default output device. The album colors come from apps that share what's playing with Windows' media controls, the panel that shows the track when you press a media key; most music apps and browsers do. Without a cover, the glow uses your own colors from **Settings > Color**. A player set to exclusive-mode output bypasses the Windows mixer, so the glow can't hear it; switch the player to shared mode.
+</details>
+
+<details>
+<summary><b>Why does Windows warn about the installer, or block it?</b></summary>
+
+Rimlight isn't code-signed yet, so Windows doesn't recognize it. *Windows protected your PC* (SmartScreen) is a warning: click **More info → Run anyway**. *Smart App Control blocked* is a hard stop on Windows 11: while Smart App Control is on, unsigned apps don't run at all, so there is no Run anyway. The setting is in **Windows Security > App & browser control > Smart App Control settings**. Turning it off is your call; on some versions of Windows it can't be turned back on without reinstalling Windows. Both messages go away once releases are code-signed. Every release is built from this repository by the [release workflow](.github/workflows/release.yml).
 </details>
 
 <details>
