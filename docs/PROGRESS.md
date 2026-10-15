@@ -456,6 +456,10 @@
       - 0.5 ms a frame at the default look, 0.9 ms at 100% glow
   - Rendered preview frames were checked by eye.
   - Nothing has run on Windows yet: Maxwell's checklist is in #24.
+- **After the PR:**
+  - K6's review fixes (#22) are merged into this branch, so #24 merges cleanly again. In `AppController.Start` the pipe listens first (K6), then WPF-UI loads (K7).
+  - The Behavior page names the setting's text when the shortcut has no parsed gesture (no shortcut window), as K6's welcome does. A shortcut in use or refused shows by name only, above its warning.
+  - Rebuilt (Release and Debug, 0 warnings), `dotnet test` (165) and the 87-check harness pass again.
 - **Left for later:**
   - **K8:** use `AppController.RequestAudio()` and `MusicGlowSource.LatestAudio`.
   - **K9:** set `AppController.Updates`; About's button and the tray already call it.
