@@ -29,6 +29,7 @@ internal sealed class TrayIconHost : IDisposable
     private readonly TaskbarIcon icon;
     private readonly TrayIconImages images;
     private readonly DispatcherTimer createRetry;
+    private readonly TrayNotificationClicks clicks = new();
     private readonly string toolTipSuffix;
     private readonly MenuItem glowOn;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
@@ -117,7 +118,11 @@ internal sealed class TrayIconHost : IDisposable
         // Keyboard access: Shift+F10 or the menu key on the focused icon (Win+B, then the arrow keys), Enter or Space.
         icon.TrayKeyboardContextMenu += (_, _) => ShowMenuFromKeyboard();
         icon.TrayKeyboardKeySelect += (_, _) => ShowMenuFromKeyboard();
-        icon.TrayBalloonTipClicked += (_, _) => NotificationClicked?.Invoke();
+        // Which notification a click belongs to (TrayNotificationClicks). H.NotifyIcon raises these on this thread from
+        // the shell's NIN_BALLOONSHOW, NIN_BALLOONHIDE/NIN_BALLOONTIMEOUT and NIN_BALLOONUSERCLICK.
+        icon.TrayBalloonTipShown += (_, _) => clicks.Shown();
+        icon.TrayBalloonTipClosed += (_, _) => clicks.Closed();
+        icon.TrayBalloonTipClicked += (_, _) => OnNotificationClicked();
         // Each (re)creation, including H.NotifyIcon's own after Explorer restarts (TaskbarCreated), gets the current
         // icon and tooltip: a change the shell refused while Explorer was gone would otherwise be lost. If that
         // re-creation fails, the retry timer takes over.
@@ -130,9 +135,6 @@ internal sealed class TrayIconHost : IDisposable
         icon.UpdateIcon(dimmed ? images.Dimmed : images.Normal);
         Create();
     }
-
-    /// <summary>Raised on the UI thread when the user clicks a notification from <see cref="Notify"/>.</summary>
-    public event Action? NotificationClicked;
 
     /// <summary>Removes the icon now instead of leaving a ghost in the tray until the mouse passes over it.</summary>
     public void Dispose()
@@ -170,10 +172,15 @@ internal sealed class TrayIconHost : IDisposable
     /// <param name="title">The first line.</param>
     /// <param name="message">The text.</param>
     /// <param name="userInitiated">True when it answers something the user just did, so it isn't held back.</param>
+    /// <param name="clicked">
+    /// What a click on it does (K9's "Restart now"), or null for nothing. It runs on the UI thread, at most once, and
+    /// only while this notification is the one on screen (<see cref="TrayNotificationClicks"/>).
+    /// </param>
     /// <returns>False if the shell refused it (no icon yet, Explorer restarting).</returns>
-    public bool Notify(string title, string message, bool userInitiated = false)
+    public bool Notify(string title, string message, bool userInitiated = false, Action? clicked = null)
     {
         if (disposed) return false;
+        clicks.Showing(clicked); // first: the shell's NIN_BALLOONSHOW for it must find it armed
         try
         {
             icon.ShowNotification(title, message, NotificationIcon.None, respectQuietTime: !userInitiated);
@@ -181,6 +188,7 @@ internal sealed class TrayIconHost : IDisposable
         }
         catch (InvalidOperationException exception)
         {
+            clicks.Showing(null);
             Trace.WriteLine($"[Tray] Showing a notification failed: {exception.Message}");
             return false;
         }
@@ -234,6 +242,26 @@ internal sealed class TrayIconHost : IDisposable
             // Shell_NotifyIcon refused (Explorer restarting); OnCreated sets it again once the icon is back.
             Trace.WriteLine($"[Tray] Updating the tooltip failed: {exception.Message}");
         }
+    }
+
+    // A click on a notification runs its action if it is the one on screen (TrayNotificationClicks). The click arrives
+    // inside the icon's window procedure; the action runs after it returns, since it may quit the app, which disposes
+    // the icon and its window.
+    private void OnNotificationClicked()
+    {
+        if (disposed || clicks.Clicked() is not { } clicked) return;
+        icon.Dispatcher.InvokeAsync(() =>
+        {
+            if (disposed) return;
+            try
+            {
+                clicked();
+            }
+            catch (Exception exception)
+            {
+                Trace.WriteLine($"[Tray] A notification's action failed: {exception}");
+            }
+        });
     }
 
     // The menu at the notification area, for keyboard users (the mouse opens it at the pointer).
