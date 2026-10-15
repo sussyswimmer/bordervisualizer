@@ -27,6 +27,7 @@ public sealed class SingleInstance : IDisposable
     /// is cut. The app may put several commands in one line, separated by spaces.
     /// </summary>
     public const int MaxCommandBytes = 64;
+
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan TakeOverTimeout = TimeSpan.FromSeconds(5);
