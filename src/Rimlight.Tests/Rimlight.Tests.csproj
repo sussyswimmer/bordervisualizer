@@ -3,6 +3,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- No background GC in the test host: while one runs (other test classes allocate large arrays in parallel),
+         GC.GetAllocatedBytesForCurrentThread can report a few KB on a thread that allocated nothing, which makes the
+         zero-allocation tests flaky (found in K10; Rimlight.Platform.Tests does the same). -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />

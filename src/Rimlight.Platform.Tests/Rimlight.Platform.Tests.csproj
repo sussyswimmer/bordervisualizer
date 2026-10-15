@@ -9,6 +9,10 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <RootNamespace>Rimlight.Platform.Tests</RootNamespace>
+    <!-- No background GC in the test host: while one runs (other test classes allocate large arrays in parallel),
+         GC.GetAllocatedBytesForCurrentThread can report a few KB on a thread that allocated nothing, which would make
+         the zero-allocation tests flaky. Measured: blips in about half the runs with it on, none in six with it off. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Platform/Rimlight.Platform.csproj" />
