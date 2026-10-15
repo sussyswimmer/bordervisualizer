@@ -51,9 +51,9 @@
     Pack stage, Windows only. Without this parameter the build is unsigned.
 
 .PARAMETER SkipVelopackAppCheck
-    Packs even when Rimlight.exe doesn't call VelopackApp.Build().Run() (task K9). This is only for
-    testing the packaging: such an installer can't run Velopack's install hooks or update itself.
-    Tagged releases never use it.
+    Packs even when Rimlight.exe doesn't call VelopackApp.Build().Run() (Program.Main in
+    src/Rimlight.App does). This is only for testing the packaging of such a build: its installer
+    can't run Velopack's install hooks or update itself. The release workflow never uses it.
 
 .EXAMPLE
     ./build/pack.ps1
