@@ -15,7 +15,8 @@ namespace Rimlight.App.SettingsUi;
 /// The settings window (doc 06 §3): a Fluent window with Mica that follows Windows' light or dark theme, with six pages
 /// in a navigation view. Every change applies live. Closing only hides it (the app keeps running in the tray), and
 /// nothing of it runs while it is hidden, minimized or on another virtual desktop, or nobody can see the screen (locked,
-/// switched away from, going to sleep, display off). Created on first use and kept; use it on the UI thread only.
+/// switched away from, going to sleep, display off). In the first session it opens with a welcome banner (PRD §7).
+/// Created on first use and kept; use it on the UI thread only.
 /// </summary>
 internal partial class SettingsWindow : FluentWindow
 {
@@ -42,6 +43,15 @@ internal partial class SettingsWindow : FluentWindow
         Title = $"{AppInfo.Name} Settings";
         WindowTitleBar.Title = Title;
         WindowTitleBar.Icon = TitleIcon();
+        if (app.IsFirstRunSession)
+        {
+            // PRD §7. Closing it hides it for the rest of the session.
+            WelcomeBanner.Title = $"Welcome to {AppInfo.Name}";
+            WelcomeBanner.Message = $"Play some music, then look at the edges of your screen. {AppInfo.Name} keeps running "
+                + "in the notification area next to the clock (under the ^ arrow if you don't see it): click its icon to "
+                + "turn the glow on or off.";
+            WelcomeBanner.IsOpen = true;
+        }
 
         displays = new DisplaysPage(app);
         behavior = new BehaviorPage(app);
@@ -226,7 +236,14 @@ internal partial class SettingsWindow : FluentWindow
     private void ApplyTextSize()
     {
         double factor = TextScaleFactor();
-        Navigation.LayoutTransform = factor > 1.01 ? new ScaleTransform(factor, factor) : Transform.Identity;
+        Transform scale = Transform.Identity;
+        if (factor > 1.01)
+        {
+            scale = new ScaleTransform(factor, factor);
+            scale.Freeze(); // shared by the banner and the pages
+        }
+        Navigation.LayoutTransform = scale;
+        WelcomeBanner.LayoutTransform = scale;
         if (sized || IsVisible) return;
         sized = true;
         if (factor <= 1.01) return;

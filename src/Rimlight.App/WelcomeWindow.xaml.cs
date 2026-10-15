@@ -7,27 +7,24 @@ using Rimlight.Platform.Shell;
 namespace Rimlight.App;
 
 /// <summary>
-/// The first-run welcome: where the tray icon is and what it does, the glow's keyboard shortcut (or why it has none),
-/// starting at sign-in, and the privacy promise. Follows Windows' light or dark app mode, and keeps the system colors
-/// under high contrast. Until K7 it also stands in for the settings window.
+/// Stands in for the settings window when it can't open (its styles failed to load, or it couldn't be built), the first
+/// run included: where the tray icon is and what it does, the glow's keyboard shortcut (or why it has none), starting at
+/// sign-in, and the privacy promise. Follows Windows' light or dark app mode, and keeps the system colors under high contrast.
 /// </summary>
 internal partial class WelcomeWindow : Window
 {
-    private readonly Action? openSettings;
-
     /// <summary>Builds the window; <see cref="Present"/> shows it.</summary>
     /// <param name="hotkey">The glow shortcut and whether it works.</param>
     /// <param name="startsWithWindows">Whether the app is registered to start at sign-in.</param>
-    /// <param name="openSettings">Opens Settings; null hides the button.</param>
-    public WelcomeWindow(HotkeyStatus hotkey, bool startsWithWindows, Action? openSettings)
+    public WelcomeWindow(HotkeyStatus hotkey, bool startsWithWindows)
     {
         InitializeComponent();
-        this.openSettings = openSettings;
         string name = AppInfo.Name;
         Title = $"Welcome to {name}";
         Heading.Text = $"{name} is running";
-        Intro.Text = $"{name} lights the edges of your screen in time with whatever your PC is playing. "
-            + "You'll find it in the notification area, next to the clock.";
+        // PRD §7's first-run line, as on the settings window's banner.
+        Intro.Text = $"Play some music, then look at the edges of your screen: {name} lights them in time with whatever "
+            + "your PC is playing. You'll find it in the notification area, next to the clock.";
         ClickText.Text = $" the {name} icon to turn the glow on or off.";
         SetHotkey(hotkey);
         SetText(StartupText, startsWithWindows ? $"{name} starts when you sign in to Windows. You can change that in Settings." : "");
@@ -35,7 +32,6 @@ internal partial class WelcomeWindow : Window
             + "to keep it in view.";
         PrivacyText.Text = $"{name} only listens to the sound your PC plays, never the microphone. Nothing leaves your PC "
             + "except a check for updates.";
-        SettingsButton.Visibility = openSettings is null ? Visibility.Collapsed : Visibility.Visible;
         ApplyTheme();
     }
 
@@ -71,12 +67,6 @@ internal partial class WelcomeWindow : Window
         block.Visibility = text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnOpenSettings(object sender, RoutedEventArgs e)
-    {
-        Close();
-        openSettings?.Invoke();
-    }
-
     private void OnDone(object sender, RoutedEventArgs e) => Close();
 
     // Windows 11-like colors for light or dark mode. High contrast keeps the system's colors and controls.
@@ -92,7 +82,6 @@ internal partial class WelcomeWindow : Window
         Resources["AccentTextBrush"] = Frozen(dark ? 0x1B1B1B : 0xFFFFFF);
         Background = Frozen(dark ? 0x202020 : 0xF9F9F9);
         Foreground = (Brush)Resources["TextBrush"];
-        SettingsButton.Style = (Style)Resources["ThemedButton"];
         DoneButton.Style = (Style)Resources["AccentButton"];
         SourceInitialized += (_, _) => SystemTheme.UseDarkTitleBar(new WindowInteropHelper(this).Handle, dark);
     }
