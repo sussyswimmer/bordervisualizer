@@ -63,7 +63,8 @@ internal static class UpdateMessages
     /// <returns>One or two sentences.</returns>
     public static string DownloadFailed(string version, Exception exception) => exception switch
     {
-        HttpRequestException or TimeoutException or TaskCanceledException =>
+        // OperationCanceledException: a timeout, or no data for 10 minutes (the service's stall timeout).
+        HttpRequestException or TimeoutException or OperationCanceledException =>
             $"Version {version} couldn't be downloaded. Check the internet connection and try again.",
         _ => $"Version {version} couldn't be downloaded. Try again later, or open the logs folder from the tray menu for details.",
     };

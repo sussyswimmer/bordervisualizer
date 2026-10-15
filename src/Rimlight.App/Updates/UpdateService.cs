@@ -30,6 +30,13 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
     // end on the pool). The download has no such limit: 75 MB can take a while.
     private static readonly TimeSpan CheckTimeout = TimeSpan.FromMinutes(1);
 
+    // A download that reports no progress for this long is cancelled: a connection that died while the computer slept
+    // or changed networks would otherwise wait forever (HttpClient's timeout stops at the headers, and nothing sends
+    // keep-alives), and no check would run again this session. Velopack reports about every 3 % (2 MB of 75 MB, so
+    // this gives up below about 4 KB/s), and its delta patching takes at most 5 min. Like Task.Delay, the timer doesn't
+    // count sleep.
+    private static readonly TimeSpan DownloadStallTimeout = TimeSpan.FromMinutes(10);
+
     // Task.Delay doesn't count time the computer sleeps, so a long wait is cut into pieces of at most this, after each
     // of which the schedule's clock (which does count it) is read again.
     private static readonly TimeSpan MaxWait = TimeSpan.FromMinutes(30);
@@ -264,13 +271,20 @@ internal sealed class UpdateService : IUpdateCheck, IDisposable
             if (reportBusy) app.Tell(UpdateMessages.Downloading(version));
             try
             {
-                // A version downloaded earlier is found on disk and not downloaded again.
-                await Task.Run(() => manager.DownloadUpdatesAsync(update, null, stop.Token));
+                // A version downloaded earlier is found on disk and not downloaded again. Each progress report (on the
+                // pool) moves the stall timeout; none comes after the download's task has ended.
+                using var stalled = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
+                stalled.CancelAfter(DownloadStallTimeout);
+                await Task.Run(() => manager.DownloadUpdatesAsync(update, _ => stalled.CancelAfter(DownloadStallTimeout), stalled.Token));
             }
             catch (Exception exception)
             {
                 if (disposed) return;
-                Trace.WriteLine($"[Updates] Downloading version {version} failed: {exception.GetType().Name}: {exception.Message}");
+                // Retried an hour later, like a failed check; Velopack starts the download over.
+                schedule.Failed();
+                Trace.WriteLine(exception is OperationCanceledException
+                    ? $"[Updates] Downloading version {version} stalled: no data for {DownloadStallTimeout.TotalMinutes:0} minutes."
+                    : $"[Updates] Downloading version {version} failed: {exception.GetType().Name}: {exception.Message}");
                 if (reportBusy) app.Tell(UpdateMessages.DownloadFailed(version, exception));
                 return;
             }
