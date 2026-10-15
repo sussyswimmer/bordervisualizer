@@ -8,15 +8,25 @@ namespace Rimlight.Platform.Shell;
 
 /// <summary>
 /// Keeps one copy of the app per user session (doc 06 §4): a named mutex <c>Local\{App}-{user SID}</c> decides which
-/// process runs, and a named pipe lets a later start hand its request ("show-settings") to the running one. The pipe
-/// accepts only the current user and only short, known-length commands.
+/// process runs, and a named pipe lets a later start hand its request ("show-settings", "show-visualizer", "demo") to
+/// the running one. The pipe accepts only the current user and only short commands (<see cref="MaxCommandBytes"/>).
 /// </summary>
 public sealed class SingleInstance : IDisposable
 {
     /// <summary>Asks the running instance to open its settings window.</summary>
     public const string ShowSettingsCommand = "show-settings";
 
-    private const int MaxCommandBytes = 64;
+    /// <summary>Asks the running instance to open the debug visualizer (<c>--debug-visualizer</c>, doc 03 §4).</summary>
+    public const string ShowVisualizerCommand = "show-visualizer";
+
+    /// <summary>Asks the running instance to enter demo mode (<c>--demo</c>, doc 04 §5).</summary>
+    public const string DemoCommand = "demo";
+
+    /// <summary>
+    /// The running instance reads at most this many UTF-8 bytes of a command line, up to its newline; anything longer
+    /// is cut. The app may put several commands in one line, separated by spaces.
+    /// </summary>
+    public const int MaxCommandBytes = 64;
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan TakeOverTimeout = TimeSpan.FromSeconds(5);

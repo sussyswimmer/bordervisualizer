@@ -1,0 +1,185 @@
+<ui:FluentWindow x:Class="Rimlight.App.Visualizer.VisualizerWindow"
+                 x:ClassModifier="internal"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Width="1060"
+                 Height="740"
+                 MinWidth="780"
+                 MinHeight="540"
+                 Topmost="True"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowCornerPreference="Round"
+                 UseLayoutRounding="True">
+    <ui:FluentWindow.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="../SettingsUi/PageStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- A plot or a group of numbers: the settings window's card, a little tighter. -->
+            <Style x:Key="Card" TargetType="Border" BasedOn="{StaticResource Row}">
+                <Setter Property="Padding" Value="12,8" />
+                <Setter Property="Margin" Value="0,0,0,8" />
+            </Style>
+
+            <Style x:Key="CardTitle" TargetType="TextBlock">
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Margin" Value="0,0,12,0" />
+            </Style>
+
+            <Style x:Key="StatValue" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="22" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+
+            <Style x:Key="AxisLabel" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="11" />
+                <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+                <Setter Property="IsHitTestVisible" Value="False" />
+            </Style>
+
+            <!-- One tuning parameter: label and value on top, the slider below. -->
+            <Style x:Key="TuningRow" TargetType="Border" BasedOn="{StaticResource Row}">
+                <Setter Property="Padding" Value="12,6,12,4" />
+                <Setter Property="Margin" Value="0,0,0,2" />
+            </Style>
+        </ResourceDictionary>
+    </ui:FluentWindow.Resources>
+
+    <Grid TextElement.Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+          TextElement.FontFamily="{DynamicResource ContentControlThemeFontFamily}"
+          TextElement.FontSize="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar x:Name="WindowTitleBar" Grid.Row="0" CloseWindowByDoubleClickOnIcon="False" />
+
+        <Grid Grid.Row="1" Margin="16,0,16,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="380" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="360" />
+            </Grid.ColumnDefinitions>
+
+            <!-- What the analyzer hears, live (doc 03 §4). -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="1.3*" MinHeight="120" />
+                    <RowDefinition Height="*" MinHeight="96" />
+                    <RowDefinition Height="*" MinHeight="96" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Style="{StaticResource Card}">
+                    <UniformGrid Rows="1">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Beats" />
+                            <TextBlock x:Name="BeatCountText" Style="{StaticResource StatValue}" Text="0" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Tempo" />
+                            <TextBlock x:Name="TempoText" Style="{StaticResource StatValue}" Text="–" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Level" />
+                            <TextBlock x:Name="LevelText" Style="{StaticResource StatValue}" Text="0.00" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Bass" />
+                            <TextBlock x:Name="BassText" Style="{StaticResource StatValue}" Text="0.00" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Beat" />
+                            <TextBlock x:Name="BeatText" Style="{StaticResource StatValue}" Text="0.00" />
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Sound" />
+                            <TextBlock x:Name="SilenceText" Style="{StaticResource StatValue}" Text="–" />
+                        </StackPanel>
+                    </UniformGrid>
+                </Border>
+
+                <StackPanel Grid.Row="1" Margin="2,0,2,8">
+                    <TextBlock x:Name="DeviceText" Style="{StaticResource RowDescription}" Margin="0" />
+                    <TextBlock x:Name="StatusText" Style="{StaticResource WarningText}" Margin="0,4,0,0" Visibility="Collapsed"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+
+                <Border Grid.Row="2" Style="{StaticResource Card}">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <StackPanel x:Name="SpectrumLegend" DockPanel.Dock="Right" Orientation="Horizontal" />
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Spectrum" />
+                        </DockPanel>
+                        <Grid x:Name="SpectrumHost" ClipToBounds="True">
+                            <Image x:Name="SpectrumImage" Stretch="Fill" AutomationProperties.Name="Spectrum, 20 Hz to 20 kHz, with the bass, mid and high bands" />
+                            <Canvas x:Name="SpectrumLabels" IsHitTestVisible="False" />
+                        </Grid>
+                    </DockPanel>
+                </Border>
+
+                <Border Grid.Row="3" Style="{StaticResource Card}">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <StackPanel x:Name="FeatureLegend" DockPanel.Dock="Right" Orientation="Horizontal" />
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Level, Bass and Beat" />
+                        </DockPanel>
+                        <Grid x:Name="FeatureHost" ClipToBounds="True">
+                            <Image x:Name="FeatureImage" Stretch="Fill" AutomationProperties.Name="Level, Bass and Beat over time" />
+                        </Grid>
+                    </DockPanel>
+                </Border>
+
+                <Border Grid.Row="4" Style="{StaticResource Card}">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                            <StackPanel x:Name="FluxLegend" DockPanel.Dock="Right" Orientation="Horizontal" />
+                            <TextBlock Style="{StaticResource CardTitle}" Text="Beat detection" />
+                            <TextBlock x:Name="FluxScaleText" Style="{StaticResource AxisLabel}" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <Grid x:Name="FluxHost" ClipToBounds="True">
+                            <Image x:Name="FluxImage" Stretch="Fill" AutomationProperties.Name="Bass flux and beat threshold over time" />
+                        </Grid>
+                    </DockPanel>
+                </Border>
+
+                <TextBlock x:Name="TimeText" Grid.Row="5" Style="{StaticResource RowDescription}" Margin="2,0,2,0" />
+            </Grid>
+
+            <!-- Every AudioTuning parameter, live (doc 03 §4). -->
+            <DockPanel Grid.Column="2">
+                <StackPanel DockPanel.Dock="Top">
+                    <TextBlock Style="{StaticResource CardTitle}" FontSize="16" Text="Tuning" />
+                    <TextBlock Style="{StaticResource RowDescription}"
+                               Text="Edits apply at once and last until Rimlight quits. Copy them as JSON to keep them." />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button x:Name="ResetButton" Content="Reset to defaults" Margin="0,0,8,6" Click="OnReset" IsEnabled="False"
+                                AutomationProperties.Name="Reset to defaults"
+                                ToolTip="Every parameter back to its default. Sensitivity is a setting and stays as it is." />
+                        <Button x:Name="CopyButton" Content="Copy params as JSON" Margin="0,0,8,6" Click="OnCopy" IsEnabled="False"
+                                AutomationProperties.Name="Copy params as JSON"
+                                ToolTip="The tuning in effect, every parameter, as wav-analyze --tuning reads it." />
+                        <Button x:Name="PasteButton" Content="Paste JSON" Margin="0,0,8,6" Click="OnPaste" IsEnabled="False"
+                                AutomationProperties.Name="Paste JSON"
+                                ToolTip="Applies tuning JSON from the clipboard. Parameters it leaves out take their defaults." />
+                    </WrapPanel>
+                    <TextBlock x:Name="TuningMessage" Style="{StaticResource WarningText}" Margin="0,0,0,6" Visibility="Collapsed"
+                               AutomationProperties.LiveSetting="Assertive" />
+                    <TextBlock x:Name="TuningInfo" Style="{StaticResource RowDescription}" Margin="0,0,0,6" Visibility="Collapsed"
+                               AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
+                <ScrollViewer Style="{StaticResource PageScroller}" Margin="0,4,0,0">
+                    <StackPanel x:Name="TuningPanel" Margin="0,0,12,0" IsEnabled="False" />
+                </ScrollViewer>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>

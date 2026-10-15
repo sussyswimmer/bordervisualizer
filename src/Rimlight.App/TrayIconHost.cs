@@ -31,6 +31,7 @@ internal sealed class TrayIconHost : IDisposable
     private readonly DispatcherTimer createRetry;
     private readonly string toolTipSuffix;
     private readonly MenuItem glowOn;
+    private readonly MenuItem demoMode;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
     private readonly (MenuItem Item, ColorMode Mode)[] colorModes;
     private readonly (MenuItem Item, Func<Settings, Settings> Apply)[] presets;
@@ -57,6 +58,10 @@ internal sealed class TrayIconHost : IDisposable
         glowOn = new MenuItem { Header = "_Glow on", IsCheckable = true };
         glowOn.Click += (_, _) => app.ToggleGlow();
         menu.Items.Add(glowOn);
+        // Shown, checked, only while --demo runs (doc 04 §5): unchecking it goes back to the music without quitting.
+        demoMode = new MenuItem { Header = "_Demo mode", IsCheckable = true, Visibility = Visibility.Collapsed };
+        demoMode.Click += (_, _) => app.SetDemo(false);
+        menu.Items.Add(demoMode);
         menu.Items.Add(new Separator());
 
         var mode = new MenuItem { Header = "_Mode" };
@@ -292,6 +297,8 @@ internal sealed class TrayIconHost : IDisposable
         glowOn.IsChecked = current.Enabled;
         HotkeyStatus hotkey = app.Hotkey;
         glowOn.InputGestureText = hotkey.State == HotkeyState.Registered ? hotkey.Gesture?.ToString() ?? "" : "";
+        demoMode.IsChecked = app.IsDemoActive;
+        demoMode.Visibility = app.IsDemoActive ? Visibility.Visible : Visibility.Collapsed;
         foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
         foreach ((MenuItem item, ColorMode mode) in colorModes) item.IsChecked = current.ColorMode == mode;
         foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = IsShowing(apply, current);
@@ -316,8 +323,8 @@ internal sealed class TrayIconHost : IDisposable
 #if DEBUG
     // "Render test (debug)": the render loop's live status, what the media session reader and the system watchers
     // see, settings without a settings window yet (K7: When silent, Override album color, FPS cap, On battery, Pause in
-    // fullscreen apps), and simulated system states on top of the real ones: battery, a global pause and a per-monitor
-    // pause.
+    // fullscreen apps), simulated system states on top of the real ones (battery, a global pause and a per-monitor
+    // pause), and the audio visualizer and demo mode (K8).
     private sealed class DebugMenu
     {
         private readonly AppController app;
@@ -333,6 +340,7 @@ internal sealed class TrayIconHost : IDisposable
         private readonly MenuItem onBattery = new() { Header = "Simulate running on battery" };
         private readonly MenuItem pauseAll = new() { Header = "Pause everywhere (like a locked session)" };
         private readonly MenuItem pausePrimary = new() { Header = "Pause the primary monitor (like a fullscreen video)" };
+        private readonly MenuItem demo = new() { Header = "Demo mode (synthetic 120 BPM beat)" };
 
         public DebugMenu(AppController app, Action<Func<Settings, Settings>> update)
         {
@@ -383,6 +391,15 @@ internal sealed class TrayIconHost : IDisposable
             var deviceLoss = new MenuItem { Header = "Simulate GPU device loss" };
             deviceLoss.Click += (_, _) => app.Overlays?.SimulateDeviceLoss();
             Root.Items.Add(deviceLoss);
+            Root.Items.Add(new Separator());
+
+            // K8: the same as --debug-visualizer and --demo, which Release builds keep as their only way in (doc 07
+            // Phase 7 keeps the visualizer and drops debug-only menus).
+            var visualizer = new MenuItem { Header = "Audio visualizer…" };
+            visualizer.Click += (_, _) => app.ShowVisualizer();
+            Root.Items.Add(visualizer);
+            demo.Click += (_, _) => app.SetDemo(!app.IsDemoActive);
+            Root.Items.Add(demo);
         }
 
         public MenuItem Root { get; }
@@ -401,6 +418,7 @@ internal sealed class TrayIconHost : IDisposable
             onBattery.IsChecked = simulated.OnBattery;
             pauseAll.IsChecked = simulated.PausedEverywhere;
             pausePrimary.IsChecked = simulated.PausedMonitor is not null;
+            demo.IsChecked = app.IsDemoActive;
         }
 
         private void Simulate(Func<SimulatedSystem, SimulatedSystem> change)
