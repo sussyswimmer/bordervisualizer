@@ -122,7 +122,7 @@ Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\lo
 
 Logs never contain audio, but they can include device, monitor and track names. Have a quick look before you upload them.
 
-If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too.
+If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight.
 
 ## License
 

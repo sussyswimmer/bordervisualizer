@@ -37,6 +37,9 @@ internal static class Program
                 .OnBeforeUninstallFastCallback(_ => StartupRegistration.Remove(AppInfo.Name))
                 // Started again by Velopack's updater after it installed an update, or failed to.
                 .OnRestarted(UpdateService.OnRestarted)
+                // Velopack's own lines (checks, downloads, starting the updater) also go to the app's log, which bug
+                // reports attach; Velopack keeps writing them to its own file too.
+                .SetLogger(new TraceVelopackLogger())
                 .Run();
         }
         catch (Exception exception)
