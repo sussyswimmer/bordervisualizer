@@ -15,7 +15,7 @@ internal enum Pace
 
 // The frame schedule of the overlay thread (doc 02 "Frame pacing"): Platform's FramePacer.Next and the dt rule of
 // OverlayHost's loop, for one monitor that presents every frame it draws. Rimlight.Platform is Windows-only, so the
-// policy is mirrored here: keep the two in step. Per-monitor pause fades and unfinished presents (both keep the full
+// policy is mirrored here: keep the two in step (Rimlight.Platform.Tests' BenchMirrorTests compares them). Per-monitor pause fades and unfinished presents (both keep the full
 // rate in the app) don't occur in a simulation without a display.
 internal sealed class PaceModel
 {
