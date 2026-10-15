@@ -27,6 +27,7 @@ public sealed class SingleInstance : IDisposable
     private readonly string pipeName;
     private readonly CancellationTokenSource stop = new();
     private Task? listener;
+    private bool disposed;
 
     private SingleInstance(Mutex? mutex, string pipeName)
     {
@@ -86,8 +87,11 @@ public sealed class SingleInstance : IDisposable
         listener = Task.Run(() => ListenAsync(token));
     }
 
-    /// <summary>Stops listening and releases the mutex. Call on the thread that called <see cref="Claim"/>.</summary>
-    public void Dispose()
+    /// <summary>
+    /// Stops accepting commands but keeps the claim. Call first when the app starts to exit: a start from then on finds
+    /// no pipe, waits for the mutex and takes over, instead of handing its request to a process that is going away.
+    /// </summary>
+    public void StopListening()
     {
         if (stop.IsCancellationRequested) return;
         stop.Cancel();
@@ -99,6 +103,14 @@ public sealed class SingleInstance : IDisposable
         {
             // Logged by the loop; nothing more to do on exit.
         }
+    }
+
+    /// <summary>Stops listening and releases the mutex. Call on the thread that called <see cref="Claim"/>.</summary>
+    public void Dispose()
+    {
+        if (disposed) return;
+        disposed = true;
+        StopListening();
         if (mutex is null) return;
         try
         {
