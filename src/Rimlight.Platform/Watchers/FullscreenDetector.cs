@@ -5,6 +5,7 @@ using Windows.Win32.Graphics.Dwm;
 using Windows.Win32.Graphics.Gdi;
 using Windows.Win32.UI.Accessibility;
 using Windows.Win32.UI.Shell;
+using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Rimlight.Platform.Watchers;
 
@@ -14,6 +15,17 @@ namespace Rimlight.Platform.Watchers;
 internal sealed class FullscreenDetector : IDisposable
 {
     private const uint PollMs = 2000; // doc 04 §4
+
+    // What the foreground window can do in the rules.
+    private enum Role
+    {
+        // Nothing: the desktop, the taskbar, Alt+Tab, Task View, our tray menu, or a window that is gone.
+        Ignored,
+        // Ends a sticky pause on its monitor but never pauses: File Explorer, the shell's dialogs, our settings window.
+        Activates,
+        // Any other app's window.
+        MayBeFullscreen,
+    }
 
     private readonly HWND window; // the system watcher's window: owns the poll timer
     private readonly nuint timerId;
@@ -34,7 +46,7 @@ internal sealed class FullscreenDetector : IDisposable
 
     public bool Enabled { get; private set; }
 
-    // Pause everywhere: a screen saver, presentation settings, or an exclusive-mode app without a window to tie it to.
+    // Pause everywhere: a screen saver, presentation settings, or an exclusive-mode app while there is no foreground window.
     public bool Everywhere { get; private set; }
 
     // GDI device names of the monitors to pause, sorted; the same instance while the set doesn't change.
@@ -68,12 +80,13 @@ internal sealed class FullscreenDetector : IDisposable
         if (!Enabled) return;
         NotificationState state = QueryState();
         HWND active = PInvoke.GetForegroundWindow();
-        WindowFacts? foreground = active.IsNull || IsExcluded(active) ? null : Probe(active);
+        Role role = active.IsNull ? Role.Ignored : Classify(active);
+        WindowFacts? foreground = role == Role.Ignored ? null : Probe(active);
 
         var previous = new (FullscreenEntry, WindowFacts?)[entries.Length];
         for (int i = 0; i < entries.Length; i++) previous[i] = (entries[i], Probe((HWND)entries[i].Window));
 
-        FullscreenVerdict verdict = FullscreenRules.Decide(state, foreground, previous);
+        FullscreenVerdict verdict = FullscreenRules.Decide(state, active.IsNull, foreground, role == Role.MayBeFullscreen, previous);
         entries = verdict.Entries;
         Update(verdict.Everywhere, [.. entries.Select(entry => entry.Monitor).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
     }
@@ -128,21 +141,30 @@ internal sealed class FullscreenDetector : IDisposable
 
     // The shell and the desktop never count as a fullscreen app (doc 04 §4), and neither do our own windows: the
     // overlays never activate, but are excluded explicitly anyway. Every window of the shell's process is excluded,
-    // so Alt+Tab and Task View (full-monitor Explorer windows) don't flash a pause.
-    private bool IsExcluded(HWND hwnd)
+    // so Alt+Tab and Task View (full-monitor Explorer windows) don't flash a pause. Windows the user works in still end
+    // a sticky pause like any other: in the shell's process File Explorer and Control Panel (CabinetWClass) and dialogs
+    // such as Run or Properties (#32770), allow-listed so an unknown shell surface keeps the pause; and our own windows
+    // except the tray menu, a WPF popup (tool window, no-activate) that the tray icon makes the foreground window.
+    private Role Classify(HWND hwnd)
     {
         HWND shell = PInvoke.GetShellWindow();
-        if (hwnd == shell || hwnd == PInvoke.GetDesktopWindow()) return true;
+        if (hwnd == shell || hwnd == PInvoke.GetDesktopWindow()) return Role.Ignored;
         PInvoke.GetWindowThreadProcessId(hwnd, out uint owner);
-        if (owner == 0 || owner == processId) return true;
-        if (!shell.IsNull)
+        if (owner == 0) return Role.Ignored;
+        if (owner == processId)
         {
-            PInvoke.GetWindowThreadProcessId(shell, out uint shellProcess);
-            if (owner == shellProcess) return true;
+            var style = (WINDOW_EX_STYLE)PInvoke.GetWindowLong(hwnd, WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE);
+            return (style & (WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE)) != 0 ? Role.Ignored : Role.Activates;
         }
         Span<char> name = stackalloc char[32];
         ReadOnlySpan<char> className = name[..Math.Clamp(PInvoke.GetClassName(hwnd, name), 0, name.Length)];
-        return className is "Progman" or "WorkerW";
+        if (className is "Progman" or "WorkerW") return Role.Ignored;
+        if (!shell.IsNull)
+        {
+            PInvoke.GetWindowThreadProcessId(shell, out uint shellProcess);
+            if (owner == shellProcess) return className is "CabinetWClass" or "#32770" ? Role.Activates : Role.Ignored;
+        }
+        return Role.MayBeFullscreen;
     }
 
     // A window's rectangle and monitor, or null when it isn't shown: closed, hidden, minimized, cloaked (another

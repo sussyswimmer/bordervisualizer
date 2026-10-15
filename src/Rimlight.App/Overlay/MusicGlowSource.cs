@@ -109,10 +109,10 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     }
 
     // How the glow will change: the overlay draws music at the full rate, breathing at 10 fps, and stops drawing a
-    // static glow (listening on at 10 Hz when music could bring it back).
+    // static glow (listening on at 10 Hz when music could bring it back). A palette crossfade runs in the blender, not
+    // the engine, so it is motion even while the engine is static: it changes the colors every frame, at the full rate.
     private FrameMotion Motion(bool listen, in AudioFeatures features, Settings settings)
     {
-        // A crossfade changes the colors every frame, even on a glow that is otherwise static.
         if (blender.IsAnimating) return FrameMotion.Full;
         if (engine.IsStatic) return listen ? FrameMotion.Listening : FrameMotion.Still;
         if (!listen) return FrameMotion.Slow; // Idle Glow (or a fade the overlay sees as fast change)

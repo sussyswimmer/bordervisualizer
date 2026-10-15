@@ -137,7 +137,9 @@ internal sealed class TrayIconHost : IDisposable
         // handler runs after H.NotifyIcon's own, which subscribed in the constructor.
         icon.TrayIcon.MessageWindow.TaskbarCreated += (_, _) =>
         {
-            if (disposed || icon.TrayIcon.IsCreated) return;
+            if (disposed) return;
+            RefreshMedia();
+            if (icon.TrayIcon.IsCreated) return;
             Trace.WriteLine("[Tray] The icon is not back after Explorer restarted; retrying every 3 s.");
             createRetry.Start();
         };
@@ -253,6 +255,20 @@ internal sealed class TrayIconHost : IDisposable
         {
             // Shell_NotifyIcon refused (Explorer restarting); OnCreated sets it again once the icon is back.
             Trace.WriteLine($"[Tray] Updating the tooltip failed: {exception.Message}");
+        }
+    }
+
+    // The media session manager may have gone away with Explorer, so it is asked again now instead of at its next
+    // 30 s check. Inside the icon's window procedure, where an exception would end the app.
+    private void RefreshMedia()
+    {
+        try
+        {
+            app.Media?.Refresh();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[Tray] Refreshing the media sessions failed: {exception}");
         }
     }
 
