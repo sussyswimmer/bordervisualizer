@@ -1,16 +1,25 @@
 using System.Diagnostics;
 using System.Windows;
 using Rimlight.App.Logging;
+using Rimlight.App.Updates;
 using Rimlight.Core;
 using Rimlight.Platform.Shell;
 
 namespace Rimlight.App;
 
-/// <summary>Tray application. Everything it runs is owned by <see cref="AppController"/>.</summary>
+/// <summary>Tray application, started by <see cref="Program"/>. Everything it runs is owned by <see cref="AppController"/>.</summary>
 public partial class App : Application
 {
+    private readonly UpdateBootstrap updates;
     private SingleInstance? instance;
     private AppController? controller;
+
+    /// <summary>Creates the app; <see cref="Program"/> then loads App.xaml and runs it.</summary>
+    /// <param name="updates">What Velopack found at start, and the update manager.</param>
+    internal App(UpdateBootstrap updates)
+    {
+        this.updates = updates;
+    }
 
     /// <inheritdoc />
     protected override void OnStartup(StartupEventArgs e)
@@ -30,7 +39,16 @@ public partial class App : Application
         }
 
         AppLog.Start(e.Args); // only the running copy writes the log
-        controller = new AppController(() => Shutdown(), instance, options);
+
+        // An update downloaded in an earlier session installs now (doc 06 §5 "apply on next restart"): Velopack's updater
+        // waits for this process to exit, so the claim is free again when it starts the new version.
+        if (updates.ApplyPending(e.Args, options.Background))
+        {
+            Shutdown();
+            return;
+        }
+
+        controller = new AppController(() => Shutdown(), instance, options, updates);
         try
         {
             controller.Start();

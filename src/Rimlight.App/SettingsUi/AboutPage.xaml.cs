@@ -4,14 +4,18 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Rimlight.App.Logging;
+using Rimlight.App.Updates;
 using Rimlight.Core;
 
 namespace Rimlight.App.SettingsUi;
 
-/// <summary>About (doc 06 §3.6): the version, Check for updates (K9's hook), the source and license, and the privacy promise.</summary>
+/// <summary>
+/// About (doc 06 §3.6): the version, Check for updates with where updates stand and Restart now once one is downloaded
+/// (doc 06 §5), the source and license, and the privacy promise.
+/// </summary>
 internal partial class AboutPage : UserControl, ISettingsPage
 {
-    private const string RepositoryUrl = "https://github.com/sussyswimmer/bordervisualizer";
+    private const string RepositoryUrl = UpdateBootstrap.RepositoryUrl;
 
     // The same promise as the README (doc 01 "Privacy", doc 08).
     private static readonly string[] Privacy =
@@ -23,6 +27,7 @@ internal partial class AboutPage : UserControl, ISettingsPage
     ];
 
     private readonly AppController app;
+    private UpdatePhase? shownPhase;
 
     public AboutPage(AppController app)
     {
@@ -44,6 +49,17 @@ internal partial class AboutPage : UserControl, ISettingsPage
 
     public void SetActive(bool active)
     {
+        if (app.Updates is not { } updates) return;
+        if (active)
+        {
+            shownPhase = null;
+            updates.StatusChanged += ShowUpdateStatus;
+            ShowUpdateStatus();
+        }
+        else
+        {
+            updates.StatusChanged -= ShowUpdateStatus;
+        }
     }
 
     /// <summary>The app's icon at the size closest to <paramref name="pixels"/>, or null if it can't be read.</summary>
@@ -68,7 +84,27 @@ internal partial class AboutPage : UserControl, ISettingsPage
         }
     }
 
-    private void OnCheckForUpdates(object sender, RoutedEventArgs e) => app.CheckForUpdates();
+    // The outcome shows below the buttons, so this check sends no notification (only "Update ready" does).
+    private void OnCheckForUpdates(object sender, RoutedEventArgs e) => app.CheckForUpdates(fromSettings: true);
+
+    private void OnRestart(object sender, RoutedEventArgs e) => app.RestartToUpdate();
+
+    private void ShowUpdateStatus()
+    {
+        UpdateStatus status = app.Updates?.Status ?? new UpdateStatus(UpdatePhase.Unavailable);
+        bool ready = status.Phase == UpdatePhase.Ready;
+        bool focused = UpdateButton.IsKeyboardFocusWithin;
+        // Stays enabled while a check runs (a second click just waits for it), so the keyboard focus isn't lost.
+        UpdateButton.IsEnabled = status.CanCheck;
+        UpdateButton.Visibility = ready ? Visibility.Collapsed : Visibility.Visible;
+        RestartButton.Visibility = ready ? Visibility.Visible : Visibility.Collapsed;
+        if (ready && focused) RestartButton.Focus(); // the check the user started ends in this button
+        string text = status.Describe(AppInfo.Name);
+        // Screen readers hear each new phase, not every 2 % of a download.
+        if (status.Phase == UpdatePhase.Downloading && shownPhase == UpdatePhase.Downloading) UpdateStatusText.Text = text;
+        else PageEdits.SetMessage(UpdateStatusText, text);
+        shownPhase = status.Phase;
+    }
 
     private void OnOpenLogs(object sender, RoutedEventArgs e) => app.OpenLogsFolder();
 }

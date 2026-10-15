@@ -10,7 +10,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Placeholder until the real icon is generated from assets/icon.svg (C10 / K12). -->
     <ApplicationIcon>Assets\Rimlight.ico</ApplicationIcon>
+    <!-- Program.Main runs Velopack before WPF starts (doc 06 §5), so WPF must not generate a Main of its own. -->
+    <StartupObject>Rimlight.App.Program</StartupObject>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- App.xaml is compiled as a page: the same InitializeComponent, but no generated Main. -->
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+  </ItemGroup>
   <ItemGroup>
     <!-- Rimlight.ico, and an optional Rimlight-dim.ico that replaces the derived 50 % tray icon (TrayIconImages). -->
     <Resource Include="Assets\*.ico" />
@@ -21,5 +28,7 @@
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.3.2" />
     <!-- Fluent controls, Mica and light/dark themes for the settings window and the tray menu (MIT). -->
     <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <!-- Install hooks and updates from GitHub Releases (MIT). The same version as vpk, which packs the app (C9). -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 </Project>

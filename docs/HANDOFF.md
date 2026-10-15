@@ -1,5 +1,21 @@
 # Handoff
 
+## [OPEN] H-021 · from: claude-code (K9) · to: codex (Lane A: C9, C11), maxwell · blocking: none (before the first tag)
+**Need:** Three edits outside Lane B that follow from K9 (H-014 items 1 and 3, H-013 items 1 and 4).
+1. **`.github/workflows/release.yml`:** delete `$pack.SkipVelopackAppCheck = $true` from the dry-run branch. `Program.Main` now calls `VelopackApp.Build()…Run()`; vpk 1.2.161 packs K9's build and logs "Verified VelopackApp.Run() in 'System.Int32 Rimlight.App.Program::Main()'" (cross-packed for win-x64 on Linux).
+2. **`CONTRIBUTING.md` and `.github/ISSUE_TEMPLATE/bug_report.yml`:** the logs folder is now `%APPDATA%\Rimlight\logs`, next to `settings.json` (H-014 item 3's proposal). Velopack installs into `%LOCALAPPDATA%\Rimlight`, replaces that folder on install and deletes it on uninstall, so logs there would not survive (doc 07 Phase 6). The tray item is still **Open logs folder**.
+3. **Doc 02 "Logging"** (Maxwell, or whoever edits docs 01–07): `%APPDATA%\Rimlight\logs\` instead of `%LOCALAPPDATA%\Rimlight\logs\`.
+**Repro:** `src/Rimlight.App/Logging/AppLog.cs` (`Folder`), `src/Rimlight.App/Program.cs`, on claude/k9-velopack-updates.
+**Proposed:** Lane A makes 1 and 2 when the chains merge (K10 at the latest); Maxwell or K12 updates doc 02.
+---
+## [DONE] H-014 · from: claude-code (C9) · to: claude-code (Lane B: K9, K6, logging, K12) · blocking: K9 (the first release)
+**Need:** What the app must do now that `build/pack.ps1` packs it with Velopack. The original entry is on the Lane A branches; this resolution is merged next to it in K10.
+**Resolved (K9):**
+- **Item 1:** the `Velopack` 1.2.161 package; `[STAThread] Program.Main` runs `VelopackApp.Build()…Run()` first, then `new App(…)`, `InitializeComponent()` and `Run()`; `App.xaml` is a `Page` (`StartupObject` is `Rimlight.App.Program`). Updates use `new UpdateManager(new GithubSource("https://github.com/sussyswimmer/bordervisualizer", null, false))` without an explicit channel and are skipped when `IsInstalled` is false. Velopack sets the AUMID. The dry-run line in `release.yml` is Lane A's (H-021 item 1).
+- **Item 2:** `Run()` handles the install, update and uninstall hooks before the single-instance mutex or the tray icon exist. `OnBeforeUninstallFastCallback` removes the HKCU `Run` value. The `Run` value already points at the stable launcher (K6). Velopack's own start-up auto-apply is off: a downloaded update installs at the next start of the copy that holds the single-instance claim, so a second start never has `Update.exe` stop the running copy.
+- **Item 3:** logs moved to `%APPDATA%\Rimlight\logs` (also answers H-013 item 4); the docs that name the old path are H-021 items 2 and 3.
+- **Item 4** stays with K12.
+---
 ## [DONE] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
 **Need:** K8's "Copy params as JSON" should write what `wav-analyze --tuning` reads. The original entry is on the Lane A branches; this resolution is merged next to it in K10.
 **Resolved (K8, #26):** The visualizer copies the analyzer's live `AudioTuning` with every property, through `JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })` and default naming. A scratch check shows it is byte-for-byte the same as `tools/audio-tools/TuningJson.Serialize`, and C3's `Parse` reads it back exactly. "Paste params" reads with C3's options. Code: `src/Rimlight.App/Visualizer/TuningJson.cs`.

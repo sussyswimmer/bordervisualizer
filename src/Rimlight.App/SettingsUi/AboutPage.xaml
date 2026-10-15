@@ -27,11 +27,18 @@
             </Border>
 
             <Border Style="{StaticResource Row}">
-                <WrapPanel>
-                    <Button x:Name="UpdateButton" Content="Check for updates" Margin="0,0,8,4" Click="OnCheckForUpdates"
-                            AutomationProperties.Name="Check for updates" />
-                    <Button Content="Open logs folder" Margin="0,0,8,4" Click="OnOpenLogs" AutomationProperties.Name="Open logs folder" />
-                </WrapPanel>
+                <StackPanel>
+                    <WrapPanel>
+                        <Button x:Name="UpdateButton" Content="Check for updates" Margin="0,0,8,4" Click="OnCheckForUpdates"
+                                AutomationProperties.Name="Check for updates" />
+                        <!-- Shown once an update is downloaded (doc 06 §5): installs it and starts the new version. -->
+                        <Button x:Name="RestartButton" Content="Restart now" Margin="0,0,8,4" Click="OnRestart" Visibility="Collapsed"
+                                AutomationProperties.Name="Restart now to install the update" />
+                        <Button Content="Open logs folder" Margin="0,0,8,4" Click="OnOpenLogs" AutomationProperties.Name="Open logs folder" />
+                    </WrapPanel>
+                    <TextBlock x:Name="UpdateStatusText" Style="{StaticResource RowDescription}" Visibility="Collapsed"
+                               AutomationProperties.Name="Update status" AutomationProperties.LiveSetting="Polite" />
+                </StackPanel>
             </Border>
 
             <Border Style="{StaticResource Row}">

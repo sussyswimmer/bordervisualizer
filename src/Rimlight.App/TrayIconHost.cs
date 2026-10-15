@@ -7,6 +7,7 @@ using H.NotifyIcon;
 using H.NotifyIcon.Core;
 using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
+using Rimlight.App.Updates;
 using Rimlight.Core;
 using Rimlight.Platform;
 using Rimlight.Platform.Media;
@@ -38,11 +39,13 @@ internal sealed class TrayIconHost : IDisposable
     private readonly MenuItem albumColors;
     private readonly MenuItem manualColors;
     private readonly (MenuItem Item, Func<Settings, Settings> Apply)[] presets;
+    private readonly MenuItem updates;
 #if DEBUG
     private readonly DebugMenu debug;
 #endif
     private string toolTip; // what the tooltip should say, also while the shell refuses it
     private Action? notificationAction; // what a click on the notification showing now does
+    private bool updateReadyShown; // the updates item says "Restart to update" (as of the menu's opening)
     private bool dimmed;
     private bool disposed;
 
@@ -97,8 +100,14 @@ internal sealed class TrayIconHost : IDisposable
         var settingsItem = new MenuItem { Header = "_Settings…", FontWeight = FontWeights.Bold };
         settingsItem.Click += (_, _) => app.ShowSettings();
         menu.Items.Add(settingsItem);
-        var updates = new MenuItem { Header = "Check for _updates" };
-        updates.Click += (_, _) => app.CheckForUpdates();
+        // "Check for updates", or, once an update is downloaded, the restart that installs it (doc 06 §5): the menu is
+        // where the restart stays on offer after the notification is gone.
+        updates = new MenuItem { Header = "Check for _updates" };
+        updates.Click += (_, _) =>
+        {
+            if (updateReadyShown) app.RestartToUpdate();
+            else app.CheckForUpdates();
+        };
         menu.Items.Add(updates);
         var logs = new MenuItem { Header = "Open _logs folder" };
         logs.Click += (_, _) => app.OpenLogsFolder();
@@ -345,6 +354,9 @@ internal sealed class TrayIconHost : IDisposable
         albumColors.IsChecked = albumColorsShown;
         manualColors.IsChecked = !albumColorsShown;
         foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = IsShowing(apply, current);
+        UpdateStatus? update = app.Updates?.Status;
+        updateReadyShown = update?.Phase == UpdatePhase.Ready;
+        updates.Header = updateReadyShown ? $"Restart to _update to {update!.Version}" : "Check for _updates";
 #if DEBUG
         debug.Refresh(current);
 #endif

@@ -14,16 +14,6 @@ internal interface IShowSettings
     void ShowSettings();
 }
 
-/// <summary>
-/// Checks for updates when asked ("Check for updates" in the tray, doc 06 §5). Called on the UI thread. K9 implements
-/// it with Velopack; until then <see cref="AppController"/> only tells which version runs.
-/// </summary>
-internal interface IUpdateCheck
-{
-    /// <summary>Starts a check and reports the outcome to the user.</summary>
-    void CheckNow();
-}
-
 /// <summary>A command for the tray icon's click and double-click. A failure is logged, never thrown at the caller.</summary>
 internal sealed class RelayCommand(Action execute) : ICommand
 {

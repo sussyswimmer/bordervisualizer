@@ -5,6 +5,7 @@ using System.Windows.Threading;
 using Rimlight.App.Logging;
 using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
+using Rimlight.App.Updates;
 using Rimlight.App.Visualizer;
 using Rimlight.Core;
 using Rimlight.Platform.Audio;
@@ -15,10 +16,10 @@ using Rimlight.Platform.Shell;
 namespace Rimlight.App;
 
 /// <summary>
-/// The composition root: owns the settings, the global shortcut, the tray icon, the media session reader, the system
-/// watchers, loopback capture, the glow overlay, the settings window, the debug visualizer and demo mode, wires them
-/// together and tears them down in order. It also reads the command line (<see cref="ParseArguments"/>). Created and
-/// used on the UI thread. K9 plugs in updates (<see cref="Updates"/>).
+/// The composition root: owns the settings, the global shortcut, the tray icon, updates, the media session reader, the
+/// system watchers, loopback capture, the glow overlay, the settings window, the debug visualizer and demo mode, wires
+/// them together and tears them down in order. It also reads the command line (<see cref="ParseArguments"/>). Created
+/// and used on the UI thread.
 /// </summary>
 internal sealed class AppController : IDisposable
 {
@@ -40,11 +41,13 @@ internal sealed class AppController : IDisposable
     private readonly Action shutdown;
     private readonly SingleInstance? instance;
     private readonly LaunchOptions options;
+    private readonly UpdateBootstrap updateStart;
     private readonly Dispatcher dispatcher = Dispatcher.CurrentDispatcher; // the UI thread's
     private readonly SettingsWindowLauncher settingsWindow;
     private SettingsService? settings;
     private GlobalHotkey? hotkey;
     private TrayIconHost? tray;
+    private UpdateService? updates;
     private NowPlayingService? media;
     private SystemPauseBridge? systemPauses;
     private LoopbackCapture? capture;
@@ -62,14 +65,15 @@ internal sealed class AppController : IDisposable
     /// <param name="shutdown">Ends the app (the tray's Quit).</param>
     /// <param name="instance">This process's single-instance claim, whose commands it handles; null for none.</param>
     /// <param name="options">The command line (<see cref="ParseArguments"/>).</param>
-    public AppController(Action shutdown, SingleInstance? instance, LaunchOptions options)
+    /// <param name="updateStart">What Velopack found at start, and the update manager.</param>
+    public AppController(Action shutdown, SingleInstance? instance, LaunchOptions options, UpdateBootstrap updateStart)
     {
         this.shutdown = shutdown;
         this.instance = instance;
         this.options = options;
+        this.updateStart = updateStart;
         settingsWindow = new SettingsWindowLauncher(this);
         SettingsWindow = settingsWindow;
-        Updates = new NoUpdateCheck(this);
     }
 
     public SettingsService SettingsService => settings ?? throw new InvalidOperationException("Not started.");
@@ -86,8 +90,11 @@ internal sealed class AppController : IDisposable
     /// <summary>Sleep, lock, display, battery and fullscreen state, as it reaches the overlay.</summary>
     public SystemPauseBridge? SystemPauses => systemPauses;
 
-    /// <summary>The tray icon, also for notifications (K7's "still running in the tray", K9's "update ready").</summary>
+    /// <summary>The tray icon, also for notifications ("still running in the tray", "update ready").</summary>
     public TrayIconHost? Tray => tray;
+
+    /// <summary>Update checks, the download and Restart now (doc 06 §5); null before the start.</summary>
+    public UpdateService? Updates => updates;
 
     /// <summary>The glow shortcut from the settings and whether it works, for Settings' inline warning (doc 06 §4).</summary>
     public HotkeyStatus Hotkey { get; private set; } = HotkeyStatus.None;
@@ -106,9 +113,6 @@ internal sealed class AppController : IDisposable
 
     /// <summary>Opens Settings (the settings window, created on first use).</summary>
     public IShowSettings SettingsWindow { get; set; }
-
-    /// <summary>"Check for updates". K9 replaces the stand-in with the Velopack check.</summary>
-    public IUpdateCheck Updates { get; set; }
 
     /// <summary>Whether demo mode plays.</summary>
     public bool IsDemoRunning => glow?.IsDemo == true;
@@ -173,6 +177,9 @@ internal sealed class AppController : IDisposable
 
         tray = new TrayIconHost(this, initial);
 
+        // Updates from GitHub Releases (doc 06 §5), the only network request the app makes. Checks start 30 s later.
+        updates = new UpdateService(this, updateStart, initial);
+
         // What's playing and its album colors, from Windows' media sessions (doc 05 §1): read on this machine and never
         // sent anywhere. Its events arrive on the thread pool.
         media = new NowPlayingService(CoreFactory.CreatePaletteExtractor());
@@ -211,6 +218,7 @@ internal sealed class AppController : IDisposable
         // Every change reaches the overlay thread as a new snapshot, applied on its next frame.
         settings.Changed += OnSettingsChanged;
         media.Start();
+        updates.Start();
 
         // Launch at startup (doc 06 §4): the Run entry follows the setting, which is on by default, so the first run
         // registers it. Checked at every start, which also repairs a stale path.
@@ -313,17 +321,33 @@ internal sealed class AppController : IDisposable
         overlays?.RequestFrame();
     }
 
-    /// <summary>"Check for updates" in the tray.</summary>
-    public void CheckForUpdates()
+    /// <summary>"Check for updates" in the tray or on Settings' About page.</summary>
+    /// <param name="fromSettings">True for the About page, which shows the outcome itself; the tray gets a notification.</param>
+    public void CheckForUpdates(bool fromSettings = false)
     {
         if (disposed) return;
         try
         {
-            Updates.CheckNow();
+            if (updates is null) Tell($"You're running {AppInfo.Name} {AppLog.Version}. Updates aren't available right now.");
+            else updates.CheckNow(notify: !fromSettings);
         }
         catch (Exception exception)
         {
             Trace.WriteLine($"[App] Checking for updates failed: {exception}");
+        }
+    }
+
+    /// <summary>"Restart now": installs the downloaded update and starts the new version (the notification, the tray, About).</summary>
+    public void RestartToUpdate()
+    {
+        if (disposed) return;
+        try
+        {
+            updates?.RestartToUpdate();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[App] Restarting to update failed: {exception}");
         }
     }
 
@@ -393,6 +417,8 @@ internal sealed class AppController : IDisposable
         CloseVisualizer();      // likewise, and disconnects its probe
         welcome?.Close();
         welcome = null;
+        updates?.Dispose(); // stops the timer and cancels a check or download; nothing it does notifies after this
+        updates = null;
         hotkey?.Dispose();
         hotkey = null;
         media?.Dispose(); // first of the engine: no media event reaches the overlay or the tray after this
@@ -443,6 +469,7 @@ internal sealed class AppController : IDisposable
         overlays?.ApplySettings(snapshot);
         systemPauses?.ApplySettings(snapshot);
         tray?.ApplySettings(snapshot);
+        updates?.ApplySettings(snapshot);
         if (snapshot.ToggleHotkey != Hotkey.Text) ApplyHotkey(snapshot.ToggleHotkey);
         if (snapshot.LaunchAtStartup != startupApplied) ApplyStartup(snapshot.LaunchAtStartup);
     }
@@ -516,8 +543,9 @@ internal sealed class AppController : IDisposable
         }
     }
 
-    // A short message: a notification from the tray icon, or a message box if the tray can't show one.
-    private void Tell(string message)
+    /// <summary>A short message for something the user just did: a notification, or a message box if the tray can't show one.</summary>
+    /// <param name="message">The text.</param>
+    internal void Tell(string message)
     {
         if (tray?.Notify(AppInfo.Name, message, userInitiated: true) == true) return;
         MessageBox.Show(message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
@@ -581,11 +609,5 @@ internal sealed class AppController : IDisposable
         public string? Command => Demo || DebugVisualizer
             ? string.Join(' ', new[] { Demo ? DemoCommand : null, DebugVisualizer ? DebugVisualizerCommand : null }.OfType<string>())
             : Background ? null : SingleInstance.ShowSettingsCommand;
-    }
-
-    // Until K9: says which version runs.
-    private sealed class NoUpdateCheck(AppController app) : IUpdateCheck
-    {
-        public void CheckNow() => app.Tell($"You're running {AppInfo.Name} {AppLog.Version}. Update checks start with the first release.");
     }
 }
