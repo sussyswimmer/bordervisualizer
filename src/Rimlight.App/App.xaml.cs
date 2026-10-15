@@ -30,6 +30,12 @@ public partial class App : Application
         }
 
         AppLog.Start(e.Args); // only the running copy writes the log
+        if (Updates.UpdateService.InstallDownloadedUpdate(e.Args))
+        {
+            Shutdown(); // Velopack's updater installs it once this process has ended, then starts the new version
+            return;
+        }
+
         controller = new AppController(() => Shutdown(), instance, background);
         try
         {
