@@ -129,6 +129,12 @@ VIRTUAL_KEY
 OpenProcess
 QueryFullProcessImageName
 
+// Settings and the debug visualizer: a window on another virtual desktop is cloaked, though still visible to WPF
+EVENT_OBJECT_CLOAKED
+EVENT_OBJECT_UNCLOAKED
+OBJECT_IDENTIFIER
+CHILDID_SELF
+
 // Settings (K7): monitor friendly names for the Displays page (doc 06 §3)
 GetDisplayConfigBufferSizes
 QueryDisplayConfig

@@ -6,6 +6,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Rimlight.Core;
+using Rimlight.Platform.Shell;
 using Wpf.Ui.Abstractions;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -15,8 +16,8 @@ namespace Rimlight.App.SettingsUi;
 /// <summary>
 /// The settings window (doc 06 §3): a Fluent window with Mica that follows Windows' light or dark theme, with six pages
 /// in a navigation view. Every change applies live. Closing only hides it (the app keeps running in the tray), and
-/// nothing of it runs while it is hidden or minimized, or nobody can see the screen (locked, switched away from, going
-/// to sleep, display off). Created on first use and kept; use it on the UI thread only.
+/// nothing of it runs while it is hidden, minimized or on another virtual desktop, or nobody can see the screen (locked,
+/// switched away from, going to sleep, display off). Created on first use and kept; use it on the UI thread only.
 /// </summary>
 internal partial class SettingsWindow : FluentWindow
 {
@@ -31,6 +32,7 @@ internal partial class SettingsWindow : FluentWindow
     private ISettingsPage? selected;
     private ISettingsPage? active;
     private IDisposable? audio;
+    private CloakWatcher? cloak; // kept with the window: its callback must outlive the hook
     private bool subscribed;
     private bool themeQueued;
     private int systemQueued; // set by the watcher thread, cleared on this one
@@ -78,8 +80,11 @@ internal partial class SettingsWindow : FluentWindow
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        nint handle = new WindowInteropHelper(this).Handle;
         // Top-level windows get display and theme broadcasts, also while hidden.
-        HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WindowProcedure);
+        HwndSource.FromHwnd(handle)?.AddHook(WindowProcedure);
+        // A switch to another virtual desktop changes neither IsVisible nor the window state.
+        cloak = new CloakWatcher(handle, () => Dispatcher.InvokeAsync(UpdateActivity));
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -117,7 +122,7 @@ internal partial class SettingsWindow : FluentWindow
     // The selected page runs only while the window is on screen, and outside changes are followed only then.
     private void UpdateActivity()
     {
-        bool shown = IsVisible && WindowState != WindowState.Minimized && !ScreenUnseen();
+        bool shown = IsVisible && WindowState != WindowState.Minimized && cloak?.IsCloaked != true && !ScreenUnseen();
         Subscribe(shown);
         ISettingsPage? next = shown ? selected : null;
         if (!ReferenceEquals(next, active))
@@ -206,6 +211,7 @@ internal partial class SettingsWindow : FluentWindow
     private void OnClosed(object? sender, EventArgs e)
     {
         if (app.SystemPauses is { } system) system.StateChanged -= OnSystemStateChanged;
+        cloak?.Dispose();
         active?.SetActive(false);
         active = null;
         Subscribe(false);

@@ -10,6 +10,7 @@ using System.Windows.Threading;
 using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
 using Rimlight.Core;
+using Rimlight.Platform.Shell;
 using Wpf.Ui.Appearance;
 using ShellTheme = Rimlight.Platform.Shell.SystemTheme;
 
@@ -21,7 +22,8 @@ namespace Rimlight.App.Visualizer;
 /// estimate, silence, the capture device and format, and a slider for every <see cref="AudioTuning"/> field with
 /// "Copy params as JSON". It shows the overlay's own analyzer through an <see cref="AnalyzerProbe"/>, so what it shows
 /// is what drives the glow. Runs (keeps the capture open, the analyzer at the full rate and its timer going) only
-/// while it is on screen; closing it really closes it. Always on top. UI thread only.
+/// while it is on screen: not hidden, minimized or on another virtual desktop. Closing it really closes it. Always on
+/// top. UI thread only.
 /// </summary>
 internal partial class DebugVisualizerWindow : Window
 {
@@ -43,6 +45,7 @@ internal partial class DebugVisualizerWindow : Window
     private TimelinePlot? features;
     private TimelinePlot? flux;
     private IDisposable? audio;
+    private CloakWatcher? cloak; // kept with the window: its callback must outlive the hook
     private bool running;
     private bool failed;
     private AnalyzerSnapshot? latest;  // the snapshot on screen; ours until the next TakeSnapshot
@@ -89,7 +92,11 @@ internal partial class DebugVisualizerWindow : Window
         FeaturesHost.SizeChanged += (_, _) => Redraw();
         FluxHost.SizeChanged += (_, _) => Redraw();
         DpiChanged += (_, _) => Redraw();
-        Closed += (_, _) => Stop();
+        Closed += (_, _) =>
+        {
+            Stop();
+            cloak?.Dispose();
+        };
     }
 
     /// <summary>Shows the window, or brings it to the front.</summary>
@@ -104,13 +111,16 @@ internal partial class DebugVisualizerWindow : Window
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
-        ShellTheme.UseDarkTitleBar(new WindowInteropHelper(this).Handle, UiTheme.Current == ApplicationTheme.Dark);
+        nint handle = new WindowInteropHelper(this).Handle;
+        ShellTheme.UseDarkTitleBar(handle, UiTheme.Current == ApplicationTheme.Dark);
+        // A switch to another virtual desktop changes neither IsVisible nor the window state.
+        cloak = new CloakWatcher(handle, () => Dispatcher.InvokeAsync(UpdateRunning));
     }
 
     // Runs only while on screen: the capture request, the probe on the overlay thread and the timer.
     private void UpdateRunning()
     {
-        bool shown = IsVisible && WindowState != WindowState.Minimized;
+        bool shown = IsVisible && WindowState != WindowState.Minimized && cloak?.IsCloaked != true;
         if (shown == running) return;
         running = shown;
         if (shown)
