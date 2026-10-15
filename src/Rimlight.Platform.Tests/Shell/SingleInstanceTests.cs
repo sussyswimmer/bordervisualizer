@@ -8,6 +8,7 @@ namespace Rimlight.Platform.Tests;
 // SingleInstance (K6, doc 06 §4): one copy per user session. A later start hands its request to the running copy over a
 // pipe, and an exiting copy stops taking requests before its teardown, so a start then takes over instead of handing its
 // request to a process that would drop it.
+[Collection(SerialTests.Name)]
 public sealed class SingleInstanceTests
 {
     [Fact]
@@ -24,13 +25,13 @@ public sealed class SingleInstanceTests
                 lock (received) received.Add(command);
             };
             first.StartListening();
-            Assert.True(TrySend(first.PipeName, SingleInstance.ShowSettingsCommand));
+            Assert.True(TrySend(first.PipeName, SingleInstance.ShowSettingsCommand, connectMs: 3000)); // Send's timeout
             Assert.True(SpinWait.SpinUntil(() => Count(received) == 1, TimeSpan.FromSeconds(5)));
 
             // Exiting: from now on a start finds no pipe, so its Claim waits for this process instead of handing over.
             first.StopListening();
             first.StopListening(); // twice is harmless
-            Assert.False(TrySend(first.PipeName, SingleInstance.DemoCommand));
+            Assert.False(TrySend(first.PipeName, SingleInstance.DemoCommand, connectMs: 300));
             Assert.Equal(1, Count(received));
         }
         finally
@@ -51,12 +52,12 @@ public sealed class SingleInstanceTests
     }
 
     // A later start's hand-over, without Send's Windows-only foreground call.
-    private static bool TrySend(string pipeName, string command)
+    private static bool TrySend(string pipeName, string command, int connectMs)
     {
         using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.CurrentUserOnly);
         try
         {
-            client.Connect(300);
+            client.Connect(connectMs);
             client.Write(Encoding.UTF8.GetBytes(command + "\n"));
             client.Flush();
             if (OperatingSystem.IsWindows()) client.WaitForPipeDrain(); // as Send does: stay until it has been read

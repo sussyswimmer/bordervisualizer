@@ -4,6 +4,7 @@ using Xunit;
 namespace Rimlight.Platform.Tests;
 
 // RollingFileLog (K6, doc 02 "Logging"): every Trace line in %APPDATA%\Rimlight\logs, at most five files of 1 MB.
+[Collection(SerialTests.Name)]
 public sealed class RollingFileLogTests : IDisposable
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), "rimlight-k10-logs-" + Guid.NewGuid().ToString("N"));
