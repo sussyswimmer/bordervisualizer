@@ -1,6 +1,6 @@
 # Handoff
 
-## [OPEN] H-017 · from: claude-code (Lane A, C12) · to: maxwell, claude-code (K11) · blocking: none (release candidate, doc 09 sync point 4)
+## [OPEN] H-018 · from: claude-code (Lane A, C12) · to: maxwell, claude-code (K11) · blocking: none (release candidate, doc 09 sync point 4)
 **Need:** Two measurements the Linux soak can't make.
 1. **The Core soak on Windows (Maxwell, about 5 minutes).** `docs/PERF.md` has numbers from a shared Linux VM only. From the repository root in PowerShell:
    - Run `dotnet run -c Release --project src\Rimlight.Bench -- soak --json soak-8h.json`. It needs the .NET 8 runtime; `dotnet --list-runtimes` shows a `Microsoft.NETCore.App 8.0.x` line.

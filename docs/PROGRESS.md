@@ -489,10 +489,10 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - Live heap +15 KB (the same in 10-minute, 1-hour and 4-hour runs). Handles 50 → 50.
   - Working set 34.6 → 37.1 MB, which doesn't grow with time. With one progress line it ended 1.2 MB up after both 1 hour and 4 hours; the rest comes from the progress lines' uncollected garbage (120 lines in 1 hour: +3.6 MB).
 - **Spec clarifications:**
-  - **Scope:** doc 07 Phase 7's soak runs the app in `--demo` mode (overlay, handles, GPU), which is K11's job on Windows (H-017). C12 is the Core part, in simulated time.
+  - **Scope:** doc 07 Phase 7's soak runs the app in `--demo` mode (overlay, handles, GPU), which is K11's job on Windows (H-018). C12 is the Core part, in simulated time.
   - **CPU budget:** "< 2 % while playing" is doc 07 Phase 3 (and CLAUDE.md's definition of done), not doc 01. PERF.md converts the Core's share to Task Manager's all-CPU scale.
   - **Steady state:** everything after the warm-up tour, which repeats for at least 2 s of real time, so tiered compilation is done. Allocation must be 0 there in every frame, `SetTarget` and `Reset` frames included.
-  - **Memory flat:** the live managed heap, after a forced compacting collection, grows at most 256 KB. The working set is reported but not gated: it also moves with the harness's own output. A leak on the render thread would show first as an allocation.
+  - **Memory flat:** the live managed heap, after a forced compacting collection, grows at most 256 KB. The working set is reported but not gated: it also moves with the harness's own output. A leak on the render thread would show first as an allocation. What the harness keeps until the end (the progress records) is allocated before the start sample, so it doesn't count.
   - **Session order:** a session's settings and device change take effect before its pause, so a pause into a Hide session hides the light. With the pause first, the 2-minute program never hid the light for seed 1.
 - **Test-suite form, and two flaky tests fixed:**
   - The quick soak (2 simulated minutes, compressed) runs twice:
@@ -505,6 +505,14 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - `dotnet build Rimlight.sln -c Release` gives 0 warnings. `dotnet test Rimlight.sln -c Release` passed 6 runs in a row: 666 + 73 tests.
   - 15 mutants each fail at least one soak test: allocations in `SetTarget`, in `Reset`, in `Process` on empty spans, and in the engine while hidden or static; allocations counted around `Process` only; session settings or palette events ignored; the old session order; no-packet gaps delivering zeros; warm-up measurements kept; the memory check always passing; the verdict ignoring memory; no `FillGradient`; and `--shape compressed` running the day.
   - A discarded `new` in a hot method was removed by the tier-1 JIT, so the hot-path mutants keep the allocation alive (`GC.KeepAlive`).
+- **Review fixes:**
+  - **Progress records counted as growth.** They were records allocated after the start sample and kept to the end, about 166 B per line. `--minutes 10 --report-every 0.005` (2,000 lines) grew the heap 333 KB and failed a clean run. `SoakSnapshot`, `CostSummary` and `MemorySample` are now structs, and the snapshot list is sized for every line before the start sample. A 10-minute run now grows 12 KB with 16 lines and 20 KB with 2,000 or 10,000. `--report-every` allows at most 10,000 lines (exit 2 above that), which bounds that list.
+  - **`--json`** is created before the run, so a path that can't be written exits 2 at once. Before, it threw after the whole run.
+  - **Command-line contract tested:** `ParseSoak` and `ExitCode` are split out. Tests cover the 8-hour default, exit 1 on FAIL, the line limit and the bad path. The quick soak checks that each progress line's costs cover only its interval (they add up to the run's).
+  - **Child-process timeout:** the helper read stdout synchronously, so its 5-minute timeout could never fire. It now reads both streams asynchronously, and a test checks that a 48-hour soak is killed after 5 s.
+  - **HANDOFF number:** C12's entry is H-018, because the Lane B integration branch already uses H-017.
+  - PERF.md said two half-hour maximums were over 15 ms. The published run has three (17, 53 and 186 ms).
+  - 9 more mutants each fail a test: the list allocated after the start sample, snapshots as classes, exit code always 0, a 0.5-hour default, no interval reset, no line limit in the CLI or in the run, no report file before the run, and a synchronous stdout read in the helper.
 
 ## Lane B — Claude Code
 

@@ -2,7 +2,7 @@
 
 What the Core costs per frame, and what an 8-hour run does to memory. The numbers come from `Rimlight.Bench` (doc 09 C3 and C12, doc 07 Phase 7). It runs the real analyzer, light engine and palette blender exactly as the app's render thread calls them, on synthetic audio, as fast as the CPU allows.
 
-This covers the Core only. The rest of the app's CPU (WASAPI capture, the Direct3D frame, composition) and its handles and GPU memory over a long run are measured on Windows with the real app (K11, doc 07 Phases 3 and 7, HANDOFF H-017).
+This covers the Core only. The rest of the app's CPU (WASAPI capture, the Direct3D frame, composition) and its handles and GPU memory over a long run are measured on Windows with the real app (K11, doc 07 Phases 3 and 7, HANDOFF H-018).
 
 ## Summary
 
@@ -54,7 +54,7 @@ Frames last 1/60 s ± 20 % (uniform jitter, seeded), so the analyzer and the eng
 - **Allocations:** `GC.GetAllocatedBytesForCurrentThread()` before and after each frame's calls. Every allocating frame is counted, with its bytes and the simulated time of the first one. The run also reports the whole process's allocations while measuring (`GC.GetTotalAllocatedBytes`), minus what the progress lines allocate.
 - **Steady state:** before measuring, a 1.5-minute "tour" visits every path the program has. It covers both gap kinds, short and long, both silent behaviors with the light hidden and static, a device change, and new and same-album palettes. The tour repeats until 2 s of real time have passed (3 tours here), so tiered compilation has optimized every measured path and static initializers have run. The same analyzer, engine and blender then carry on into the measured program.
 - **Memory:** sampled at the start and the end after a forced, compacting full collection: the live managed heap, the working set and the handle count. The heap and working set are also printed at every progress line.
-- **Pass:** 0 bytes allocated in the measured frames, and live managed heap growth of at most 256 KB. With 0 bytes allocated on the render thread, nothing there can leak. The heap check catches growth anywhere else in the process.
+- **Pass:** 0 bytes allocated in the measured frames, and live managed heap growth of at most 256 KB. With 0 bytes allocated on the render thread, nothing there can leak. The heap check catches growth anywhere else in the process. The records the run keeps for its progress lines are structs in a list sized before the start sample, so however many lines it prints, they don't count.
 
 ## Results: 8 simulated hours
 
@@ -75,7 +75,7 @@ It ran in 4 min 36 s of real time (104× real time), after a 2.6 s warm-up.
 
 - The analyzer is nearly all of the cost. It runs one analysis step (an FFT, the bands and the beat detector) per 10 ms packet. During music at 60 fps ± 20 %, two-thirds of the frames receive two packets and the rest one, so the median frame runs two steps and the average is 1.7. That is why these costs are higher than the `analyzer` benchmark's below, which feeds one 800-sample step per frame. A frame with no packets costs about 1.4 µs (the benchmark's `idle` scenario).
 - At p99, a frame takes 0.84 % of the 16.7 ms frame time.
-- The maximums are most likely the virtual machine pausing the thread, not work. The light engine's `Update` is a short piece of float math with no loops over data, yet its maximum is 2.2 ms against a p99.9 of 3.2 µs. Other jobs share this machine's 4 CPUs, and the maximums of the half-hour intervals vary between 2.6 and 186 ms with no trend. Only two of the sixteen are over 15 ms.
+- The maximums are most likely the virtual machine pausing the thread, not work. The light engine's `Update` is a short piece of float math with no loops over data, yet its maximum is 2.2 ms against a p99.9 of 3.2 µs. Other jobs share this machine's 4 CPUs, and the maximums of the half-hour intervals vary between 2.6 and 186 ms with no trend. Three of the sixteen are over 15 ms (17, 53 and 186 ms).
 
 ### Over time
 
@@ -110,7 +110,8 @@ Interval means differ with the program. The seven pauses between sessions (5–1
 
 ### Memory
 
-- **Live managed heap:** 671 KB → 686 KB after a full collection (+15 KB). Part of it is the 16 progress records the run keeps for its report. 1-hour and 4-hour runs with one progress line grew 13 KB and 9 KB, and a 10-minute run 15 KB, so the amount doesn't depend on the length of the run.
+- **Live managed heap:** 671 KB → 686 KB after a full collection (+15 KB). 1-hour and 4-hour runs with one progress line grew 13 KB and 9 KB, and a 10-minute run 15 KB, so the amount doesn't depend on the length of the run.
+  - About 3 KB of it was the 16 progress records the run keeps for its report. The harness now allocates their storage before the start sample, so they no longer count. A 10-minute run now grows 12 KB with 16 lines, and 20 KB with 2,000 or 10,000 lines. Before the change, 2,000 lines added 333 KB and failed the check.
 - **Working set:** 34.6 MB → 37.1 MB, in two parts. Neither grows with time.
   - A one-off step of about 1.2 MB after the start sample. With one progress line, a 1-hour run ended at +1.2 MB (34.1 → 35.3 MB) and a 4-hour run also at +1.2 MB (34.3 → 35.5 MB).
   - The progress lines. Formatting and printing a line allocates, and nothing reclaims it, because no collection runs during the whole run. A 1-hour run printing 120 lines grew 3.6 MB, against 1.2 MB with one line. The default run prints 16 lines, which accounts for the rest of its 2.5 MB.
@@ -156,7 +157,7 @@ dotnet run -c Release --project src\Rimlight.Bench -- soak --json soak-8h.json
 ```
 
 - It takes about 5 minutes on one core and prints a line every half hour of simulated time. The summary at the end is Markdown, ready to paste here.
-- **Pass:** the summary ends with `Verdict: PASS` and the exit code (`$LASTEXITCODE`) is 0. 1 means a frame allocated or managed memory grew; 2 means a bad command line.
+- **Pass:** the summary ends with `Verdict: PASS` and the exit code (`$LASTEXITCODE`) is 0. 1 means a frame allocated or managed memory grew; 2 means a bad command line or a `--json` file that can't be created.
 - For steadier timings, plug a laptop in and close heavy apps. Use `-c Release`: a Debug build says so in the header line, and its timings mean nothing.
 - Please send back `soak-8h.json` or the summary, and the CPU model, so a Windows section can be added here.
 
@@ -168,11 +169,11 @@ Options (`dotnet run -c Release --project src\Rimlight.Bench -- --help` lists th
 | `--minutes <m>` | | Simulated minutes instead, for a shorter run (e.g. `--minutes 10`, a few seconds) |
 | `--fps <n>` | 60 | Render frames per second, e.g. `--fps 144` for a high-refresh monitor |
 | `--shape <name>` | day | `day` is the listening day above. `compressed` packs the same structure into about a minute per session, so `--minutes 2 --shape compressed` covers every path in a few seconds; it is what the test suite runs |
-| `--json <file>` | | Also write the full report as JSON: options, machine, program, costs, allocations, memory and every progress line |
+| `--json <file>` | | Also write the full report as JSON: options, machine, program, costs, allocations, memory and every progress line. The file is created before the run, so a path that can't be written fails at once |
 | `--seed <n>` | 1 | Another seed gives another program, with different tracks, tempos, gaps and palettes |
 | `--jitter <f>`, `--packet-ms <ms>`, `--rate <Hz>` | 0.2, 10, 48000 | Frame-time jitter, capture packet length, sample rate |
 | `--warmup-seconds <s>` | 2 | Real seconds of warm-up on the tour before measuring |
-| `--report-every <min>` | 30 for 8 h | Simulated minutes between progress lines (16 lines per run) |
+| `--report-every <min>` | 30 for 8 h | Simulated minutes between progress lines (16 lines per run by default, at most 10,000) |
 
 `analyzer` measures `Process` alone per signal type (table above). Its options are `--scenario`, `--rate`, `--fps`, `--frames` and `--warmup`.
 
@@ -180,11 +181,12 @@ Options (`dotnet run -c Release --project src\Rimlight.Bench -- --help` lists th
 
 The quick soak is the CI form of the 8-hour run. It uses the same harness on a compressed program (`--shape compressed`): 2 simulated minutes cover both silent behaviors, a hidden and static light, a device change, new and same-album palettes, and both gap kinds. It runs in every `dotnet test`, so CI checks it on Linux and Windows on every pull request. The tests are in `src/Rimlight.Tests/Tools/SoakTests.cs`.
 
-- **`SoakInItsOwnProcessPassesAndWritesTheJsonReport`** runs `Rimlight.Bench soak --minutes 2 --shape compressed` as a child process, the way you would run it. It asserts exit code 0, `Verdict: PASS`, 0 bytes allocated in every measured frame and live managed heap growth of at most 256 KB, all read from its JSON report. It takes a few seconds.
+- **`SoakInItsOwnProcessPassesAndWritesTheJsonReport`** runs `Rimlight.Bench soak --minutes 2 --shape compressed` as a child process, the way you would run it. It asserts exit code 0, `Verdict: PASS`, 0 bytes allocated in every measured frame and live managed heap growth of at most 256 KB, all read from its JSON report. It prints 2,500 progress lines, so the records kept for them can't pass for growth. It takes a few seconds.
 - **`QuickSoakCoversEveryPathAndAllocatesNothing`** runs the same soak inside the test process. It asserts what the program covered (sessions, tracks, gaps, silent, hidden and static frames, beats against kicks, progress lines) and 0 bytes allocated. Allocations are counted per thread, so the test runner can't disturb them.
 - **Why memory is only checked in a child process:** inside the test host, the runner's own threads allocate and keep memory while a test runs. One 0.3-second soak saw about 1 MB allocated and 350 KB kept by other threads, while its own frames allocated 0 bytes. A process-wide heap sample can't tell that apart from a leak.
 - The soak tests run one at a time, after the parallel ones.
 - Two more tests prove the checks can fail. A light engine that allocates on every 100th frame fails the run, and each of its frames is counted. One that keeps every fifth allocation fails the memory check.
+- The command line has tests too: exit code 1 on a failing verdict, the 8-hour default, the 10,000-line limit, and a `--json` path that can't be written failing before the run. The quick soak also checks that each progress line's costs cover only its own interval.
 
 ## Updating this file
 
