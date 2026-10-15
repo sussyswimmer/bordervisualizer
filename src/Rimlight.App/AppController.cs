@@ -198,6 +198,8 @@ internal sealed class AppController : IDisposable
         {
             capture = new LoopbackCapture();
             glow = new MusicGlowSource(initial, capture, media);
+            // --demo plays from the first frame, so those before StartDemo below don't open the loopback stream.
+            if (options.Demo) glow.SetDemo(true);
             overlays = new OverlayHost(glow, initial);
             systemPauses.Attach(overlays);
             overlays.Start();
@@ -284,8 +286,8 @@ internal sealed class AppController : IDisposable
 
     /// <summary>
     /// Plays the demo (<c>--demo</c>, doc 04 §5): a synthetic 120 BPM beat and four palettes, 6 s each, instead of the
-    /// captured audio and the album colors, until <see cref="StopDemo"/> or Quit. It turns the glow on if it is off.
-    /// Nothing of it is saved.
+    /// captured audio and the album colors, until <see cref="StopDemo"/> or Quit. It turns "Glow on" on if it is off,
+    /// which is saved like any other change of that setting; nothing else of the demo is.
     /// </summary>
     public void StartDemo()
     {
@@ -300,6 +302,9 @@ internal sealed class AppController : IDisposable
         glow.SetDemo(true);
         overlays?.RequestFrame();
         Trace.WriteLine("[App] Demo mode on.");
+        // The demo is mostly for recordings, which this setting leaves without the glow.
+        if (settings.Current.HideFromScreenCapture)
+            Trace.WriteLine("[App] Hide from screen capture is on, so screen recordings of the demo won't show the glow.");
     }
 
     /// <summary>Ends demo mode: the glow follows the music and the album or manual colors again.</summary>
@@ -564,7 +569,9 @@ internal sealed class AppController : IDisposable
 
     private void ShowNowPlaying()
     {
-        Volatile.Write(ref toolTipQueued, 0);
+        // A full fence: a plain store could pass the read of Current below (x64 store buffer), and a track published in
+        // between would then find the flag still set and never be shown.
+        Interlocked.Exchange(ref toolTipQueued, 0);
         try
         {
             tray?.SetNowPlaying(media?.Current); // null after Dispose

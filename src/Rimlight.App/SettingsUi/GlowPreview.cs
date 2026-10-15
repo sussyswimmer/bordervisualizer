@@ -65,6 +65,10 @@ internal sealed class GlowPreview
     {
         if (timer.IsEnabled || failed) return;
         clock.Restart();
+        // The clock starts over, so the reading from before counts as stale until a newer one arrives: the overlay
+        // may have stopped sending them any time ago (no display chosen, glow static).
+        lastSequence = app.Glow?.LatestAudio.Sequence ?? -2;
+        lastSequenceAt = double.NegativeInfinity;
         lastTick = -FrameSeconds;
         timer.Start();
         Tick();

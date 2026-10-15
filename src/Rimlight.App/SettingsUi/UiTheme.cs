@@ -19,6 +19,7 @@ internal static class UiTheme
     private static readonly Color BrandAccent = Color.FromRgb(0x7C, 0x5C, 0xFF);
 
     private static bool loaded;
+    private static SystemTheme appliedVariant; // the Windows theme the last Apply read: which high-contrast palette
 
     /// <summary>Whether WPF-UI's resources are in place; the settings window needs them.</summary>
     public static bool IsLoaded => loaded;
@@ -51,7 +52,7 @@ internal static class UiTheme
 
     /// <summary>
     /// Follows Windows' theme if it changed: the settings window calls it when Windows announces a theme change, the
-    /// tray when its menu opens. Cheap when nothing changed (a registry read).
+    /// tray when its menu opens. Cheap when nothing changed (a registry read, a few more in high contrast).
     /// </summary>
     public static void Sync()
     {
@@ -59,7 +60,14 @@ internal static class UiTheme
         try
         {
             ApplicationTheme wanted = Wanted();
-            if (wanted != ApplicationThemeManager.GetAppTheme()) Apply(wanted);
+            // WPF-UI has one dictionary per contrast theme, so a switch between two of them re-applies too.
+            bool contrastChanged = false;
+            if (wanted == ApplicationTheme.HighContrast)
+            {
+                SystemThemeManager.UpdateSystemThemeCache();
+                contrastChanged = SystemThemeManager.GetCachedSystemTheme() != appliedVariant;
+            }
+            if (wanted != ApplicationThemeManager.GetAppTheme() || contrastChanged) Apply(wanted);
         }
         catch (Exception exception)
         {
@@ -78,6 +86,7 @@ internal static class UiTheme
     private static void Apply(ApplicationTheme theme)
     {
         SystemThemeManager.UpdateSystemThemeCache(); // which high-contrast palette, for HighContrast
+        appliedVariant = SystemThemeManager.GetCachedSystemTheme();
         ApplicationThemeManager.Apply(theme, WindowBackdropType.Mica, updateAccent: false);
     }
 

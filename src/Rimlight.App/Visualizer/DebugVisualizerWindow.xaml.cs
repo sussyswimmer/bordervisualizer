@@ -29,7 +29,7 @@ internal partial class DebugVisualizerWindow : Window
     private const double StaleSeconds = 0.5; // no new frame from the overlay for this long: say why
 
     private readonly AppController app;
-    private AnalyzerProbe probe = new();
+    private readonly AnalyzerProbe probe = new();
     private readonly DispatcherTimer timer;
     private readonly Stopwatch clock = new();
     private readonly TimeAxis axis = new();
@@ -50,8 +50,8 @@ internal partial class DebugVisualizerWindow : Window
     private int lastBeatCount = -1;
     private AudioTuning? edited;       // what the sliders show; null until the analyzer's tuning arrives
     private AudioTuning? applied;      // the analyzer's tuning, as last reported
+    private AudioTuning? unconfirmed;  // the last request sent, until its outcome arrives
     private AudioTuning? labelledBands; // the tuning the band labels were placed for
-    private bool rejected;             // the last request was refused, so edited and applied differ
     private bool refreshing;
     private bool subscribed;
 
@@ -62,6 +62,7 @@ internal partial class DebugVisualizerWindow : Window
         this.app = app;
         InitializeComponent();
         Title = $"{AppInfo.Name} debug visualizer";
+        FitWorkArea();
         if (!UiTheme.IsLoaded)
         {
             // Without WPF-UI's theme brushes; the system's colors keep it readable.
@@ -114,21 +115,38 @@ internal partial class DebugVisualizerWindow : Window
         running = shown;
         if (shown)
         {
-            // A fresh probe each time: its history then starts now instead of joining what it saw before a minimize.
-            probe = new AnalyzerProbe();
+            // The same probe as before a minimize, so a change sent as the window went away (a focused value box
+            // commits then) still gets its answer; only the history starts over. A copy filled before the minimize is
+            // dropped, and the window keeps that buffer as it keeps every snapshot it takes.
+            probe.Restart();
+            if (probe.TakeSnapshot() is { } stale) latest = stale;
             audio = app.RequestAudio();
             app.AttachVisualizer(probe);
             app.SettingsService.Changed += OnSettingsChanged;
             subscribed = true;
-            RefreshRows(); // Sensitivity may have changed in Settings meanwhile
             clock.Restart();
             lastSnapshotAt = 0;
             if (!failed) timer.Start();
+            RefreshRows(); // Sensitivity may have changed in Settings meanwhile
         }
         else
         {
             Stop();
         }
+    }
+
+    // CenterScreen centers on the work area without keeping the window inside it, so a window taller than the screen
+    // starts with its title bar above it (1366×768 at 125% leaves about 580 DIPs). The primary display's work area
+    // bounds the size, as for Settings.
+    private void FitWorkArea()
+    {
+        Rect area = SystemParameters.WorkArea;
+        if (!(area.Width > 32 && area.Height > 32)) return;
+        double width = area.Width - 16, height = area.Height - 16;
+        MinWidth = Math.Min(MinWidth, width);
+        MinHeight = Math.Min(MinHeight, height);
+        Width = Math.Min(Width, width);
+        Height = Math.Min(Height, height);
     }
 
     private void Stop()
@@ -397,23 +415,32 @@ internal partial class DebugVisualizerWindow : Window
         ResetButton.IsEnabled = enabled;
     }
 
-    // Every row from `edited`, and Sensitivity from the settings, without counting as edits.
-    private void RefreshRows()
+    // Every row from `edited`, and Sensitivity from the settings, without counting as edits. A box being typed in
+    // keeps its text unless `includeFocused`.
+    private void RefreshRows(bool includeFocused = false)
     {
-        foreach (TuningRow row in rows) ShowRow(row, updateSlider: true, updateBox: !row.Box.IsKeyboardFocusWithin);
+        foreach (TuningRow row in rows) ShowRow(row, updateSlider: true, updateBox: includeFocused || !row.Box.IsKeyboardFocusWithin);
     }
+
+    // The tuning a row shows: `edited`, with the setting's Sensitivity.
+    private AudioTuning Shown(TuningParameter p, AudioTuning tuning) => p.Name == TuningParameters.SensitivityName
+        ? tuning with { Sensitivity = app.SettingsService.Current.Sensitivity }
+        : tuning;
 
     private void ShowRow(TuningRow row, bool updateSlider, bool updateBox)
     {
         if (edited is null) return;
         TuningParameter p = row.Parameter;
-        AudioTuning shown = p.Name == TuningParameters.SensitivityName
-            ? edited with { Sensitivity = app.SettingsService.Current.Sensitivity }
-            : edited;
+        AudioTuning shown = Shown(p, edited);
         refreshing = true;
         try
         {
-            if (updateSlider) row.Slider.Value = p.ToSlider(p.Get(shown));
+            if (updateSlider)
+            {
+                // A value no position stands for (the slider refuses ∞ and NaN) leaves the slider where it is.
+                double position = p.ToSlider(p.Get(shown));
+                if (double.IsFinite(position)) row.Slider.Value = position;
+            }
             if (updateBox) row.Box.Text = p.Text(shown);
         }
         finally
@@ -429,18 +456,21 @@ internal partial class DebugVisualizerWindow : Window
         ShowRow(row, updateSlider: false, updateBox: true);
     }
 
-    // The value box: Enter or leaving it applies a typed value; anything else puts the current value back.
+    // The value box: Enter or leaving it applies a typed value; anything else puts the current value back. Text that
+    // is still what the row shows sends nothing, so passing through a box never changes a value.
     private void Commit(TuningRow row)
     {
         if (refreshing || edited is null) return;
         TuningParameter p = row.Parameter;
-        if (TuningParameter.TryParse(row.Box.Text, out double value))
+        string text = row.Box.Text;
+        if (text != p.Text(Shown(p, edited)))
         {
-            Apply(row, p.Round(value));
-        }
-        else
-        {
-            MessageText.Text = $"\"{row.Box.Text}\" isn't a number; {p.Label} keeps its value.";
+            if (!TuningParameter.TryParse(text, out double value))
+                MessageText.Text = $"\"{text}\" isn't a number; {p.Label} keeps its value.";
+            else if (!TuningParameter.CanStore(p.Round(value)))
+                MessageText.Text = $"{text.Trim()} is far too large; {p.Label} keeps its value.";
+            else
+                Apply(row, p.Round(value));
         }
         ShowRow(row, updateSlider: true, updateBox: true);
     }
@@ -464,6 +494,7 @@ internal partial class DebugVisualizerWindow : Window
 
     private void Send(AudioTuning tuning)
     {
+        unconfirmed = tuning;
         probe.RequestTuning(tuning);
         app.Overlays?.RequestFrame(); // a stopped loop applies it at once
     }
@@ -472,9 +503,21 @@ internal partial class DebugVisualizerWindow : Window
     private void OnOutcome(TuningOutcome outcome)
     {
         applied = outcome.Applied;
-        rejected = outcome.Error is not null;
-        if (outcome.Error is { } error) MessageText.Text = $"Not applied: {error} The analyzer keeps its previous values.";
-        else if (MessageText.Text.StartsWith("Not applied", StringComparison.Ordinal)) MessageText.Text = "";
+        // The answer to an older request: the newest is still on its way, and its own answer follows.
+        if (!ReferenceEquals(outcome.Requested, unconfirmed)) return;
+        unconfirmed = null;
+        if (outcome.Error is { } error)
+        {
+            // The rows go back to what the analyzer uses, so they match Copy, and the next change doesn't carry the
+            // refused value along (it would be refused again). The box that was typed in too.
+            edited = outcome.Applied;
+            RefreshRows(includeFocused: true);
+            MessageText.Text = $"Not applied: {error} The analyzer keeps its previous values, which the rows show again.";
+        }
+        else if (MessageText.Text.StartsWith("Not applied", StringComparison.Ordinal))
+        {
+            MessageText.Text = "";
+        }
     }
 
     // Sensitivity changed (here, in Settings, or by a paste).
@@ -491,8 +534,8 @@ internal partial class DebugVisualizerWindow : Window
         try
         {
             Clipboard.SetText(TuningJson.Serialize(tuning));
-            MessageText.Text = rejected
-                ? "Copied the analyzer's current parameters as JSON. Your last change was not applied, so it isn't in them."
+            MessageText.Text = unconfirmed is not null
+                ? "Copied the analyzer's current parameters as JSON. Your latest change hasn't reached it yet, so it isn't in them."
                 : "Copied every parameter as JSON (what tools/wav-analyze --tuning reads).";
         }
         catch (Exception exception)
@@ -514,19 +557,23 @@ internal partial class DebugVisualizerWindow : Window
             MessageText.Text = $"The clipboard is busy ({exception.Message}). Try again.";
             return;
         }
-        if (!TuningJson.TryParse(text, out AudioTuning? pasted, out string? error))
+        if (!TuningJson.TryParse(text, out AudioTuning? pasted, out bool hasSensitivity, out string? error))
         {
             MessageText.Text = $"The clipboard doesn't hold tuning JSON: {error}";
             return;
         }
         edited = pasted!;
-        // Sensitivity is a setting: a pasted value within its range changes it (H-007).
+        // Sensitivity is a setting (H-007): a pasted Sensitivity key within its range changes it. Without the key the
+        // setting stays as it is (Reset keeps it too), rather than dropping to the default a partial JSON implies.
         float sensitivity = edited.Sensitivity;
-        if (float.IsFinite(sensitivity) && sensitivity is >= 0.25f and <= 2f && sensitivity != app.SettingsService.Current.Sensitivity)
+        bool takeSensitivity = hasSensitivity && sensitivity is >= 0.25f and <= 2f;
+        if (takeSensitivity && sensitivity != app.SettingsService.Current.Sensitivity)
             app.SettingsService.Update(s => s with { Sensitivity = sensitivity });
         RefreshRows();
         Send(edited);
-        MessageText.Text = "Pasted. Missing parameters were set to their defaults.";
+        MessageText.Text = takeSensitivity
+            ? "Pasted, the Sensitivity setting too. Missing parameters were set to their defaults."
+            : "Pasted. Missing parameters were set to their defaults; Sensitivity stays as the setting has it.";
     }
 
     private void OnReset(object sender, RoutedEventArgs e)

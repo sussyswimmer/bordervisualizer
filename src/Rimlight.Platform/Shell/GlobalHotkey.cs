@@ -22,6 +22,11 @@ public enum HotkeyState
     InUse,
     /// <summary>Windows refused it for another reason.</summary>
     Failed,
+    /// <summary>
+    /// Not registered because a keyboard layout types a character with it (<see cref="GlobalHotkey.TypesCharacter"/>):
+    /// it would take that character away from typing.
+    /// </summary>
+    TypesCharacter,
 }
 
 /// <summary>The outcome of registering the shortcut in the settings, for the tray menu and Settings' inline warning.</summary>
@@ -44,6 +49,8 @@ public sealed class GlobalHotkey : IDisposable
     private const string ClassName = "Rimlight.Hotkey";
     private const int HotkeyId = 1; // applications use 0x0000-0xBFFF
     private const int ErrorHotkeyAlreadyRegistered = 1409;
+    private const uint KeepKeyboardState = 0x4; // ToUnicodeEx: don't touch the thread's dead-key state (Windows 10 1607+)
+    private const byte KeyDown = 0x80;
 
     private static readonly WNDPROC Procedure = WindowProcedure;
     private static GlobalHotkey? current; // the instance whose window the procedure serves
@@ -100,6 +107,11 @@ public sealed class GlobalHotkey : IDisposable
             Trace.WriteLine($"[Hotkey] \"{text}\" is not a valid shortcut.");
             return Status = new HotkeyStatus(text, HotkeyState.Invalid, null);
         }
+        if (TypedCharacter(gesture) is { } typed)
+        {
+            Trace.WriteLine($"[Hotkey] {gesture} is not registered: keyboard layout {typed.Layout} types {typed.Text} with it (AltGr).");
+            return Status = new HotkeyStatus(text, HotkeyState.TypesCharacter, gesture);
+        }
 
         // MOD_NOREPEAT: holding the keys toggles the glow once, not on every key repeat.
         var modifiers = HOT_KEY_MODIFIERS.MOD_NOREPEAT;
@@ -119,6 +131,16 @@ public sealed class GlobalHotkey : IDisposable
         Trace.WriteLine($"[Hotkey] {gesture} could not be registered: {(state == HotkeyState.InUse ? "another app uses it" : $"error {error}")}.");
         return Status = new HotkeyStatus(text, state, gesture);
     }
+
+    /// <summary>
+    /// Whether one of the user's keyboard layouts types a character with <paramref name="gesture"/>. Windows treats
+    /// Ctrl+Alt as AltGr, so a Ctrl+Alt shortcut also fires on AltGr and takes its character away from every app
+    /// (AltGr+L types ł on Polish keyboards). <see cref="Register"/> refuses such a shortcut; the settings window's
+    /// recorder can check a combination before storing it. Layouts added later are checked at the next registration.
+    /// </summary>
+    /// <param name="gesture">The shortcut.</param>
+    /// <returns>True when a layout types a character (or starts an accent) with it.</returns>
+    public static bool TypesCharacter(HotkeyGesture gesture) => TypedCharacter(gesture) is not null;
 
     /// <summary>Releases the shortcut and destroys the window. Call on the owning thread.</summary>
     public void Dispose()
@@ -142,6 +164,38 @@ public sealed class GlobalHotkey : IDisposable
         if (!registered) return;
         registered = false;
         PInvoke.UnregisterHotKey(window, HotkeyId);
+    }
+
+    // The first installed layout that types something with the gesture, and what it types. Only Ctrl+Alt without Win
+    // can be AltGr; Ctrl+Alt+Shift is AltGr+Shift.
+    private static unsafe (string Text, string Layout)? TypedCharacter(HotkeyGesture gesture)
+    {
+        HotkeyModifiers modifiers = gesture.Modifiers;
+        if (!modifiers.HasFlag(HotkeyModifiers.Ctrl) || !modifiers.HasFlag(HotkeyModifiers.Alt) || modifiers.HasFlag(HotkeyModifiers.Win))
+            return null;
+        int count = PInvoke.GetKeyboardLayoutList(0, null);
+        if (count <= 0) return null; // unknown: register, as before the check
+        var layouts = new HKL[count];
+        fixed (HKL* list = layouts) count = PInvoke.GetKeyboardLayoutList(count, list);
+
+        // AltGr as Windows sends it (left Ctrl + right Alt); stackalloc starts zeroed, so every other key is up.
+        byte* state = stackalloc byte[256];
+        state[(int)VIRTUAL_KEY.VK_CONTROL] = state[(int)VIRTUAL_KEY.VK_LCONTROL] = KeyDown;
+        state[(int)VIRTUAL_KEY.VK_MENU] = state[(int)VIRTUAL_KEY.VK_RMENU] = KeyDown;
+        if (modifiers.HasFlag(HotkeyModifiers.Shift)) state[(int)VIRTUAL_KEY.VK_SHIFT] = state[(int)VIRTUAL_KEY.VK_LSHIFT] = KeyDown;
+        const int BufferLength = 8;
+        char* buffer = stackalloc char[BufferLength];
+        uint key = (uint)gesture.VirtualKey;
+        for (int i = 0; i < count; i++)
+        {
+            HKL layout = layouts[i];
+            uint scanCode = PInvoke.MapVirtualKeyEx(key, MAP_VIRTUAL_KEY_TYPE.MAPVK_VK_TO_VSC, layout);
+            int length = PInvoke.ToUnicodeEx(key, scanCode, state, buffer, BufferLength, KeepKeyboardState, layout);
+            // -1 is a dead key (an accent typed with AltGr); control characters aren't typing.
+            if (length < 0) return ("an accent (dead key)", layout.ToString());
+            if (length > 0 && !char.IsControl(buffer[0])) return ($"\"{new string(buffer, 0, Math.Min(length, BufferLength))}\"", layout.ToString());
+        }
+        return null;
     }
 
     private void CheckThread()

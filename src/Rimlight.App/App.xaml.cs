@@ -31,9 +31,15 @@ public partial class App : Application
         // One copy per user session (doc 06 §4), decided before any tray icon exists: a second copy would otherwise
         // replace the first one's icon (H.NotifyIcon derives the icon's ID from the exe path). A start by hand asks the
         // running copy to show Settings (or the demo, or the visualizer); a start at sign-in just leaves.
-        instance = SingleInstance.Claim(AppInfo.Name, options.Command);
+        instance = SingleInstance.Claim(AppInfo.Name, options.Command, out string? runningElsewhere);
         if (instance is null)
         {
+            // Another copy (another build or folder) runs: say so, rather than leaving quietly while it stays in charge.
+            if (runningElsewhere is not null)
+            {
+                MessageBox.Show($"{AppInfo.Name} is already running from another folder:\n{runningElsewhere}\n\n"
+                    + "Quit it from its tray icon, then start this copy again.", AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             Shutdown();
             return;
         }
