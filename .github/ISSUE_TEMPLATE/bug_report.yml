@@ -1,0 +1,135 @@
+name: Bug report
+description: Something in Rimlight doesn't work, looks wrong or uses too much CPU.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. The details below help find the problem quickly, and logs help most of all.
+
+        **Found a security problem?** Please don't post it here. Follow the [security policy](https://github.com/sussyswimmer/bordervisualizer/security/policy) to report it privately.
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened?
+      description: Describe what you saw. Error messages, the glow's colors or timing, and anything else that looked off all help.
+      placeholder: The glow stays on the left monitor only after it wakes from sleep.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: The glow comes back on both monitors.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Start from Rimlight running in the tray, and be as exact as you can.
+      placeholder: |
+        1. Play a song.
+        2. Put the PC to sleep and wake it up.
+        3. Look at the right monitor's edges.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Every time
+        - Often
+        - Rarely
+        - Only once so far
+    validations:
+      required: true
+
+  - type: input
+    id: rimlight-version
+    attributes:
+      label: Rimlight version
+      description: Shown in Settings > About. For a build from source, give the commit instead.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version and build
+      description: Press Win+R, type `winver` and press Enter.
+      placeholder: Windows 11 24H2, OS build 26100.4061
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card (GPU) and driver version
+      description: Task Manager > Performance > GPU shows both. On a laptop with two GPUs, list both.
+      placeholder: "GPU name, driver 32.0.15.6094"
+    validations:
+      required: true
+
+  - type: textarea
+    id: monitors
+    attributes:
+      label: Monitors and scaling
+      description: How many monitors, and for each one its resolution, refresh rate and scale (Settings > System > Display). Say which one is the main display, and whether you recently plugged or unplugged one.
+      placeholder: |
+        2 monitors:
+        - Main: 2560 × 1440, 144 Hz, 125 %
+        - Second (left of main): 1920 × 1080, 60 Hz, 100 %
+    validations:
+      required: true
+
+  - type: input
+    id: audio-device
+    attributes:
+      label: Audio output device
+      description: Where the sound plays (Settings > System > Sound > Output). Say whether it's Bluetooth, USB or HDMI, and whether you switched devices while Rimlight was running.
+      placeholder: Bluetooth headphones, switched from the speakers while playing
+    validations:
+      required: true
+
+  - type: input
+    id: music-source
+    attributes:
+      label: What was playing the music?
+      description: The app or browser playing the music, if the problem is about colors, beats or track info.
+      placeholder: A desktop music player, or a video in a browser tab
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Logs make most bugs quick to find.
+        1. Right-click the Rimlight tray icon and choose **Open logs folder**. If Rimlight won't start, paste `%LOCALAPPDATA%\Rimlight\logs` into the File Explorer address bar.
+        2. Select every file, right-click and zip them: **Compress to** on Windows 11, or **Send to > Compressed (zipped) folder** on Windows 10.
+        3. Drag the zip into this box.
+
+        Logs never contain audio, but they can include device, monitor and track names, so have a look first. If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too.
+      placeholder: Drag the zip of the logs folder here.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, video or anything else
+      description: A short screen recording helps a lot with visual problems. If the glow is missing from your recording, turn off Settings > Behavior > Hide from screen capture first.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues, and this hasn't been reported yet.
+          required: true
+        - label: I'm on the latest release, or I've given the commit I built from.
+          required: false

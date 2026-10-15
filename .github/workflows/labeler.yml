@@ -1,0 +1,61 @@
+name: Labeler
+
+# pull_request_target runs this workflow as it is on main, with a token that can label pull
+# requests from forks too. It never checks out or runs the pull request's own code.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited]
+
+permissions: {}
+
+concurrency:
+  # One labeling run per pull request at a time, so two runs never overwrite each other's labels.
+  group: labeler-${{ github.event.pull_request.number }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  label:
+    name: Label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      # Only to create a label the first time it is applied (labeler README, Recommended
+      # Permissions). Without it, adding a label the repository doesn't have yet fails with 403.
+      issues: write
+    steps:
+      # The base branch (the default ref for pull_request_target), for .github/labeler.yml and
+      # the title script. Not the pull request's head.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+
+      # lane-a, lane-b, docs and ci from the changed paths (.github/labeler.yml).
+      - name: Label by changed paths
+        uses: actions/labeler@v5
+
+      # feature, fix, performance, docs, build, ci and the audio/overlay/color/ui areas from the
+      # Conventional Commit title. Labels are only added, never removed: after retitling a pull
+      # request, remove a stale label by hand. Runs on every event, pushes included: a newer run
+      # replaces a pending one in the concurrency group, so the last run must apply the title too.
+      - name: Label by Conventional Commit title
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          labels="$(bash .github/scripts/pr-title-labels.sh "$TITLE")"
+          if [[ -z "$labels" ]]; then
+            echo "The title is not a Conventional Commit with a labeled type or scope."
+            exit 0
+          fi
+          mapfile -t list <<< "$labels"
+          echo "Adding: ${list[*]}"
+          jq -n '{labels: $ARGS.positional}' --args "${list[@]}" |
+            gh api --method POST "repos/$REPO/issues/$PR_NUMBER/labels" --input - --silent

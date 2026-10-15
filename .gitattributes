@@ -1,0 +1,21 @@
+# Store text with LF and check it out with LF on every OS, as .editorconfig asks
+# (Git for Windows defaults to core.autocrlf=true, which would give CRLF).
+* text=auto eol=lf
+
+# Windows batch files need CRLF to run reliably.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets: never normalize or diff as text.
+*.ico binary
+*.png binary
+*.gif binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.mp4 binary
+*.wav binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.nupkg binary

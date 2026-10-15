@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to a pull request cancels its older run. Every other run (main, manual) gets a
+  # group of its own: a shared group would let a newly queued run cancel the pending one, so a
+  # merged commit could end up with no result and the README badge with a cancelled run.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  core:
+    # The Core solution filter (Core + Tests, later Bench) on exactly the .NET 8 SDK: the minimum
+    # that global.json allows, and what the Linux sandbox builds with.
+    name: Core (Linux, .NET 8 SDK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Test the PR title label rules
+        run: bash .github/scripts/pr-title-labels.test.sh
+
+      # build/pack.Tests.ps1, with the Pester 5 that the runner image ships.
+      - name: Test the packaging script helpers
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'build'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
+      # The Windows job's newer MSBuild accepts forward slashes, so only this check catches them.
+      - name: Check the solution filter uses backslash paths
+        run: |
+          bad="$(jq -r '[.solution.projects[] | select(contains("/"))] | join(", ")' Rimlight.Core.slnf)"
+          if [[ -n "$bad" ]]; then
+            echo "::error file=Rimlight.Core.slnf::Write project paths with backslashes, as Visual Studio does (MSB5028 on older Windows MSBuild, H-010): $bad"
+            exit 1
+          fi
+
+      - name: Set up the .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+        env:
+          # An empty install directory, so this is the only SDK `dotnet` can see. global.json
+          # rolls forward to the newest installed SDK, and the runner image ships newer ones.
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/dotnet
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-core-${{ hashFiles('**/*.csproj', '**/Directory.*.props') }}
+          restore-keys: nuget-${{ runner.os }}-core-
+
+      - name: Show the SDK
+        run: dotnet --version
+
+      - name: Restore
+        run: dotnet restore Rimlight.Core.slnf
+
+      # TreatWarningsAsErrors (src/Directory.Build.props) fails the build on any warning.
+      - name: Build (Release)
+        run: dotnet build Rimlight.Core.slnf -c Release --no-restore
+
+      - name: Test
+        run: dotnet test Rimlight.Core.slnf -c Release --no-build
+
+  windows:
+    # The full solution, including the WPF app and the Windows-only Platform project, on the
+    # newest SDK the runner has (global.json rolls forward), like a current Visual Studio install.
+    name: Full solution (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Guarantees the .NET 8 runtime the tests run on, whatever else the image has.
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-full-${{ hashFiles('**/*.csproj', '**/Directory.*.props') }}
+          restore-keys: nuget-${{ runner.os }}-full-
+
+      - name: Show the SDK
+        run: dotnet --version
+
+      - name: Restore
+        run: dotnet restore Rimlight.sln
+
+      - name: Build (Release)
+        run: dotnet build Rimlight.sln -c Release --no-restore
+
+      # Loads the Visual Studio-style backslash paths in the .slnf with Windows MSBuild (H-010).
+      - name: Build the Core solution filter
+        run: dotnet build Rimlight.Core.slnf -c Release --no-restore
+
+      - name: Test
+        run: dotnet test Rimlight.sln -c Release --no-build

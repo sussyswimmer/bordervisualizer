@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/sussyswimmer/bordervisualizer/security/policy
+    about: Please report security problems privately, not in an issue. The security policy explains how.
+  # Once Discussions is enabled for the repository (docs/08 §4), point questions there:
+  # - name: Ask a question
+  #   url: https://github.com/sussyswimmer/bordervisualizer/discussions
+  #   about: Questions, ideas in progress and show-and-tell.
