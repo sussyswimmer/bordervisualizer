@@ -605,7 +605,7 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
 - [x] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names — PR #24 — effort: L (notes below; Windows manual test pending)
 - [x] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode — PR #26 — effort: M (notes below; Windows manual test pending)
 - [x] K9 Velopack bootstrap in App (`VelopackApp.Build().Run()`), update checks, "Update ready" toast — PR #28 — effort: M (notes below; Windows manual test pending)
-- [ ] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues
+- [x] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues — PR #29 — effort: M (notes below; Windows manual test pending)
 - [ ] K11 Hardening on real Windows: sleep/wake, RDP, TDR, hotplug, device switching. Results go in PROGRESS.md.
 - [ ] K12 `assets/icon.svg`, `assets/banner.svg/png`, README, repo settings text for Maxwell, recording instructions
 
@@ -1186,6 +1186,53 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - **K11:** updates across sleep and wake (the 12 h timer), offline at sign-in, ARM64, and the `win-arm64` channel. Decide whether `RIMLIGHT_UPDATE_FEED` stays for 1.0.
   - **K12:** the README FAQ "How do I uninstall?": settings and logs stay in `%APPDATA%\Rimlight`. H-014 item 4 (asset names, release notes, signing).
   - **Optional:** hold back the background download on metered connections (`NetworkInformation` connection cost), and show the release notes from `NotesMarkdown` on the About page.
+
+### K10 notes
+
+- **What it is:** `claude/k10-integration` is the K9 tip (all of Lane B) merged with the C13 tip (all of Lane A), plus the seam fixes below. Merging #29 stands for #8, #9, #14, #18, #19, #22, #24, #26, #28 (Lane B) and #23, #25, #27 (Lane A). The app now runs only against the real Core.
+- **Conflicts:**
+  - `Rimlight.App.csproj`: K9's `StartupObject`, `App.xaml` as a `Page` and the `Assets\*.ico` glob, with C10's comment on the generated icons. C10's `Rimlight-dim.ico` has the same eight frames as `Rimlight.ico`, so K6's `TrayIconImages` uses it as is.
+  - `HANDOFF.md`: every entry kept. K7's H-012 (two engines) collided with C10's earlier H-012 and is now H-022; the K8/K9 resolutions of H-014 and H-015 are folded into the originals.
+  - `PROGRESS.md` merged cleanly.
+- **Seam fixes (one commit each):**
+  - The release dry run packs with vpk's entry-point check (H-021 item 1).
+  - `CONTRIBUTING.md`, the bug form and doc 02 name `%APPDATA%\Rimlight\logs` (H-021 items 2–3, H-013).
+  - No comment assumes fakes any more (H-020 item 1).
+  - The settings preview stays lit in silence when When silent = Hide (below).
+  - A failed settings save stays pending (below).
+  - A Core test that two engine/blender pairs on two threads don't affect each other (H-022).
+- **Spec clarifications:**
+  - **Preview in silence (doc 06 §3.1):** the real engine hides the glow 2 s after the sound stops when When silent = Hide; the fake never did. The preview shows the look, not its absence, so it draws silence as Idle Glow there, as it already did for Glow off and Motion Off, with the caption "When it's quiet, the glow hides. This preview breathes instead."
+  - **Failed saves:** C7's `Save` throws `IOException`/`UnauthorizedAccessException`. The change stays pending without a retry timer (lowest CPU); the next change or the save at Quit writes it.
+  - **Demo phase (H-020):** kept on purpose. `DemoShow.PhaseAt` makes exactly one turn per 24 s loop, so a recording loops seamlessly; the engine's 0.015 cycles/s would make 0.84.
+  - **Doc 02 "Logging":** path corrected to `%APPDATA%\Rimlight\logs` (K9's move). Doc 02 still names `Microsoft.Extensions.Logging`; K6's `Trace` listener is the deviation recorded in the K6 notes.
+- **Checked against the real Core, no change needed:**
+  - H-011: C6 matches every K3 assumption.
+  - Settings: the app loads and saves through C7's store at `%APPDATA%\Rimlight\settings.json`. Corrupt, truncated, non-object, future-version and wrong-type files all start cleanly (scratch harness).
+  - The analyzer's tuning is only ever set to valid values, or through the visualizer's probe, which catches errors.
+  - Extractor exceptions and null "no art" results keep the previous colors.
+  - In-range palettes keep `SetTarget` allocation-free.
+  - The presets' "chosen" check holds because the validator reuses a clean monitor list.
+- **Earlier "left for K10" items:**
+  - K4–K6: real album colors, the 300 ms pause fades and settings that persist (the welcome shows once) now apply. Checklist items 1, 4, 5, 8 and 9 in #29 test them on Windows.
+  - K7: the presets row and the preview were checked with the real C5–C7 (preview fix above). The WPF-UI tray menu is checklist item 2. The tray's debug items stay, because they exist only in Debug builds.
+  - K8: the demo's palettes crossfade through C5 over 800 ms, and the demo owns the gradient's turn (H-020). The Debug-build demo toggle stays.
+  - K9: packing without `SkipVelopackAppCheck` now runs in CI's release dry run.
+- **HANDOFF:** DONE: H-011, H-012, H-013, H-020, H-021, H-022. Open: H-005 and H-019 (Maxwell), H-018 (item 1 Maxwell, item 2 K11), H-020 item 2 (Maxwell's instruction files).
+- **Verified here (Linux):**
+  - `dotnet build Rimlight.sln -c Release`: 0 warnings.
+  - `dotnet test`: 769 passed (696 + 73 icon-gen).
+  - `wav-analyze` on a generated 128 BPM track reads 127.9/128.0 BPM.
+  - `icon-gen --help`.
+  - `Rimlight.Bench soak --hours 1`: PASS, 0 B/frame, 0.43 % of one core.
+  - Scratch harness (not committed): the preview rule and the save retry against the real Core.
+  - A static engine field fails the new two-thread test.
+  - CI on #29 at `8ec6783`: all green. The Linux job and the Windows full solution passed (0 warnings, 769 tests). The release dry run packed win-x64 and win-arm64 with vpk's entry-point check, which logged "Verified VelopackApp.Run() in 'System.Int32 Rimlight.App.Program::Main()'" for both.
+- **Left for later:**
+  - **Maxwell:** the manual checklist in #29. Then a tagged test release to check an update end to end (K9 notes): install the older release, publish a newer one, and confirm it downloads and installs. Tags and releases are his.
+  - **K11:** sleep/wake, RDP, TDR, hotplug, device switching, and the 8-hour `--demo` soak (H-018 item 2).
+  - **K12:** the README, banner and repo settings (H-012 item 2, H-014 item 4).
+  - **Known edge:** a `settings.json` held by another program through all three read tries at start-up (about 40 ms) reads as defaults, and the welcome's save then replaces it (documented in C7's store).
 
 ## Lane B notes
 
