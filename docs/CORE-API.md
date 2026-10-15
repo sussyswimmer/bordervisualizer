@@ -76,7 +76,7 @@ No member takes a lock on a per-frame path. **Instances are independent (H-017).
 
 ### Bad input
 
-Per-frame calls never throw for bad numbers. They sanitize them instead.
+Per-frame calls sanitize bad frame data (dt, samples, colors, settings) instead of throwing. They throw only for arguments no correct caller passes: null, a sample rate of 0 or less, an invalid tuning, or a buffer of the wrong size.
 
 | Input | Treatment |
 |---|---|
@@ -100,7 +100,7 @@ Per-frame calls never throw for bad numbers. They sanitize them instead.
 | `CreateLightEngine()` | A new engine. It starts hidden and fades in over 300 ms. |
 | `CreateSettingsStore(string directory)` | A store for `<directory>/settings.json`. Nothing is read or written until the first call. A relative path is resolved now, and a blank one throws. |
 
-Each call returns a new instance of the real implementation. The K0 fakes were deleted in C13 (`CoreFactoryTests.EveryFactoryMethodReturnsTheRealImplementation`, `NoFakesAreLeftInCore`).
+Each call returns a new instance of the real implementation. The K0 fakes were removed one by one as C2–C7 landed, and C13 confirmed that none remain (`CoreFactoryTests.EveryFactoryMethodReturnsTheRealImplementation`, `NoFakesAreLeftInCore`).
 
 ## 4. Audio: `IAudioAnalyzer`
 
@@ -172,7 +172,7 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 | `Spectrum` | WindowSize / 2 + 1 bins, from DC to Nyquist, in amplitude units. Bin k is at k × `CoreFactory.AnalysisSampleRate(rate)` / WindowSize Hz. |
 | `FluxHistory` | 240 entries, exactly one per `Process` call (empty spans included), oldest first and 0 until filled. Each entry is the largest flux among the steps of that call's new samples, and 0 on a frame without new samples. A time axis must use the real call cadence. |
 | `ThresholdHistory` | 240 entries in step with `FluxHistory`: the effective beat threshold after each call, in flux units. |
-| `EstimatedBpm` | 60 / the mean of the last 16 beat intervals (each up to 2 s) that lie within ±25 % of their median. Missed and extra beats drop out, and a steady frame rate doesn't bias it (H-016: 126 BPM at a steady 60 fps reads 125.8–126.0, not 124.1). It is 0 until three intervals are in, and returns to 0 after 4 s without a beat. |
+| `EstimatedBpm` | 60 / the mean of the last 16 beat intervals (each up to 2 s) that lie within ±25 % of their median. Missed and extra beats drop out, and a steady frame rate doesn't bias it (H-016: 126 BPM at a steady 60 fps reads 125.8–126.0, not 124.1). If no interval lies that close, which needs an even count split far apart (every other beat missed), it is 60 / the median. It is 0 until three intervals are in, and returns to 0 after 4 s without a beat. |
 | `BeatCount` | Beats since construction, `Reset` or a `WindowSize` change. |
 
 `EstimatedBpm` and `BeatCount` have public setters only because the contract class is shared. Treat them as read-only.
@@ -259,7 +259,7 @@ A light that fades out keeps the look it had when the fade started (Music Sync, 
 |---|---|
 | NaN, ±∞, negative | 0 |
 | Over 0.1 s (a stall, sleep) | 0.1 s, so nothing jumps; below 10 fps motion slows instead. |
-| The first step that moves time on a new engine, or after a static frame | At most 1/60 s. `dt = 0` updates don't use it up. |
+| Each step on a new engine, or after a static frame, until the steps since then add up to 1/60 s | At most 1/60 s. `dt = 0` updates add nothing. A very short first step therefore can't let a long second one jump into the fade. |
 
 ### 6.4 IsStatic, and what the render loop can rely on (H-011)
 
@@ -268,13 +268,20 @@ A light that fades out keeps the look it had when the fade started (Music Sync, 
 The K3 render loop builds on four guarantees. `RenderLoopContractTests` checks each one through `CoreFactory`, the way K3 calls the engine.
 
 1. **Time alone changes nothing while static.** With the same inputs, any dt (0, 1/240, 0.1, 3600, NaN…) returns the first static state bit for bit. Calling a static engine at 10 Hz, at 60 fps or not at all changes nothing afterwards. Audio alone never wakes a gate-closed engine (Off, disabled, paused), so the loop may stop calling `Update` there until a settings or pause change. In Music Sync with Hide, keep calling it about 10 times a second with fresh audio. The first such poll that hears sound wakes the engine and is already above 0.5/255.
-2. **Hidden is exactly `Visibility == 0`.** Every fade-out lands on +0, never on a tiny positive value, and `IsStatic` follows on the next update. Values between 0 and 0.5/255 occur only in the last 40 ms of a fade-out (0–38 ms measured), and Visibility never rests there.
+2. **Hidden is exactly `Visibility == 0`.** Every fade-out lands on +0, never on a tiny positive value, and `IsStatic` follows on the next update. Values between 0 and 0.5/255 occur only during a fade: in at most the last 40 ms of a fade-out (0–38 ms measured) and the first 7.7 ms of a fade-in. Visibility never rests there.
 3. **Idle motion is slow.** Idle Glow changes at most about 0.094 × Brightness per second (0.0942 measured at Brightness 1; the test allows 0.1 × Brightness) in every field the pacer watches: Intensity, Visibility, Pulse, Spread, Ratio, thickness and phase. The silence → Idle Glow crossfade ends 1.5 s after the first `IsSilent` frame (1.500–1.510 s measured with ±20 % frame jitter), 0.25 s before K3 drops to 10 fps. From then on `Level` doesn't matter, `Pulse` is 0, and without new beats the phase is still.
-4. **dt after a gap.** Given one ordinary frame's dt after a gap, the fade that brings the light back starts on that frame, from its beginning. With frames longer than 1/60 s, the first step counts 1/60 s, so a 300 ms fade takes 317 ms at 30 fps. At 144–240 Hz, the first frame of a 300 ms gate fade-in is still under 0.5/255 (1.6e-3 at 144 Hz, 5.7e-4 at 240 Hz), so the window appears one frame (at most 7 ms) later.
+4. **dt after a gap.** Given one ordinary frame's dt after a gap, the fade that brings the light back starts on that frame, from its beginning. With frames longer than 1/60 s, the first step counts 1/60 s, so a 300 ms fade takes 317 ms at 30 fps. A long frame right after a very short wake frame doesn't skip into the fade either (§6.3). This happens at K3's start: its first frame comes microseconds after its loop starts, and the GPU setup that frame runs makes the next dt up to 0.25 s. The engine used to count 0.1 s of that, so the glow popped in at about 26 %.
+   - **A render loop must not slow down on a fade-in's first frame.** Above about 130 Hz, the first frame of a 300 ms gate fade-in is still under 0.5/255: 1.6e-3 at 144 Hz, 5.7e-4 at 240 Hz. The windows stay hidden for that frame, and a loop that then waits 100 ms shows the glow 100 ms late. K3's `FramePacer` did that with native pacing on every unpause, enable or Off → on, and the glow then appeared at about 29 %. It now drops to 10 Hz with nothing on screen only while `Visibility` is exactly 0.
+   - **Result.** The windows show from the first frame on which the fade has run 7.7 ms (the second frame at 144 Hz), and no frame raises Visibility by more than one full-rate frame of the smoothstep (0.083 at 60 Hz, 0.035 at 144 Hz). A scratch replay of `FramePacer` and `OverlayHost`'s dt rule against the engine showed this at 60–360 Hz, at start and on unpause. `RenderLoopContractTests.AShortWakeStepDoesNotLetALongOneJump` guards the engine side.
 
 ### 6.5 More than one engine
 
-`paused` is one flag per engine. For a per-monitor pause (doc 04 §4), give each overlay its own engine, all updated on the render thread with the same audio, palette and settings and that monitor's flag. Stop rendering only while every engine reports `IsStatic`. The settings preview may own another engine and blender on the UI thread (H-017).
+`paused` is one flag per engine. A per-monitor pause (doc 04 §4) can work in two ways:
+
+- **One engine, with a fade per overlay. This is what Platform does.** `OverlayHost` multiplies the engine's Visibility by each overlay's own 300 ms fade, and `FrameReport.Transitioning` holds the full rate while one runs. The engine is paused only once every overlay is paused and faded out.
+- **One engine per overlay.** All are updated on the render thread with the same audio, palette and settings and that monitor's flag. Stop rendering only while every engine reports `IsStatic`.
+
+The settings preview may own another engine and blender on the UI thread (H-017).
 
 ## 7. Settings
 
@@ -381,11 +388,16 @@ The format is camelCase JSON with enums as names, indented, UTF-8 without a BOM,
 This is how the overlay drives Core (`MusicGlowSource`), trimmed to the calls:
 
 ```csharp
+// Tuning throws outside 0.25–2, and a Settings snapshot built in code isn't validated: clamp what you copy.
+static float Sensitivity(Settings s) => float.IsFinite(s.Sensitivity) ? Math.Clamp(s.Sensitivity, 0.25f, 2f) : 1f;
+
 // Render thread, once.
-IAudioAnalyzer analyzer = CoreFactory.CreateAnalyzer(new AudioTuning { Sensitivity = settings.Sensitivity });
+IAudioAnalyzer analyzer = CoreFactory.CreateAnalyzer(new AudioTuning { Sensitivity = Sensitivity(settings) });
 IPaletteBlender blender = CoreFactory.CreatePaletteBlender(palette);
 ILightEngine engine = CoreFactory.CreateLightEngine();
 float[] gradient = new float[256];   // 64 RGBA texels
+bool paletteChanged = false;
+float filledRatio = float.NaN;       // nothing filled yet: the first frame fills the gradient
 
 // Render thread, every frame: nothing here allocates.
 AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), sampleRate, dt); // an empty span when no packets came
@@ -400,7 +412,7 @@ if (paletteChanged || wasAnimating || state.Ratio != filledRatio)
 }
 // Draw with state: alpha × Intensity × Visibility. Under 0.5/255, hide the window.
 // Pace: blender.IsAnimating → full rate. engine.IsStatic → stop presenting: poll at 10 Hz in Music Sync,
-// otherwise wait for an input. Idle Glow → 10 fps.
+// otherwise wait for an input. Idle Glow → 10 fps. Visibility above 0 but hidden is a fade: keep its rate (§6.4).
 
 // Render thread, on a new palette (track change: 800 ms; manual edit: 200 ms).
 blender.SetTarget(next, TimeSpan.FromMilliseconds(800));
@@ -408,7 +420,7 @@ palette = next;
 paletteChanged = true;
 
 // Render thread, on a Sensitivity change (never per frame), and on a capture device change.
-analyzer.Tuning = analyzer.Tuning with { Sensitivity = settings.Sensitivity };
+analyzer.Tuning = analyzer.Tuning with { Sensitivity = Sensitivity(settings) };
 analyzer.Reset();   // device change only
 
 // Thread pool: one extraction in flight, the latest track wins. Publish by reference.

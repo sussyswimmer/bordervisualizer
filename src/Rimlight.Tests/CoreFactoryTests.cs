@@ -63,7 +63,7 @@ public sealed class CoreFactoryTests
     [Fact]
     public void NoFakesAreLeftInCore()
     {
-        // C13 deleted Rimlight.Core/Fakes; nothing named or namespaced as a fake may come back.
+        // C2–C7 each deleted their K0 fake from Rimlight.Core/Fakes; nothing named or namespaced as a fake may come back.
         string[] fakes = typeof(CoreFactory).Assembly.GetTypes()
             .Where(t => t.Name.StartsWith("Fake", StringComparison.Ordinal)
                 || (t.Namespace?.Split('.').Contains("Fakes", StringComparer.Ordinal) ?? false))
