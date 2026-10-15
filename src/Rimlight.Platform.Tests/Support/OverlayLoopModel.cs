@@ -18,27 +18,26 @@ internal readonly record struct ModelFrame(
     bool HalfScale);
 
 /// <summary>
-/// A model of <see cref="OverlayHost"/>'s overlay thread on a simulated clock, driving the real
-/// <see cref="FramePacer"/>, the real <see cref="GlowConstants"/> and the app's real <c>MusicGlowSource</c> (through
-/// <see cref="GlowRig"/>, with the real Core behind it). It mirrors, line for line, what decides when frames happen and
-/// what they present: <c>Loop</c> (the first frame at once, a frame when the timer is due or an input arrives, the dt
-/// rule and the steady cadence), <c>Wait</c> (Block waits for an input only), <c>ApplyPendingInputs</c> (paused
-/// monitors, settings, battery, pause and frame requests, each noted on the pacer), <c>EffectivePaused</c>,
-/// <c>RenderFrame</c> (per-monitor 300 ms fades, the light hidden below <see cref="GlowConstants.MinVisibility"/> after
-/// one transparent present, no present while the screen already shows the frame, half scale under "Reduce") and
-/// <see cref="OverlaySurface"/>'s presented-frame bookkeeping. Inputs are published the way OverlayHost's setters publish
-/// them and wake the loop.
+/// A model of <see cref="OverlayHost"/>'s overlay thread on a simulated clock, driving the app's real
+/// <c>MusicGlowSource</c> (through <see cref="GlowRig"/>, with the real Core behind it). The rules OverlayHost keeps in
+/// Windows-free code are the real ones here too: <see cref="FramePacer"/> (the pace, the dt rule and the cadence),
+/// <see cref="OverlayRules"/> ("Reduce on battery", the per-monitor 300 ms fades, and when the glow counts as paused
+/// everywhere, also with no overlay), <see cref="GlowConstants"/> and <see cref="OverlaySurface"/>'s half-scale buffer
+/// size. The control flow around them mirrors OverlayHost line for line: <c>Loop</c> (the first frame at once, a frame
+/// when the timer is due or an input arrives), <c>Wait</c> (Block waits for an input only), <c>ApplyPendingInputs</c>
+/// (paused monitors, settings, battery, pause and frame requests, each noted on the pacer), <c>RenderFrame</c> (the
+/// light hidden below <see cref="GlowConstants.MinVisibility"/> after one transparent present, no present while the
+/// screen already shows the frame, half scale under "Reduce") and <see cref="OverlaySurface"/>'s presented-frame
+/// bookkeeping. Inputs are published the way OverlayHost's setters publish them and wake the loop.
 /// </summary>
 /// <remarks>
 /// Left out, because they need Windows: windows, the GPU and DirectComposition (every present completes at once, so
-/// FrameReport.AllPresented is always true), vsync (the full rate runs on the timer at the same interval), display
-/// changes, rebuilds and device loss. Keep it in step with OverlayHost.
+/// FrameReport.AllPresented is always true), vsync (the full rate runs on the timer at the same interval) and device
+/// loss. A display change or a change of the chosen displays is modelled by its outcome (<see cref="Rebuild"/>), not by
+/// Rebuild's monitor matching. Keep the control flow in step with OverlayHost.
 /// </remarks>
 internal sealed class OverlayLoopModel
 {
-    private const double MaxFrameDtSeconds = 0.25;   // OverlayHost.MaxFrameDtSeconds
-    private const float MonitorFadeSeconds = 0.3f;   // OverlayHost.MonitorFadeSeconds
-
     private readonly GlowRig rig;
     private readonly double refreshHz;
     private readonly double firstFrameSeconds;
@@ -53,6 +52,7 @@ internal sealed class OverlayLoopModel
     private bool onBattery;
     private string[] pausedMonitors = [];
     private bool sourceChanged;
+    private bool frameRequested; // set by a rebuild (OverlayHost's WM_TIMER), taken by ApplyPendingInputs
 
     // Overlay-thread state.
     private Settings? applied;
@@ -71,7 +71,10 @@ internal sealed class OverlayLoopModel
     /// <summary>Starts the model at time 0, as <c>OverlayHost.Start</c> does (Initialize applies the inputs once).</summary>
     /// <param name="rig">The frame source and its capture and media stand-ins.</param>
     /// <param name="settings">The settings at start.</param>
-    /// <param name="monitors">The monitors' GDI names, sizes in pixels and DPI scales; the first is the primary.</param>
+    /// <param name="monitors">
+    /// The overlays' monitors: GDI names, sizes in pixels and DPI scales, the first one the primary. Empty when no
+    /// display is chosen.
+    /// </param>
     /// <param name="refreshHz">The primary monitor's refresh rate.</param>
     /// <param name="firstFrameSeconds">How long the first frame takes (the GPU is set up then), so the second frame's dt.</param>
     public OverlayLoopModel(GlowRig rig, Settings settings, (string Name, int Width, int Height, float Scale)[] monitors,
@@ -107,6 +110,30 @@ internal sealed class OverlayLoopModel
     public void SetPausedMonitors(params string[] names) => Publish(() => pausedMonitors = [.. names]);
 
     public void RequestFrame() => Publish(() => sourceChanged = true);
+
+    /// <summary>
+    /// What <c>OverlayHost.Rebuild</c> leaves after a display change (or a change of the chosen displays): one overlay per
+    /// monitor given, none when none is. Overlays on monitors that stay keep their state; new ones start hidden, faded
+    /// out on a paused monitor. Runs on the overlay thread like Rebuild's WM_TIMER, and asks for a frame.
+    /// </summary>
+    public void Rebuild(params (string Name, int Width, int Height, float Scale)[] monitors) => Publish(() =>
+    {
+        overlays.RemoveAll(o => !monitors.Any(m => m.Name == o.Name));
+        foreach ((string name, int width, int height, float scale) in monitors)
+        {
+            if (overlays.Any(o => o.Name == name)) continue;
+            var overlay = new ModelOverlay(name, width, height, scale)
+            {
+                Paused = appliedPausedMonitors.Contains(name, StringComparer.OrdinalIgnoreCase),
+            };
+            overlay.Fade = overlay.Paused ? 0 : 1;
+            overlays.Add(overlay);
+        }
+        frameRequested = true;
+    });
+
+    /// <summary>Overlay windows, shown or not: one per monitor the last rebuild left.</summary>
+    public int Overlays => overlays.Count;
 
     /// <summary>Schedules something to happen at <paramref name="time"/> (an input, or a change of the audio).</summary>
     public void At(double time, Action action) => events.Add((time, eventOrder++, action));
@@ -147,15 +174,14 @@ internal sealed class OverlayLoopModel
             bool inputChanged = ApplyPendingInputs(Now);
             if (!frameDue && !inputChanged) continue;
 
-            double elapsed = Now - lastFrame;
             double fullInterval = pacer.FullInterval;
-            float dt = (float)(elapsed > MaxFrameDtSeconds ? fullInterval : frameDue ? elapsed : Math.Min(elapsed, fullInterval));
+            float dt = pacer.FrameDt(Now - lastFrame, frameDue);
             lastFrame = Now;
 
             int presents = RenderFrame(dt);
             pace = pacer.Next(Now, report);
             double period = pacer.IntervalFor(pace);
-            nextFrame = Now >= nextFrame && Now - nextFrame < period ? nextFrame + period : Now + period;
+            nextFrame = FramePacer.NextDeadline(Now, nextFrame, period);
             Frames.Add(new ModelFrame(Now, dt, report.Motion, pace, presents, report.State, report.AnyVisible, WindowsShown,
                 rig.CaptureOpen, fullInterval, Reduced));
 
@@ -225,24 +251,17 @@ internal sealed class OverlayLoopModel
             sourceChanged = false;
             changed = true;
         }
+        changed |= frameRequested;
+        frameRequested = false;
         if (changed) pacer.NoteInputChanged(now);
         return changed;
     }
 
-    private bool Reduced => appliedOnBattery && applied!.OnBattery == BatteryBehavior.Reduce;
+    private bool Reduced => OverlayRules.Reduced(applied!, appliedOnBattery);
 
     private void ConfigurePacer() => pacer.Configure(applied!.FpsCap, refreshHz, Reduced);
 
-    private bool EffectivePaused
-    {
-        get
-        {
-            if (appliedPaused || (appliedOnBattery && applied!.OnBattery == BatteryBehavior.Pause)) return true;
-            foreach (ModelOverlay overlay in overlays)
-                if (!overlay.Paused || overlay.Fade > 0) return false;
-            return true;
-        }
-    }
+    private bool EffectivePaused => OverlayRules.PausedEverywhere(appliedPaused, applied!, appliedOnBattery, overlays);
 
     // OverlayHost.RenderFrame with a GPU that never fails.
     private int RenderFrame(float dt)
@@ -303,38 +322,36 @@ internal sealed class OverlayLoopModel
     }
 
     // One monitor's overlay window and swap chain (OverlayHost.Overlay and OverlaySurface).
-    private sealed class ModelOverlay(string name, int width, int height, float scale)
+    private sealed class ModelOverlay(string name, int width, int height, float scale) : IMonitorFade
     {
         private readonly int windowWidth = width;
         private readonly int windowHeight = height;
         private GlowConstants lastPresented;
         private bool hasPresented;
         private int presentedGradient;
+        private bool half;
+        private float fade = 1;
 
         public string Name { get; } = name;
         public float Scale { get; } = scale;
         public bool Paused { get; set; }
-        public float Fade { get; set; } = 1;
+        public float Fade { get => fade; set => fade = value; }
         public bool WindowVisible { get; set; }
         public int BufferWidth { get; private set; } = width;
         public int BufferHeight { get; private set; } = height;
-        public float RenderScale => BufferWidth / (float)windowWidth;
+        public float RenderScale => OverlaySurface.RenderScaleFor(windowWidth, half);
 
         public bool ShowsNothing => !hasPresented || lastPresented.Visibility < GlowConstants.MinVisibility;
 
-        public bool AdvanceFade(float dt)
-        {
-            float target = Paused ? 0 : 1;
-            if (Fade == target) return false;
-            float step = dt / MonitorFadeSeconds;
-            Fade = target > Fade ? Math.Min(target, Fade + step) : Math.Max(target, Fade - step);
-            return true;
-        }
+        public bool AdvanceFade(float dt) => OverlayRules.AdvanceFade(ref fade, Paused, dt);
 
-        public void SetHalfScale(bool half)
+        // OverlaySurface.SetHalfScale: new buffers only when the size changes.
+        public void SetHalfScale(bool value)
         {
-            int w = half ? Math.Max(1, (windowWidth + 1) / 2) : windowWidth;
-            int h = half ? Math.Max(1, (windowHeight + 1) / 2) : windowHeight;
+            if (value == half) return;
+            half = value;
+            int w = OverlaySurface.BufferSize(windowWidth, half);
+            int h = OverlaySurface.BufferSize(windowHeight, half);
             if (w == BufferWidth && h == BufferHeight) return;
             BufferWidth = w;
             BufferHeight = h;

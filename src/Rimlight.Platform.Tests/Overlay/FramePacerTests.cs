@@ -14,6 +14,8 @@ public sealed class FramePacerTests
     // fpsCap, refresh, reduce → full rate, vsync
     [InlineData(60, 60.0, false, 60.0, true)]
     [InlineData(60, 59.94, false, 59.94, true)]   // a 60 cap on 59.94 Hz is the display's rate
+    [InlineData(60, 61.0, false, 60.0, true)]     // within 3 % of the refresh: paced on the display
+    [InlineData(60, 62.0, false, 60.0, false)]    // further below it: the timer keeps the cap
     [InlineData(60, 144.0, false, 60.0, false)]
     [InlineData(30, 60.0, false, 30.0, false)]
     [InlineData(120, 60.0, false, 60.0, true)]    // a cap above the refresh runs at the refresh
@@ -113,6 +115,25 @@ public sealed class FramePacerTests
         Assert.Equal(Pace.Full, pacer.Next(50, Report(FrameMotion.Slow, Shown with { Intensity = 0.83f }, dt: 0.1f)));
         Assert.Equal(Pace.Full, pacer.Next(50.49, Report(FrameMotion.Slow, Shown with { Intensity = 0.83f })));
         Assert.Equal(Pace.Slow, pacer.Next(50.6, Report(FrameMotion.Slow, Shown with { Intensity = 0.85f }, dt: 0.1f)));
+    }
+
+    [Fact]
+    public void AGapCountsAsOneFrameAndTheCadenceStaysSteady()
+    {
+        // OverlayHost's dt rule (doc 02 idle pacing, C13) and its frame deadlines.
+        var pacer = new FramePacer(); // 60 fps
+        Assert.Equal(0.1f, pacer.FrameDt(0.1, frameDue: true));         // a 10 Hz frame
+        Assert.Equal(1 / 60f, pacer.FrameDt(5, frameDue: true));        // after a long gap: one ordinary frame
+        Assert.Equal(0.25f, pacer.FrameDt(FramePacer.MaxFrameDtSeconds, frameDue: true));
+        Assert.Equal(1 / 60f, pacer.FrameDt(0.05, frameDue: false));    // brought forward by an input: at most one frame
+        Assert.Equal(0.004f, pacer.FrameDt(0.004, frameDue: false));
+        pacer.Configure(0, 144, reduce: false);
+        Assert.Equal(1 / 144f, pacer.FrameDt(0.05, frameDue: false));
+
+        Assert.Equal(20L, FramePacer.NextDeadline(11L, 10L, 10L));      // a little late: one period after the last deadline
+        Assert.Equal(30L, FramePacer.NextDeadline(20L, 10L, 10L));      // a whole period late (a stall): from now
+        Assert.Equal(15L, FramePacer.NextDeadline(5L, 10L, 10L));       // early (an input brought it forward): from now
+        Assert.Equal(0.2, FramePacer.NextDeadline(0.1, 0.1, 0.1), 9);
     }
 
     [Fact]

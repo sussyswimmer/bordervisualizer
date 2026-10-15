@@ -9,8 +9,9 @@ using PaceModel = Rimlight.Bench.PaceModel;
 namespace Rimlight.Platform.Tests;
 
 // Rimlight.Bench (C12) times the render thread on Linux through copies of two Lane B pieces, because the app is
-// Windows-only: FramePipeline copies MusicGlowSource.NextFrame and PaceModel copies FramePacer.Next. These tests keep
-// the copies honest, so PERF.md's numbers and the 8-hour soak measure what the app runs (HANDOFF, C12's item 2).
+// Windows-only: FramePipeline copies MusicGlowSource.NextFrame and PaceModel copies FramePacer.Next and FrameDt. These
+// tests keep the copies honest, so PERF.md's numbers and the 8-hour soak measure what the app runs (HANDOFF, C12's
+// item 2).
 public sealed class BenchMirrorTests
 {
     [Fact]
@@ -53,6 +54,23 @@ public sealed class BenchMirrorTests
         Assert.Equal(FramePacer.ChangeHoldSeconds, PaceModel.ChangeHoldSeconds);
         Assert.Equal(FramePacer.FastChangePerSecond, PaceModel.FastChangePerSecond);
         Assert.Equal(GlowConstants.MinVisibility, PaceModel.MinVisibility);
+    }
+
+    [Fact]
+    public void PaceModelPassesTheSameDtAsTheOverlay()
+    {
+        // The soak's dt comes from PaceModel.FrameDt, the overlay's from FramePacer.FrameDt.
+        var pacer = new FramePacer();
+        foreach ((int cap, double refresh, bool reduce) in new[] { (60, 60.0, false), (0, 144.0, false), (0, 240.0, true) })
+        {
+            pacer.Configure(cap, refresh, reduce);
+            foreach (double elapsed in new[] { 0, 0.001, 1 / 240.0, 1 / 60.0, 0.05, 0.1, 0.2499, 0.25, 0.2501, 5 })
+            {
+                Assert.Equal(pacer.FrameDt(elapsed, frameDue: true), PaceModel.FrameDt(elapsed, pacer.FullInterval, due: true));
+                Assert.Equal(pacer.FrameDt(elapsed, frameDue: false), PaceModel.FrameDt(elapsed, pacer.FullInterval, due: false));
+            }
+        }
+        Assert.Equal(FramePacer.MaxFrameDtSeconds, PaceModel.MaxFrameDtSeconds);
     }
 
     [Fact]

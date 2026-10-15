@@ -148,6 +148,59 @@ public sealed class PacingTimelineTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void WithNoDisplayTheCaptureClosesWhileSettingsAndTheVisualizerStillHear()
+    {
+        // Settings > Displays allows no display at all, and a laptop set to its external display only has none once it
+        // is undocked: OverlayHost then has no overlay. The glow counts as paused there, so the capture closes and frames
+        // stop, while Settings' meter and the debug visualizer still get theirs.
+        var settings = new Settings();
+        using var rig = new GlowRig(settings);
+        var model = new OverlayLoopModel(rig, settings, OneMonitor);
+        var feed = new VisualizerFeed();
+        model.At(3, () => model.Rebuild());                 // every display unticked, or undocked
+        model.At(6, () =>
+        {
+            rig.Source.SetAudioWanted(true);                 // Settings shows the level meter
+            model.RequestFrame();
+        });
+        model.At(9, () =>
+        {
+            rig.Source.SetVisualizer(feed);                  // the debug visualizer opens
+            model.RequestFrame();
+        });
+        model.At(12, () =>
+        {
+            rig.Source.SetVisualizer(null);
+            rig.Source.SetAudioWanted(false);
+            model.RequestFrame();
+        });
+        model.At(15, () => model.Rebuild(OneMonitor));      // the display is back
+        model.RunUntil(18);
+
+        Steady(model, 1, 3, 60, 60, captureOpen: true, windows: 1, "music");
+        Steady(model, 4, 6, 0, 0, captureOpen: false, windows: 0, "no display");
+        Steady(model, 7, 9, 10, 0, captureOpen: true, windows: 0, "no display, Settings shows the audio");
+        Steady(model, 10, 12, 60, 0, captureOpen: true, windows: 0, "no display, visualizer open");
+        Steady(model, 13, 15, 0, 0, captureOpen: false, windows: 0, "no display again");
+        Steady(model, 16, 18, 60, 60, captureOpen: true, windows: 1, "display back");
+        Assert.Equal(1, model.Overlays);
+
+        // Without a display the light fades out like a pause and frames stop; it fades back in with the display.
+        ModelFrame last = model.Frames.Last(f => f.Time < 6);
+        Assert.InRange(last.Time - 3, 0.3, 0.42);
+        Assert.Equal(Pace.Block, last.Pace);
+        Assert.Equal(0f, last.State.Visibility);
+        float previous = 0;
+        foreach (ModelFrame frame in model.Frames.Where(f => f.Time is >= 15 and < 15.6))
+        {
+            Assert.InRange(frame.State.Visibility - previous, -0.01f, 0.1f);
+            previous = frame.State.Visibility;
+        }
+        Assert.True(feed.TryTake(out AnalyzerSnapshot snapshot));
+        Assert.False(snapshot.Features.IsSilent); // the visualizer heard the music with no display chosen
+    }
+
+    [Fact]
     public void DemoModeDrawsAtTheFullRateWithTheCaptureClosed()
     {
         Settings off = new() { Enabled = false };

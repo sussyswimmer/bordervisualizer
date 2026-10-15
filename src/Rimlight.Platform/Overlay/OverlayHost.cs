@@ -20,7 +20,9 @@ namespace Rimlight.Platform.Overlay;
 /// Frames come at the full rate while music drives the glow (on the display's refresh when that is the cap), at
 /// 10 fps for Idle Glow breathing, at 10 Hz without presenting while the glow is static but music could change it,
 /// and not at all when nothing can change until an input does: then the thread only waits for input and window
-/// messages (doc 02). Overlays whose glow is fully faded out are hidden, so DWM has nothing of ours to compose.
+/// messages (doc 02). Overlays whose glow is fully faded out are hidden, so DWM has nothing of ours to compose. With no
+/// overlay at all (no display chosen, or none of the chosen ones attached) the glow counts as paused: the frame source
+/// still runs, so the capture closes and Settings' meter and the debug visualizer keep working, but no GPU device is held.
 /// </remarks>
 public sealed class OverlayHost : IDisposable
 {
@@ -31,8 +33,6 @@ public sealed class OverlayHost : IDisposable
     private const long GpuRetryMs = 1000;      // retry delay when the GPU can't be set up (driver update, no adapter)
     private const long HardwareProbeMs = 30_000; // while on WARP, how often to check whether hardware came back
     private const long ErrorLogIntervalMs = 5000; // repeated per-frame failures are logged at most this often
-    private const float MonitorFadeSeconds = 0.3f; // a monitor's pause fades out and back in over 300 ms (doc 04 §4)
-    private const double MaxFrameDtSeconds = 0.25; // a longer gap (nothing to draw, a stall) counts as one frame
     private const double VsyncFallbackSeconds = 0.1; // no refresh for this long (display off): draw anyway
     private const uint Infinite = 0xFFFFFFFF;
     private const uint TimerAllAccess = 0x1F0003;
@@ -326,28 +326,17 @@ public sealed class OverlayHost : IDisposable
             try
             {
                 bool inputChanged = ApplyPendingInputs(now);
-                if (overlays.Count == 0)
-                {
-                    PublishStatus(now, 0, idle: true);
-                    continue;
-                }
                 if (!frameDue && !inputChanged) continue;
 
-                // The source's time runs on without jumps: a gap in frames (nothing could change, or a stall) counts
-                // as one ordinary frame, so fades and smoothing continue where they stopped (doc 02 idle pacing).
-                // So does the time before an input that brings a frame forward: a fade the input starts begins on
-                // this frame instead of jumping ahead by the time since the last 10 Hz frame.
-                double elapsed = (now - lastFrame) / (double)Stopwatch.Frequency;
-                double fullInterval = pacer.FullInterval;
-                float dt = (float)(elapsed > MaxFrameDtSeconds ? fullInterval : frameDue ? elapsed : Math.Min(elapsed, fullInterval));
+                // A gap in frames, or the time before an input that brought this one forward, counts as one frame.
+                float dt = pacer.FrameDt((now - lastFrame) / (double)Stopwatch.Frequency, frameDue);
                 lastFrame = now;
 
                 int presents = RenderFrame(dt);
                 pace = pacer.Next(Seconds(now), report);
                 long period = (long)(pacer.IntervalFor(pace) * Stopwatch.Frequency);
-                // Keep a steady cadence; after a stall, or a frame an input brought forward, restart it from now.
-                nextFrame = now >= nextFrame && now - nextFrame < period ? nextFrame + period : now + period;
-                PublishStatus(now, presents, idle: false);
+                nextFrame = FramePacer.NextDeadline(now, nextFrame, period);
+                PublishStatus(now, presents);
             }
             catch (Exception exception)
             {
@@ -367,9 +356,9 @@ public sealed class OverlayHost : IDisposable
         const QUEUE_STATUS_FLAGS AllInput = QUEUE_STATUS_FLAGS.QS_ALLINPUT;
         const MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS InputAvailable = MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE;
 
-        // Nothing can change until an input does (or there is no overlay): only the wake event and messages end the
-        // wait. No timer runs, so the thread costs nothing (doc 02 "CPU must be ~0%").
-        if (overlays.Count == 0 || pace == Pace.Block)
+        // Nothing can change until an input does: only the wake event and messages end the wait. No timer runs, so the
+        // thread costs nothing (doc 02 "CPU must be ~0%").
+        if (pace == Pace.Block)
         {
             PInvoke.MsgWaitForMultipleObjectsEx(1, handles + 1, Infinite, AllInput, InputAvailable);
             return false;
@@ -511,25 +500,14 @@ public sealed class OverlayHost : IDisposable
         }
     }
 
-    // "Reduce on battery": at most 30 fps (PRD §5) at half render scale (doc 04 §2).
-    private bool Reduced => appliedOnBattery && applied!.OnBattery == BatteryBehavior.Reduce;
+    // "Reduce on battery": at most 30 fps at half render scale.
+    private bool Reduced => OverlayRules.Reduced(applied!, appliedOnBattery);
 
     private void ConfigurePacer() => pacer.Configure(applied!.FpsCap, refreshHz, Reduced);
 
-    // Paused everywhere: by SetPaused, by "Pause on battery", or on every monitor once their fades have finished
-    // (so the fade shows whatever the engine does with the pause). The light engine fades the glow out, and frames
-    // stop once it is static.
-    private bool EffectivePaused
-    {
-        get
-        {
-            if (appliedPaused || (appliedOnBattery && applied!.OnBattery == BatteryBehavior.Pause)) return true;
-            if (overlays.Count == 0) return false;
-            foreach (Overlay overlay in overlays)
-                if (!overlay.Paused || overlay.Fade > 0) return false;
-            return true;
-        }
-    }
+    // Paused everywhere: by SetPaused, by "Pause on battery", on every monitor once their fades have finished, or with
+    // no overlay at all (OverlayRules.PausedEverywhere).
+    private bool EffectivePaused => OverlayRules.PausedEverywhere(appliedPaused, applied!, appliedOnBattery, overlays);
 
     private bool IsMonitorPaused(DisplayMonitor monitor)
     {
@@ -642,10 +620,11 @@ public sealed class OverlayHost : IDisposable
         _ => true,
     };
 
-    // Creates the GPU device and every overlay's surface; on failure, retries after GpuRetryMs.
+    // Creates the GPU device and every overlay's surface; on failure, retries after GpuRetryMs. Without an overlay there
+    // is nothing to draw on, so no device is made (Rebuild releases it when the last overlay goes).
     private void EnsureGpu()
     {
-        if (gpu is not null || Environment.TickCount64 < gpuRetryAtMs) return;
+        if (gpu is not null || overlays.Count == 0 || Environment.TickCount64 < gpuRetryAtMs) return;
         try
         {
             gpu = GpuDevice.Create();
@@ -857,10 +836,11 @@ public sealed class OverlayHost : IDisposable
         return constants;
     }
 
-    // Diagnostics: frames and presents per second over the last second, and how frames are paced.
-    private void PublishStatus(long now, int presents, bool idle)
+    // Diagnostics: frames and presents per second over the last second, and how frames are paced ("No overlay" while
+    // there is none: frames then only run for Settings' meter or the visualizer, or until the glow has faded out).
+    private void PublishStatus(long now, int presents)
     {
-        int paceIndex = idle ? 4 : pace switch
+        int paceIndex = overlays.Count == 0 ? 4 : pace switch
         {
             Pace.Full => pacer.UseVsync ? 0 : 1,
             Pace.Slow => 2,
@@ -874,16 +854,13 @@ public sealed class OverlayHost : IDisposable
             if (overlay.Window.IsVisible) visible++;
         Volatile.Write(ref statusVisible, visible);
 
-        if (!idle)
-        {
-            statusFrames++;
-            statusPresents += presents;
-        }
+        statusFrames++;
+        statusPresents += presents;
         long window = now - statusWindowStart;
-        if (idle || pace == Pace.Block || window >= Stopwatch.Frequency)
+        if (pace == Pace.Block || window >= Stopwatch.Frequency)
         {
             // While blocked no frames come, so the rates read zero until frames resume.
-            bool stopped = idle || pace == Pace.Block;
+            bool stopped = pace == Pace.Block;
             double seconds = Math.Max(window, 1) / (double)Stopwatch.Frequency;
             Volatile.Write(ref statusFramesPerSecond, stopped ? 0 : statusFrames / seconds);
             Volatile.Write(ref statusPresentsPerSecond, stopped ? 0 : statusPresents / seconds);
@@ -987,25 +964,20 @@ public sealed class OverlayHost : IDisposable
         return PInvoke.DefWindowProc(hwnd, message, wParam, lParam);
     }
 
-    private sealed class Overlay(DisplayMonitor monitor, OverlayWindow window) : IDisposable
+    private sealed class Overlay(DisplayMonitor monitor, OverlayWindow window) : IMonitorFade, IDisposable
     {
+        private float fade = 1;
+
         public DisplayMonitor Monitor { get; set; } = monitor;
         public OverlayWindow Window { get; } = window;
         public OverlaySurface? Surface { get; set; }
 
         // Paused on this monitor (SetPausedMonitors), and the fade toward it: 1 shown, 0 paused.
         public bool Paused { get; set; }
-        public float Fade { get; set; } = 1;
+        public float Fade { get => fade; set => fade = value; }
 
         // Moves the fade toward its target. True while it moves (including the step that arrives).
-        public bool AdvanceFade(float dt)
-        {
-            float target = Paused ? 0 : 1;
-            if (Fade == target) return false;
-            float step = dt / MonitorFadeSeconds;
-            Fade = target > Fade ? Math.Min(target, Fade + step) : Math.Max(target, Fade - step);
-            return true;
-        }
+        public bool AdvanceFade(float dt) => OverlayRules.AdvanceFade(ref fade, Paused, dt);
 
         public void ReleaseSurface()
         {

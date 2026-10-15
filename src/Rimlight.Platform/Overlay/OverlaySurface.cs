@@ -94,7 +94,7 @@ internal sealed class OverlaySurface : IDisposable
     public bool IsHalf { get; private set; }
 
     // Swap chain pixels per window pixel: 1, or about 0.5 at half scale.
-    public float RenderScale => Width / (float)WindowWidth;
+    public float RenderScale => RenderScaleFor(WindowWidth, IsHalf);
 
     // Consecutive frames skipped because the swap chain wasn't ready (DWM behind, display off, or a lost device).
     public int SkippedFrames { get; private set; }
@@ -178,7 +178,11 @@ internal sealed class OverlaySurface : IDisposable
         swapChain?.Dispose();
     }
 
-    private static int BufferSize(int windowSize, bool half) => half ? Math.Max(1, (windowSize + 1) / 2) : windowSize;
+    // The swap chain's width or height for a window's: the same, or half of it rounded up at half scale.
+    internal static int BufferSize(int windowSize, bool half) => half ? Math.Max(1, (windowSize + 1) / 2) : windowSize;
+
+    // RenderScale for a window this wide: what pixel measures are converted at (the swap chain's width over the window's).
+    internal static float RenderScaleFor(int windowWidth, bool half) => BufferSize(windowWidth, half) / (float)windowWidth;
 
     // Maps the swap chain onto the whole window: exactly 2x at half scale for even sizes, slightly less for odd ones.
     private Matrix3x2 ScaleTransform() => Matrix3x2.CreateScale(WindowWidth / (float)Width, WindowHeight / (float)Height);
