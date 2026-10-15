@@ -1,5 +1,21 @@
 # Handoff
 
+## [OPEN] H-024 · from: claude-code (K10) · to: maxwell · blocking: none (decide by 2026-11-10)
+**Need:** A decision on the .NET version. The stack is yours (CLAUDE.md), so nothing changed.
+- .NET 8 (LTS) leaves support on **2026-11-10**, about four weeks after a first tag in October 2026. .NET 9 ends the same day, so .NET 10 (LTS, supported to November 2028) is the only supported target after that.
+- Every project targets `net8.0-windows10.0.19041.0`, and `build/pack.ps1` publishes self-contained. Each install therefore carries its own .NET 8 runtime, which machine-wide .NET updates never patch; only a new Rimlight release does. After the end date there are no more .NET 8 fixes to ship.
+- The exposure is small: TLS is Windows' SChannel (Windows Update patches it), album art is decoded by WIC, and the only remote peer is GitHub over HTTPS. What stays on the bundled runtime is the managed HTTP and JSON handling of GitHub's responses and the same-user named pipe. The app updates itself, so a retargeted 1.x reaches users the usual way.
+- Once the Windows CI job's SDK (the newest on the image, through `global.json`'s `latestMajor`) lists 8.0 as out of support, it logs NETSDK1138 for the app and test projects. That is a warning even with `TreatWarningsAsErrors`, so the build passes, but the zero-warning bar breaks.
+**Repro:** `src/Rimlight.App/Rimlight.App.csproj` line 4 (and every other project); `build/pack.ps1` (`--self-contained true`); `.github/workflows/ci.yml` (Windows job, no `DOTNET_INSTALL_DIR`).
+**Proposed:** Retarget to `net10.0-windows10.0.19041.0` before 1.0, or in the first update after it: the TFMs in every project, `dotnet-version: 10.0.x` in `ci.yml` and `release.yml`, the `global.json` minimum, and the `LangVersion`/`AnalysisLevel` pins in `src/Directory.Build.props`. Velopack 1.2.161, Vortice 3.8.3 and WPF-UI 4.3.0 already ship net10.0 libraries, and the others are netstandard2.0, net8.0 or net9.0 libraries that run on it. Until you answer, the TFMs stay and no `CheckEolTargetFramework=false` goes in; if you keep .NET 8, that suppression goes in only with a dated retarget follow-up. Write your answer under this entry; PROGRESS.md records it with the date.
+---
+## [OPEN] H-023 · from: claude-code (K10) · to: maxwell, claude-code (K12) · blocking: none (before the first tag)
+**Need:** A decision on code signing, and one sentence in the README.
+1. **Maxwell:** releases are unsigned unless the six `SIGNING_*` secrets exist (`release.yml`, Azure Trusted Signing). On Windows 11 with Smart App Control on (some clean installs turn it on after its evaluation period), an unsigned app with no reputation is blocked outright, with no "Run anyway": `RimlightSetup.exe`, Velopack's `Update.exe` and the portable zip's `Rimlight.exe`. Those users can't install Rimlight at all; the only way around it is turning Smart App Control off. Signing fixes the block, but Trusted Signing costs a monthly fee and needs identity validation, so it's your call.
+2. **K12:** the README's Install steps and FAQ (doc 08 §2, items 3 and 6) get the Smart App Control sentence that `.github/release-notes-intro.md` and `SECURITY.md` now have. Drop both sentences once releases are signed (H-014 item 4).
+**Repro:** n/a (documented Windows behaviour; nothing in the repo signs a release unless the secrets exist).
+**Proposed:** Maxwell decides whether to sign before 1.0 (create the account and add the six secrets; nothing else changes) or to ship unsigned with the note. K12 adds the sentence while releases are unsigned.
+---
 ## [DONE] H-022 · from: claude-code (K7) · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 *Numbered H-012 on the K7–K9 branches; renumbered in K10 because C10's H-012 came first.*
 **Need:** Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
