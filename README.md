@@ -137,7 +137,7 @@ The glow moves with anything your PC plays (music apps, browsers, videos and gam
 <details>
 <summary><b>Why does Windows warn about the installer, or block it?</b></summary>
 
-Rimlight isn't code-signed yet, so Windows doesn't recognize it. *Windows protected your PC* (SmartScreen) is a warning: click **More info → Run anyway**. *Smart App Control blocked* is a hard stop on Windows 11: while Smart App Control is on, unsigned apps don't run at all, so there is no Run anyway. The setting is in **Windows Security > App & browser control > Smart App Control settings**. Turning it off is your call; on some versions of Windows it can't be turned back on without reinstalling Windows. Both messages go away once releases are code-signed. Every release is built from this repository by the [release workflow](.github/workflows/release.yml).
+Rimlight isn't code-signed yet, so Windows doesn't recognize it. *Windows protected your PC* (SmartScreen) is a warning: click **More info → Run anyway**. *Smart App Control blocked* is a hard stop on Windows 11: while Smart App Control is on, it blocks unsigned apps that Windows doesn't already know, and there is no Run anyway. The setting is in **Windows Security > App & browser control > Smart App Control settings**. Turning it off is your call; on some versions of Windows it can't be turned back on without reinstalling Windows. The block ends once releases are code-signed. Every release is built from this repository by the [release workflow](.github/workflows/release.yml).
 </details>
 
 <details>
