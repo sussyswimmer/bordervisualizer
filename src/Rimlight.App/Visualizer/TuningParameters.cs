@@ -29,7 +29,8 @@ internal enum SliderScale
 /// <param name="Maximum">The slider's highest value.</param>
 /// <param name="Scale">How the slider maps to values.</param>
 /// <param name="Step">Rounding for <see cref="SliderScale.Linear"/> values.</param>
-/// <param name="Format">The value's display format.</param>
+/// <param name="Format">The value's display format: for <see cref="SliderScale.Log"/>, enough decimals for three
+/// significant digits over the slider's range, so the box shows what the slider stores.</param>
 /// <param name="Unit">The unit after the value, or "".</param>
 /// <param name="Get">Reads the value.</param>
 /// <param name="With">Returns a copy with the value replaced.</param>
@@ -85,6 +86,12 @@ internal sealed record TuningParameter(
         }
     }
 
+    /// <summary>
+    /// Whether the record can hold <paramref name="value"/>: its fields are float or int, so 1e39 would become ∞ (which no
+    /// slider can show) and 3e9 would overflow. Everything else goes to the analyzer, which checks the real limits.
+    /// </summary>
+    public static bool CanStore(double value) => float.IsFinite((float)value) && Math.Abs(value) <= int.MaxValue;
+
     /// <summary>The value as typed into the box (no unit).</summary>
     public string Text(AudioTuning tuning) => Get(tuning).ToString(Format, CultureInfo.CurrentCulture);
 
@@ -131,7 +138,7 @@ internal static class TuningParameters
 
         new(nameof(AudioTuning.PeakHalfLifeSeconds), "Peak half-life", "Auto-gain",
             "How fast each band's running peak decays. Shorter adapts faster to quieter songs.",
-            0.25, 30, SliderScale.Log, 0, "0.##", "s",
+            0.25, 30, SliderScale.Log, 0, "0.###", "s",
             t => t.PeakHalfLifeSeconds, (t, v) => t with { PeakHalfLifeSeconds = (float)v }),
         new(nameof(AudioTuning.FloorRiseDbPerSecond), "Floor rise", "Auto-gain",
             "How fast each band's floor rises (it drops at once).",
@@ -148,19 +155,19 @@ internal static class TuningParameters
 
         new(nameof(AudioTuning.LevelAttackSeconds), "Level attack", "Envelopes",
             "Time constant while Level rises.",
-            0.001, 0.5, SliderScale.Log, 0, "0.###", "s",
+            0.001, 0.5, SliderScale.Log, 0, "0.#####", "s",
             t => t.LevelAttackSeconds, (t, v) => t with { LevelAttackSeconds = (float)v }),
         new(nameof(AudioTuning.LevelReleaseSeconds), "Level release", "Envelopes",
             "Time constant while Level falls.",
-            0.01, 3, SliderScale.Log, 0, "0.###", "s",
+            0.01, 3, SliderScale.Log, 0, "0.####", "s",
             t => t.LevelReleaseSeconds, (t, v) => t with { LevelReleaseSeconds = (float)v }),
         new(nameof(AudioTuning.BassAttackSeconds), "Bass attack", "Envelopes",
             "Time constant while Bass rises.",
-            0.001, 0.5, SliderScale.Log, 0, "0.###", "s",
+            0.001, 0.5, SliderScale.Log, 0, "0.#####", "s",
             t => t.BassAttackSeconds, (t, v) => t with { BassAttackSeconds = (float)v }),
         new(nameof(AudioTuning.BassReleaseSeconds), "Bass release", "Envelopes",
             "Time constant while Bass falls.",
-            0.01, 3, SliderScale.Log, 0, "0.###", "s",
+            0.01, 3, SliderScale.Log, 0, "0.####", "s",
             t => t.BassReleaseSeconds, (t, v) => t with { BassReleaseSeconds = (float)v }),
 
         new(nameof(AudioTuning.LevelBassWeight), "Bass weight", "Level mix",
@@ -194,7 +201,7 @@ internal static class TuningParameters
             t => t.BeatRefractorySeconds, (t, v) => t with { BeatRefractorySeconds = (float)v }),
         new(nameof(AudioTuning.BeatDecaySeconds), "Beat decay", "Beats",
             "How fast Beat (the glow's pulse) falls after a beat.",
-            0.01, 1, SliderScale.Log, 0, "0.###", "s",
+            0.01, 1, SliderScale.Log, 0, "0.####", "s",
             t => t.BeatDecaySeconds, (t, v) => t with { BeatDecaySeconds = (float)v }),
         new(SensitivityName, "Sensitivity", "Beats",
             "The Sensitivity setting (Settings, Motion): lowers the beat threshold and scales Level. Changing it here changes the setting.",
@@ -215,7 +222,7 @@ internal static class TuningParameters
             t => t.SilenceHoldMs, (t, v) => t with { SilenceHoldMs = (int)Math.Round(v) }),
         new(nameof(AudioTuning.NoPacketTimeoutSeconds), "No-packet timeout", "Silence",
             "Without audio packets for this long, the gap counts as digital silence.",
-            0.03, 2, SliderScale.Log, 0, "0.###", "s",
+            0.03, 2, SliderScale.Log, 0, "0.####", "s",
             t => t.NoPacketTimeoutSeconds, (t, v) => t with { NoPacketTimeoutSeconds = (float)v }),
     ];
 

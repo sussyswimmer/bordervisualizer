@@ -50,8 +50,7 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     private bool demoActive;
     private Settings? demoSource;  // the settings demoSettings was derived from
     private Settings? demoSettings; // those settings in Music Sync, for the engine
-    private float enginePhase = float.NaN; // the engine's phase last frame, to see whether it turns the gradient itself
-    private float demoPhase;
+    private double demoPhaseOffset = double.NaN; // where the demo's turn started: the engine's phase then
 
     /// <summary>Creates the source (on any thread); <see cref="NextFrame"/> then runs on the overlay thread.</summary>
     /// <param name="settings">The initial settings.</param>
@@ -111,8 +110,7 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         {
             demoActive = demoNow;
             demo.Restart();
-            enginePhase = float.NaN;
-            demoPhase = 0;
+            demoPhaseOffset = double.NaN;
             ShowPalette(settings, AlbumFade); // to the demo's first palette, or back to the album or manual colors
         }
 
@@ -173,7 +171,7 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         bool crossfading = blender.IsAnimating;
         blender.Update(dtSeconds);
         LightState state = engine.Update(dtSeconds, in heard, palette, engineSettings, paused);
-        if (demoActive) state = TurnDemoGradient(state, dtSeconds);
+        if (demoActive) state = TurnDemoGradient(state);
 
         // Refill after every SetTarget, after every update that was animating before it (so the crossfade's last
         // frame is uploaded too, H-006), and when the ratio changes.
@@ -242,17 +240,16 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         return demoSettings!;
     }
 
-    // The fake light engine never turns the gradient, so while the engine's phase stands still the demo turns it itself
-    // (one turn per demo loop). The real engine (C6) drifts and kicks on beats, and is left as it is.
-    private LightState TurnDemoGradient(LightState state, float dtSeconds)
+    // The demo turns the gradient itself, with either engine: the fake one never turns it, and the real one (C6) makes
+    // 0.84 of a turn per 24 s loop, which would jump where a recording wraps. DemoShow.PhaseAt makes exactly one turn per
+    // loop with the engine's kicks and a drift. It starts from the engine's phase, so turning the demo on doesn't jump.
+    private LightState TurnDemoGradient(LightState state)
     {
-        if (state.Phase == enginePhase && float.IsFinite(dtSeconds) && dtSeconds > 0)
-            demoPhase = (demoPhase + DemoShow.DriftCyclesPerSecond * dtSeconds) % 1;
-        enginePhase = state.Phase;
-        if (demoPhase == 0) return state;
-        float phase = state.Phase + demoPhase;
-        phase -= MathF.Floor(phase);
-        return state with { Phase = phase < 1 ? phase : 0 };
+        double turn = DemoShow.PhaseAt(demo.Time);
+        if (double.IsNaN(demoPhaseOffset)) demoPhaseOffset = (float.IsFinite(state.Phase) ? state.Phase : 0) - turn;
+        double phase = demoPhaseOffset + turn;
+        float wrapped = (float)(phase - Math.Floor(phase));
+        return state with { Phase = wrapped < 1 ? wrapped : 0 }; // just below 1 can round up to 1 as a float
     }
 
     /// <summary>Whether the glow shows the album colors (when there are any) rather than the manual ones.</summary>

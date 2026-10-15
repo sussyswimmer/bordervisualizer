@@ -17,7 +17,9 @@ namespace Rimlight.App.Overlay;
 /// <see cref="TuningOutcome"/>.</item>
 /// </list>
 /// The render thread also keeps Level, Bass, Beat and the frame time of each <c>Process</c> call, which the analyzer's
-/// own diagnostics don't record, in rings aligned with its 240-entry flux history.
+/// own diagnostics don't record, in rings aligned with its 240-entry flux history. One probe serves the window for its
+/// whole life, so a tuning request or outcome in flight survives a minimize; <see cref="Restart"/> starts the history
+/// over instead.
 /// </summary>
 internal sealed class AnalyzerProbe
 {
@@ -38,6 +40,7 @@ internal sealed class AnalyzerProbe
     private AnalyzerSnapshot? result;      // filled by the render thread, taken by the UI
     private AudioTuning? pendingTuning;    // written by the UI, taken by the render thread
     private TuningOutcome? outcome;        // written by the render thread, taken by the UI
+    private int restart;                   // set by the UI, taken by the render thread
 
     // UI thread only: the buffer the UI drew last, lent again on the next take.
     private AnalyzerSnapshot held = new();
@@ -72,6 +75,12 @@ internal sealed class AnalyzerProbe
 
     /// <summary>UI thread: what became of the last tuning request, once; null when nothing new.</summary>
     public TuningOutcome? TakeOutcome() => Interlocked.Exchange(ref outcome, null);
+
+    /// <summary>
+    /// UI thread: the history starts over at the next recorded frame (the window is shown again after a minimize, and
+    /// its plots shouldn't join what they showed before). Pending tuning and its outcome are kept.
+    /// </summary>
+    public void Restart() => Volatile.Write(ref restart, 1);
 
     /// <summary>
     /// Render thread, before <c>Process</c>: applies a pending tuning request. Validation errors (and any other
@@ -110,6 +119,12 @@ internal sealed class AnalyzerProbe
     public void Record(in AudioFeatures features, float dtSeconds, IAudioAnalyzer analyzer, int sampleRate, CapturedAudio? audio,
         bool listening, bool demo)
     {
+        // A plain read first: a restart is rare, and most frames need no interlocked operation.
+        if (Volatile.Read(ref restart) != 0 && Interlocked.Exchange(ref restart, 0) != 0)
+        {
+            newest = -1;
+            count = 0;
+        }
         newest = newest + 1 == HistoryLength ? 0 : newest + 1;
         level[newest] = features.Level;
         bass[newest] = features.Bass;

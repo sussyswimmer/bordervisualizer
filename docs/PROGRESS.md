@@ -479,7 +479,7 @@
       - It shows the spectrum (dB over log frequency, with the bands shaded), scrolling Level/Bass/Beat, and flux against the threshold, with beats marked.
       - Also the beat lamp, BPM, beat count, IsSilent, the device and format, and the analysis rate and frame rate.
       - A slider and value box for each of the 26 `AudioTuning` fields, plus Copy params as JSON, Paste params and Reset to defaults.
-      - It runs (audio request, probe, 30 Hz timer) only while it is shown and not minimized.
+      - It runs (audio request, probe, 30 Hz timer) only while it is shown and not minimized. One probe serves it for its whole life, so a change sent as it is minimized still gets its answer; a restore starts only the plots' history over.
     - `PlotRaster`, `SpectrumPlot`, `TimelinePlot` and `TimeAxis` draw into `int[]` with no Windows calls and no allocation per frame. `PlotSurface` copies them into a `WriteableBitmap` at device pixels.
     - `TuningParameters` is the row table, with a reflection check for fields without a row. `TuningJson` handles the JSON.
   - `src/Rimlight.App/Overlay/`:
@@ -500,15 +500,19 @@
     - `JsonSerializer` with `WriteIndented` and default naming, every property, byte-for-byte what C3's `TuningJson` writes.
     - Paste reads like C3: keys in any case, comments and trailing commas allowed, unknown keys refused, missing keys at their defaults.
     - Tuning lasts for the session only; the defaults stay in Core (H-005).
-  - **Additions:** Paste, Reset and typed values, for round trips with `wav-analyze`. A refused value shows the analyzer's message, and the analyzer keeps its previous tuning.
+  - **Additions:** Paste, Reset and typed values, for round trips with `wav-analyze`.
+    - A refused value shows the analyzer's message, the analyzer keeps its previous tuning, and the rows go back to it, so they always match Copy. A band edge moves past its neighbour by moving the neighbour first.
+    - A typed or pasted number too large for its field (1e39 is ∞ as a float) is refused before it is sent.
+    - Log rows show three significant digits (what the slider stores), and a box whose text wasn't edited sends nothing when it loses focus.
+    - Paste changes the Sensitivity setting only when the JSON has a Sensitivity key, so a partial JSON (C3's usage text: "Give any subset") keeps the setting, as Reset does.
   - **Demo:**
-    - Groove: a kick each beat (the downbeat stronger), Beat τ 120 ms, Bass with a 10 ms attack and a 180 ms release, an off-beat hat and a 6 s swell in Level. It repeats exactly every 24 s.
+    - Groove: a kick each beat (the downbeat stronger), Beat τ 120 ms, Bass with a 10 ms attack and a 180 ms release, an off-beat hat and a 6 s swell in Level. It repeats exactly every 24 s, the gradient's turn included.
     - Palettes: violet/cyan (the brand), pink/amber, mint/blue and red/purple, through the blender with the 800 ms album crossfade.
-    - It forces Music Sync for the engine, and `StartDemo` turns "Glow on" on. Pauses still apply.
-    - The capture is closed unless Settings or the visualizer wants audio.
-    - The phase override (Lane B notes) applies only while the engine's phase stands still, i.e. with the fake engine: one turn per loop.
+    - It forces Music Sync for the engine, and `StartDemo` turns "Glow on" on, which is saved like any change of that setting. Nothing else of the demo is saved. Pauses still apply.
+    - The capture is closed unless Settings or the visualizer wants audio. A `--demo` start sets demo mode before the overlay's first frame, so the loopback stream never opens.
+    - The demo owns the gradient's turn with either engine (`DemoShow.PhaseAt`): C6's 0.01-turn kick on each beat (τ 120 ms) plus a drift of 0.52 turns per loop, so exactly one turn per 24 s. C6 by itself would make 0.84 turns per loop, which jumps where a recording wraps. It starts from the engine's phase, so turning the demo on doesn't jump.
     - A `--demo` or `--debug-visualizer` start opens no Settings and no welcome.
-  - **Window size:** about 1000×720 rather than "small", so the sliders fit beside the plots.
+  - **Window size:** about 1000×720 rather than "small", so the sliders fit beside the plots. It never exceeds the primary display's work area (`CenterScreen` doesn't keep a taller window on screen; 1366×768 at 125% leaves about 580 DIPs).
 - **Verified here (Linux):**
   - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
   - Decompiled WPF 8.0.31 `Clipboard`: after its retries, any exception type can come through, so both buttons catch everything. WPF-UI 4.3.0's theme BAML has every brush key the window uses.
@@ -527,7 +531,10 @@
   - **Sync point 2:** Maxwell tunes with the visualizer and hands the JSON over (HANDOFF). H-005 decides how the defaults change.
   - **K10:** check the demo with C5's crossfades and C6's drift. Optionally drop the Debug tray demo toggle.
   - **K11:** the 8-hour `--demo` soak (H-018 item 2).
-  - **K12:** record the README GIF with `--demo`. The loop is 24 s.
+  - **K12:** record the README GIF with `--demo`.
+    - Settings → Behavior → **Hide from screen capture must be off**, or the recording shows no glow (the log warns when the demo starts with it on).
+    - The loop is 24 s and seamless by construction (beats, palettes, crossfades and the gradient's turn). No shorter loop is seamless: every 6 s brings a new palette. Doc 08's "about 8 s" then means either the full 24 s at a lower frame rate or size, or an 8 s cut that isn't seamless.
+- **Review fixes (same PR):** the items above about refused values, typed and pasted numbers, the Sensitivity paste, Log row digits, the probe across a minimize, the window size, the demo's turn, the early demo flag and the screen-capture warning. The scratch harness grew to 133 checks (`PhaseAt` periodic, continuous and one turn per loop; the demo's turn periodic through `MusicGlowSource`; every slider position's box text reads back as the stored value; the JSON checks; a request sent while detached answered after re-attaching; `Restart`). With the Lane A integration branch's real C6, the demo's turn repeats every 24 s to 2e-7 turns and starts at the engine's phase.
 
 ## Lane B notes
 
