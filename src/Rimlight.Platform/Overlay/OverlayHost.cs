@@ -33,10 +33,15 @@ public sealed class OverlayHost : IDisposable
     private const long ErrorLogIntervalMs = 5000; // repeated per-frame failures are logged at most this often
     private const long StalledCheckMs = 1000;  // a surface that can't take a frame this long gets a device check
     private const float MonitorFadeSeconds = 0.3f; // a monitor's pause fades out and back in over 300 ms (doc 04 §4)
-    private const double MaxFrameDtSeconds = 0.25; // a longer gap (nothing to draw, a stall) counts as one frame
     private const double VsyncFallbackSeconds = 0.1; // no refresh for this long (display off): draw anyway
     private const uint Infinite = 0xFFFFFFFF;
     private const uint TimerAllAccess = 0x1F0003;
+
+    /// <summary>
+    /// The longest gap between frames that <see cref="IOverlayFrameSource.NextFrame"/> is told as it is. A longer one
+    /// (nothing to draw, a stall) counts as one ordinary frame.
+    /// </summary>
+    public const double MaxFrameDtSeconds = 0.25;
 
     private static readonly WNDPROC Procedure = WindowProcedure;
     private static readonly string[] PaceNames = ["Full rate (vsync)", "Full rate (timer)", "Slow (10 fps)", "Stopped", "No overlay"];

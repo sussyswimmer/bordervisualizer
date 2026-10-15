@@ -10,8 +10,11 @@ public interface IOverlayFrameSource
 {
     /// <summary>Advances to the next frame.</summary>
     /// <param name="dtSeconds">
-    /// Time since the previous call, in seconds. After a pause in calls (nothing could change, or nothing was shown)
-    /// this is one ordinary frame, not the length of the gap, so fades and smoothing continue where they stopped.
+    /// Time since the previous call, in seconds. After a pause in calls (nothing could change, or nothing was shown),
+    /// on a frame an input brought forward, and after a stall over <see cref="OverlayHost.MaxFrameDtSeconds"/>, this is
+    /// at most one ordinary frame, not the length of the gap, so fades and smoothing continue where they stopped. Audio
+    /// captured during a stall still waits in the capture's ring, so an analyzer that drains it needs the time that
+    /// audio covers instead.
     /// </param>
     /// <param name="settings">The settings snapshot for this frame (the one last passed to <see cref="OverlayHost.ApplySettings"/>).</param>
     /// <param name="paused">
