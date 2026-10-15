@@ -160,16 +160,20 @@ public sealed class SoakTests
     [Fact]
     public void RetainedMemoryFailsTheSoak()
     {
-        // A leak: every 5th update keeps its array. The 900 measured frames keep 180 arrays of 4 KB (about 740 KB), well
-        // over the 256 KB allowed. (The warm-up tour keeps some too, but before the start sample.)
+        // A leak: every 5th update keeps a 256 KB array, so the 900 measured frames keep 180 of them (about 46 MB), far
+        // over the 256 KB allowed. (The warm-up tour keeps some too, but before the start sample.) The heap sample is
+        // process-wide, and in the test host it also sees memory other tests release meanwhile, for example pooled
+        // scratch that the array pool trims after a gen-2 GC. With 4 KB arrays (about 740 KB kept) CI once measured
+        // -331,784 B, so the leak is made far larger than that noise. TheVerdictNeedsZeroAllocationsAndFlatMemory
+        // covers the 256 KB limit itself.
         var kept = new AllocatingEngine.Keeper();
         SoakResult r = SoakRun.Run(Quick with
         {
             Hours = 0.25 / 60,
             WarmupSeconds = 0,
-            WrapLightEngine = engine => new AllocatingEngine(engine, every: 5, retain: true, kept),
+            WrapLightEngine = engine => new AllocatingEngine(engine, every: 5, retain: true, kept, arrayLength: 256 * 1024),
         });
-        Assert.True(r.ManagedGrowthBytes > SoakResult.MaxManagedGrowthBytes, $"grew {r.ManagedGrowthBytes:N0} B");
+        Assert.True(r.ManagedGrowthBytes > SoakResult.MaxManagedGrowthBytes, $"grew {r.ManagedGrowthBytes:N0} B, {kept.Arrays.Count} arrays kept in all");
         Assert.False(r.ManagedMemoryFlat);
         Assert.False(r.Passed);
         GC.KeepAlive(kept);
@@ -322,9 +326,9 @@ public sealed class SoakTests
     }
 
     // Wraps the real engine and allocates a 4 KB array on every Nth update, optionally keeping it (a leak).
-    private sealed class AllocatingEngine(ILightEngine inner, int every, bool retain, AllocatingEngine.Keeper kept) : ILightEngine
+    private sealed class AllocatingEngine(ILightEngine inner, int every, bool retain, AllocatingEngine.Keeper kept, int arrayLength = 4096) : ILightEngine
     {
-        public const int ArrayBytes = 4096 + 24; // the array's elements plus its header on 64-bit
+        public const int ArrayBytes = 4096 + 24; // the default array's elements plus its header on 64-bit
         private int updates;
 
         public bool IsStatic => inner.IsStatic;
@@ -333,7 +337,7 @@ public sealed class SoakTests
         {
             if (++updates % every == 0)
             {
-                byte[] array = new byte[4096];
+                byte[] array = new byte[arrayLength];
                 if (retain) kept.Arrays.Add(array);
             }
             return inner.Update(dtSeconds, in audio, palette, settings, paused);
