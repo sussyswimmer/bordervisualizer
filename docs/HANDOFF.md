@@ -1,10 +1,11 @@
 # Handoff
 
-## [OPEN] H-022 · from: claude-code (K7) · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
+## [DONE] H-022 · from: claude-code (K7) · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 *Numbered H-012 on the K7–K9 branches; renumbered in K10 because C10's H-012 came first.*
 **Need:** Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
 **Repro:** `src/Rimlight.App/SettingsUi/GlowPreview.cs` (the preview's pair), `src/Rimlight.App/Overlay/MusicGlowSource.cs` (the overlay's).
 **Proposed:** Keep C5/C6 instances independent: no mutable static state (caches, scratch buffers, random generators) shared between instances. Confirm in C5/C6, or say here if something is shared.
+**Resolved (K10):** C5 and C6 share nothing mutable. `LightEngine` and `PaletteBlender` keep all state in instance fields; their only statics are immutable (a default `Settings`, the default ratio, and `Srgb`'s read-only lookup table, built once). The new test `CoreFactoryTests.TwoEnginesAndBlendersRunIndependentlyOnTwoThreads` runs an overlay-like pair and a preview-like pair at the same time on two threads, three times, and checks that every frame's light state and gradient equals what each pair gives alone (a static `phase` field in the engine fails it). One preview fix came out of this: with the real engine, Music Sync with When silent = Hide faded the preview card out while nothing played, so the preview now shows Idle Glow in silence and the Appearance page says so (`GlowPreview.Shown`).
 ---
 ## [DONE] H-021 · from: claude-code (K9) · to: codex (Lane A: C9, C11), maxwell · blocking: none (before the first tag)
 **Need:** Three edits outside Lane B that follow from K9 (H-014 items 1 and 3, H-013 items 1 and 4).
@@ -15,7 +16,7 @@
 **Proposed:** Lane A makes 1 and 2 when the chains merge (K10 at the latest); Maxwell or K12 updates doc 02.
 **Resolved (K10):** items 1–3 done. The release dry run no longer sets `SkipVelopackAppCheck`, so every pull request that touches the app packs it with vpk's entry-point check. `CONTRIBUTING.md`, the bug form and doc 02 "Logging" name `%APPDATA%\Rimlight\logs`.
 ---
-## [OPEN] H-020 · from: claude-code (Lane A, C13) · to: claude-code (K10), maxwell · blocking: none
+## [DONE] H-020 · from: claude-code (Lane A, C13) · to: claude-code (K10), maxwell · blocking: none
 **Need:** Clean-up now that Core has no fakes (C13, PR [#27](https://github.com/sussyswimmer/bordervisualizer/pull/27)).
 1. **K10.** On `claude/k8-debug-visualizer`, `src/Rimlight.App/Overlay/DemoShow.cs` line 15 and `Overlay/MusicGlowSource.cs` line 245 still say "the fake light engine never turns the gradient".
    - `TurnDemoGradient` turns the gradient itself whenever the engine's phase stands still.
@@ -24,6 +25,7 @@
 2. **Maxwell.** `CLAUDE.md` line 28 ("Until Codex lands the real implementations, `CoreFactory` returns fakes") and `AGENTS.md` lines 17 and 41 still describe the fakes. Those are agent instruction files, so C13 left them alone.
 **Repro:** `git grep -n -i fake origin/claude/k8-debug-visualizer -- src/Rimlight.App`.
 **Proposed:** K10 handles item 1 during the integration pass. Maxwell edits or drops the instruction lines in item 2 when convenient. If another branch also claims H-020, renumber this entry at integration.
+**Resolved (K10):** item 1 kept deliberately and reworded. The K8 review had already made the demo own the gradient's turn in every frame (not only while the engine's phase stands still), so a 24 s recording loops seamlessly: `DemoShow.PhaseAt` makes exactly one turn per loop with the engine's 0.01-cycle kicks and a 0.0217 cycles/s drift, where the engine's own 0.015 cycles/s would make 0.84. `MusicGlowSource`'s comment no longer mentions a fake engine, and the stale "until C7" comments in `AppController` and `TrayIconHost` are gone; `git grep -i fake -- src tools` now finds only C13's `CoreContainsNoFakes` test. Item 2 (`CLAUDE.md`, `AGENTS.md`) stays with Maxwell: those are his instruction files.
 ---
 ## [OPEN] H-019 · from: claude-code · to: maxwell, codex · blocking: none (K6 handles it; a default change would be a CONTRACT CHANGE)
 **Need:** A decision on the default glow shortcut. `Settings.ToggleHotkey` defaults to `Ctrl+Alt+L` (frozen `Contracts/Settings.cs:57`, PRD "6. Shell"). Windows treats Ctrl+Alt as AltGr, so `RegisterHotKey(Ctrl+Alt+L)` also fires on AltGr+L and swallows what it types in every app: ł on Polish (Programmers), Czech, Slovak, Hungarian, Croatian and Slovenian layouts, ø on US-International.
@@ -31,6 +33,7 @@
 **Proposed:** Maxwell picks one:
 1. Keep `Ctrl+Alt+L`. It works on US, UK and most Western layouts, and the affected users get an explanation instead of a lost letter.
 2. Change only the default *value* to a combination that can't be AltGr, e.g. `Win+Alt+L`, after Maxwell checks on his PC that Windows doesn't already use it. That edits `Contracts/Settings.cs` and the copies in doc 06 §1 and the PRD, so it needs "approved" here first; Lane B needs no code change.
+**K10:** still Maxwell's decision. With C7's real store the value stays opaque (H-009 item 1), so either option needs no Lane B change.
 ---
 ## [OPEN] H-018 · from: claude-code (Lane A, C12) · to: maxwell, claude-code (K11) · blocking: none (release candidate, doc 09 sync point 4)
 **Need:** Two measurements the Linux soak can't make.
@@ -44,6 +47,7 @@
    - For comparison, the Core's own share is 0.36 % of one core at 60 fps (`docs/PERF.md`).
 **Repro:** n/a (measurements).
 **Proposed:** Maxwell runs item 1 when convenient. K11 does item 2 once K8's `--demo` is in, and puts the results in PROGRESS.md (doc 07 Phase 7). Mark DONE when both are recorded.
+**K10:** still open. Item 1 stays with Maxwell (the Windows run of the Core soak), and item 2 is K11's (the 8-hour `--demo` app soak on Windows). The integration changed nothing the soak measures.
 ---
 ## [DONE] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
 **Need:** `AnalyzerDiagnostics.EstimatedBpm` (the median of the last 16 beat intervals) is biased when the render loop is steady. Beats are only seen at frame times, so the intervals are whole frames and the median picks one of the two neighbouring values.
@@ -115,7 +119,7 @@
 **Proposed:** Lane B keeps these names, or edits the three files when it renames one. K12's README FAQ "How do I report a bug?" links the bug form and CONTRIBUTING's "Reporting a bug with logs" section. For item 4, choose a logs location that survives uninstall, or change doc 07's promise.
 **Resolved (K10):** Lane B kept every name, and item 1's path changed with the files. Logs are in `%APPDATA%\Rimlight\logs` (K9, H-014 item 3), at most five files of 1 MB (`RollingFileLog`), and never contain audio; the tray item is **Open logs folder**. `CONTRIBUTING.md` and the bug form now say `%APPDATA%` (H-021 item 2). Settings > About shows the version; Settings > Behavior has **Hide from screen capture** and **Update automatically**; settings are in `%APPDATA%\Rimlight\settings.json`. Item 4 is answered by H-014 item 3. The README FAQ links are K12's.
 ---
-## [OPEN] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
+## [DONE] H-012 · from: claude-code (C10) · to: claude-code · blocking: none (K6, K12)
 **Need:** Use the icons C10 generated (PR #15).
 1. **K6, tray while the glow is off (doc 06 §2):** `src/Rimlight.App/Assets/Rimlight-dim.ico` is the app icon at 50 % opacity and is already a WPF `Resource`.
    - When `Enabled` changes, swap `TaskbarIcon.IconSource` between `pack://application:,,,/Assets/Rimlight.ico` and `…/Rimlight-dim.ico`.
@@ -128,14 +132,16 @@
    - After editing either SVG, run `build/icons.sh` (or `icons.ps1`). `CommittedIconsTests` fails until the icons are regenerated.
 **Repro:** n/a.
 **Proposed:** K6 and K12 pick these up. Mark this DONE once the tray uses the dim icon.
+**Resolved (K10):** item 1 is in: K6's `TrayIconImages` loads `Assets/Rimlight-dim.ico` when the build has it and derives a 50 % icon only otherwise. The integrated csproj embeds `Assets\*.ico`, and C10's dim file has the same eight frames (16–64 and 256 px) as `Rimlight.ico`, so the tray shows C10's file at every DPI. The `TrayIconHost` summary no longer says "placeholder icon". Item 2 (README icon and banner) stays with K12.
 ---
-## [OPEN] H-011 · from: claude-code · to: codex · blocking: none (C6; K3 paces frames on these)
+## [DONE] H-011 · from: claude-code · to: codex · blocking: none (C6; K3 paces frames on these)
 **Need:** What the K3 render loop assumes about `ILightEngine.IsStatic` and the light state, so C6 lets the glow idle without visible stepping. Nothing changes in `Contracts/`.
 1. **`IsStatic` means time alone changes nothing:** with the same audio features, palette, settings and `paused`, further `Update` calls (any dt) return the same state. No breathing, drift, smoothing or fade is still moving. Lane B then stops presenting. In music sync it keeps calling `Update` about 10 times a second, so a hidden glow (When silent = Hide) comes back when music returns. Otherwise (Off, `Enabled = false`, paused) it stops calling `Update` until an input changes.
 2. **Fully hidden is `Visibility == 0`.** Anything under 0.5/255 counts as hidden: the overlay windows are then hidden, so fullscreen apps below them can flip directly to the display.
 3. **Idle Glow is drawn at 10 fps.** Breathing and phase drift should stay slow (PRD §2: ±10% over about 6 s; drift 0.015 cycles/s), at most about 0.25 per second in Intensity, Visibility, Pulse, Spread or Ratio. Faster change is detected and drawn at the full rate, but up to 100 ms late. In music sync the renderer drops to 10 fps 1.75 s after `IsSilent` turns true, so the silence → Idle Glow fade (1.5 s) should be done by then.
 4. **dt:** after a gap in frames (a static glow, or an input that wakes the loop between 10 fps frames), `Update` gets one ordinary frame's dt, not the length of the gap. Fades therefore start on the first frame after the input.
 **Proposed:** Confirm in C6, or correct here.
+**Resolved (K10):** C6 (#11) matches all four items, checked against `LightEngine` and its tests, so neither side changes. 1. `IsStatic` holds only while the light is hidden and stays hidden for the same inputs, and then `Update` returns the same state for any dt; `MusicGlowSource` keeps listening at 10 Hz in music sync and stops otherwise, as assumed. 2. Static implies Visibility 0, and the frame that reaches 0 is still presented. 3. Idle breathing is Brightness × 0.9 × (1 + 0.1 sin(2πt/6 s)), at most about 0.094 per second in Intensity; Idle Glow has no drift or pulse, and the silence → Idle Glow crossfade takes 1.5 s, inside K3's 1.75 s. 4. The engine caps a step at 0.1 s, and the first step that moves time on a new engine or after a static frame at 1/60 s, which agrees with K3 passing one ordinary frame's dt after a gap.
 ---
 ## [DONE] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
@@ -197,6 +203,7 @@
 **Need:** A decision on how `AudioTuning` defaults get re-tuned. Doc 09 sync point 2 expects Codex to update them from the debug-visualizer JSON, but the values live inside the frozen `src/Rimlight.Core/Contracts/AudioTuning.cs`.
 **Repro:** `AudioTuning.cs` declares every default inline (e.g. `MinFlux = 0.01f` at line 61, a provisional value C2 will also want to calibrate).
 **Proposed:** Maxwell writes "approved: default values only" under this entry, so Codex may change default *values* in `AudioTuning.cs` (never names, types or members) without a new CONTRACT CHANGE. Otherwise each re-tune needs its own CONTRACT CHANGE entry.
+**K10:** still open, and Maxwell's. For this run he settled it as "the `AudioTuning` default values stay unchanged", so the integration keeps them; a re-tune from the debug visualizer's JSON (sync point 2) waits for his "approved" here.
 ---
 ## [DONE] H-004 · from: claude-code · to: codex · blocking: none (needed before C2/C5 merge)
 **Need:** Confirm, and state in the C2/C5 PRs, how Lane B will call Core. Lane B (K2/K3/K8) is built on these assumptions:
