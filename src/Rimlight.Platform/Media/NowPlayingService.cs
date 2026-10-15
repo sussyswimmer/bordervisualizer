@@ -18,9 +18,9 @@ namespace Rimlight.Platform.Media;
 /// and again whenever the properties change (the cover can arrive after the title), not on play/pause: decoded to at
 /// most 64×64, and a picture not shown yet goes to the extractor. Without a usable cover (no thumbnail, or one the
 /// extractor calls "no art", a generic app icon) the previous colors stay and the track is read once more after
-/// 750 ms; if it still has none, <see cref="AlbumPalette"/> becomes null. Without events a refresh still runs every
-/// 30 s, so a session manager whose process went away (an Explorer restart) is noticed; it is then requested again
-/// every 5 s.</para>
+/// 750 ms; if it still has none, <see cref="AlbumPalette"/> becomes null. A read that fails is tried once more after
+/// 750 ms. Without events a refresh still runs every 30 s, so a session manager whose process went away (an Explorer
+/// restart) is noticed; it is then requested again every 5 s.</para>
 /// <para>Results are immutable and published by reference, so any thread may read <see cref="Current"/>,
 /// <see cref="AlbumPalette"/> and <see cref="Art"/>. The change events are raised on a thread-pool thread: handlers
 /// must return quickly and must not touch UI objects there.</para>
@@ -30,6 +30,7 @@ public sealed class NowPlayingService : IDisposable
     private static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(250);        // doc 05 §1
     private static readonly TimeSpan MaxDebounce = TimeSpan.FromSeconds(1);            // a session that never stops firing
     private static readonly TimeSpan ThumbnailRetry = TimeSpan.FromMilliseconds(750);  // doc 05 §1: a late thumbnail
+    private static readonly TimeSpan ReadRetry = TimeSpan.FromMilliseconds(750);       // a read that failed (a busy app)
     private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(5);            // a hung media app can't stall us
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);         // after the media service went away
@@ -60,6 +61,7 @@ public sealed class NowPlayingService : IDisposable
     private string? artTrackId;   // the track the art state below belongs to
     private bool artSettled;      // its thumbnail was read, no retry pending: read again when its properties change
     private long artMissingSince; // Stopwatch timestamp when it first had no usable cover; 0 = it has one
+    private bool readRetried;     // a read failed and its one early retry is spent; cleared by a read that succeeds
     private long lastErrorLogMs = long.MinValue / 2;
 
     /// <summary>Creates the service. Call <see cref="Start"/> to begin reading media sessions.</summary>
@@ -222,6 +224,7 @@ public sealed class NowPlayingService : IDisposable
             (GlobalSystemMediaTransportControlsSession? session, bool playing) = SyncSessions(manager!.GetSessions());
             if (session is null)
             {
+                readRetried = false;
                 Publish(null);
                 artTrackId = null;
                 artSettled = false;
@@ -232,6 +235,7 @@ public sealed class NowPlayingService : IDisposable
 
             GlobalSystemMediaTransportControlsSessionMediaProperties? properties = await session.TryGetMediaPropertiesAsync()
                 .AsTask(token).WaitAsync(CallTimeout, token).ConfigureAwait(false);
+            readRetried = false;
             string app = session.SourceAppUserModelId ?? "";
             string? title = Clean(properties?.Title);
             string? artist = Clean(properties?.Artist);
@@ -252,9 +256,16 @@ public sealed class NowPlayingService : IDisposable
                 scheduler.RequestBy(Stopwatch.GetTimestamp() + Ticks(ReconnectDelay));
                 return;
             }
-            // The session closed mid-call, or the app answered with an error or not at all. What is shown stays; the
-            // session events that follow (a closed session changes the list) read again.
+            // The session closed mid-call, or the app answered with an error or not at all. What is shown stays. A
+            // closed session changes the list, which reads again, but a live one may have sent its last event already
+            // (a track change), so read once more after 750 ms. An app that keeps failing is then left to its events
+            // and the 30 s refresh, not polled.
             LogThrottled($"[NowPlaying] Reading the media session failed: {exception.Message}");
+            if (!readRetried)
+            {
+                readRetried = true;
+                scheduler.RequestBy(Stopwatch.GetTimestamp() + Ticks(ReadRetry));
+            }
         }
     }
 

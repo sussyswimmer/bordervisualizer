@@ -257,7 +257,7 @@
   - **`BitmapAlphaMode.Straight`** (doc 05 says "premultiplied-ignore"): the extractor reads straight color and skips alpha < 128, and `Ignore` leaves the alpha byte undefined.
   - **The tooltip names the track only while it plays**; paused reads "Waiting for music". Doc 05 exposes `IsPlaying` for the tooltip.
   - **Tooltip text:**
-    - It is cut to 127 UTF-16 units (NOTIFYICONDATA.szTip) between whole text elements, with "…". The title gives way before the artist.
+    - It is cut to 127 UTF-16 units (NOTIFYICONDATA.szTip) between whole text elements, with "…". The title gives way before the artist: the artist gets whatever room the title leaves, and never less than half.
     - Control characters become spaces.
     - A failed `Shell_NotifyIcon` update is caught (H.NotifyIcon throws).
   - **No art → manual colors** (doc 05 also allows keeping the previous palette). A missing thumbnail, one that won't decode and a generic app icon (the extractor's "no art") are treated alike. The previous colors stay, the track is read once more 750 ms after it first had no cover, and only then do the manual colors show. Tracks therefore never flash the manual colors when the cover arrives late.
@@ -266,6 +266,7 @@
     - All sessions are subscribed, so a session that starts playing is noticed even if Windows keeps another one current.
     - The debounce waits at most 1 s.
     - Properties and decodes are bounded at 5 s.
+    - A read that fails without a lost manager (a busy app timing out, a COM error from a live session) is tried once more after 750 ms, because a live session may already have sent its last event for a track change. If that retry fails too, the app is left to its events and the 30 s refresh rather than polled; a read that succeeds re-arms the retry.
     - A session manager whose process died (e.g. an Explorer restart) is dropped and requested again every 5 s. A dead manager raises no events, so it is noticed in three ways: any WinRT call in a refresh failing with an RPC "disconnected" error while the manager itself no longer answers (a closing session alone doesn't count), the 30 s idle refresh, and `Refresh()`, which the tray calls on `TaskbarCreated`.
   - `NowPlaying.SourceApp` is the raw `SourceAppUserModelId`. Track text is never logged.
 - **Verified here (Linux):**
@@ -292,6 +293,11 @@
     - a decode failure
     - the scheduler: `RequestBy(+5 s)` fires after 5 s (it fired after 1 s before the fix), a burst is still capped at 1 s while a far deadline is pending, the idle refresh, and cancellation.
     - The first harness's 73 checks still pass.
+  - **Second review round** (same two lenses), three fixes:
+    - The tooltip capped the artist at half the room even with a short title. It now gets what the title leaves, at least half.
+    - `ShowNowPlaying` clears its coalescing flag with `Interlocked.Exchange` rather than a volatile store. On x64 a plain store can pass the following read of `Current` (store buffer), and a track published in that window would never reach the tooltip.
+    - The one early read retry above. Before this, after a failed read the previous track could stay for up to 30 s.
+    - The harnesses gained 13 checks: 6 for the tooltip, including 20,000 ASCII pairs that are uncut when they fit and otherwise fill the room with the artist keeping at least half; 7 for the retry, covering one retry at 750 ms, none after it fails again, re-arming, an earlier deadline kept and the loop woken on time. All 113 checks pass.
   - Nothing has run on Windows yet: Maxwell's checklist is in #18.
 - **Left for later:**
   - **K6:**
