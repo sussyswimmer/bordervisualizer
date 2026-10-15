@@ -33,7 +33,8 @@ internal readonly record struct FrameReport(
 //   - an unfinished present or a per-monitor fade needs the full rate until it is done;
 //   - for InputBusySeconds after an input changes, and ChangeHoldSeconds after the state last changed quickly,
 //     Slow motion runs at the full rate (an engine's own transitions are unknown here, and 10 fps would step them);
-//   - with nothing on screen the full rate is pointless: frames only listen for music, at the slow rate.
+//   - with nothing on screen the full rate is pointless: frames only listen for music, at the slow rate, unless the
+//     debug visualizer observes every frame (FrameMotion.Observed).
 internal sealed class FramePacer
 {
     public const double SlowInterval = 0.1;            // 10 fps: Idle Glow breathing is slow (doc 02)
@@ -97,10 +98,12 @@ internal sealed class FramePacer
             FrameMotion.Full => Pace.Full,
             FrameMotion.Slow => busy ? Pace.Full : Pace.Slow,
             FrameMotion.Listening => Pace.Slow,
+            // The debug visualizer plots every analyzer frame, so its time axis needs the full rate, on screen or not.
+            FrameMotion.Observed => Pace.Full,
             _ => Pace.Block,
         };
         // Nothing on screen: frames only keep the analysis going, so the next visible change starts within 100 ms.
-        return pace == Pace.Full && !frame.AnyVisible ? Pace.Slow : pace;
+        return pace == Pace.Full && !frame.AnyVisible && frame.Motion != FrameMotion.Observed ? Pace.Slow : pace;
     }
 
     // The fastest change of anything the glow shows, per second. Colors are left out: they reach the screen through

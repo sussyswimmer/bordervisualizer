@@ -52,4 +52,10 @@ public enum FrameMotion
     /// screen shows this frame, stop calling the source until settings, pause, battery or displays change.
     /// </summary>
     Still,
+
+    /// <summary>
+    /// Something besides the overlays shows every frame (the debug visualizer, doc 03 §4): call the source at the full
+    /// rate even while nothing on screen changes or no overlay shows the glow. Only what changed is presented.
+    /// </summary>
+    Observed,
 }
