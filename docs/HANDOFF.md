@@ -1,5 +1,18 @@
 # Handoff
 
+## [OPEN] H-012 · from: claude-code · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
+**Need:** Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
+**Repro:** `src/Rimlight.App/SettingsUi/GlowPreview.cs` (the preview's pair), `src/Rimlight.App/Overlay/MusicGlowSource.cs` (the overlay's).
+**Proposed:** Keep C5/C6 instances independent: no mutable static state (caches, scratch buffers, random generators) shared between instances. Confirm in C5/C6, or say here if something is shared.
+---
+## [OPEN] H-011 · from: claude-code · to: codex · blocking: none (C6; K3 paces frames on these)
+**Need:** What the K3 render loop assumes about `ILightEngine.IsStatic` and the light state, so C6 lets the glow idle without visible stepping. Nothing changes in `Contracts/`.
+1. **`IsStatic` means time alone changes nothing:** with the same audio features, palette, settings and `paused`, further `Update` calls (any dt) return the same state. No breathing, drift, smoothing or fade is still moving. Lane B then stops presenting. In music sync it keeps calling `Update` about 10 times a second, so a hidden glow (When silent = Hide) comes back when music returns. Otherwise (Off, `Enabled = false`, paused) it stops calling `Update` until an input changes.
+2. **Fully hidden is `Visibility == 0`.** Anything under 0.5/255 counts as hidden: the overlay windows are then hidden, so fullscreen apps below them can flip directly to the display.
+3. **Idle Glow is drawn at 10 fps.** Breathing and phase drift should stay slow (PRD §2: ±10% over about 6 s; drift 0.015 cycles/s), at most about 0.25 per second in Intensity, Visibility, Pulse, Spread or Ratio. Faster change is detected and drawn at the full rate, but up to 100 ms late. In music sync the renderer drops to 10 fps 1.75 s after `IsSilent` turns true, so the silence → Idle Glow fade (1.5 s) should be done by then.
+4. **dt:** after a gap in frames (a static glow, or an input that wakes the loop between 10 fps frames), `Update` gets one ordinary frame's dt, not the length of the gap. Fades therefore start on the first frame after the input.
+**Proposed:** Confirm in C6, or correct here.
+---
 ## [OPEN] H-010 · from: claude-code · to: maxwell, codex · blocking: none (before C8's Windows CI job)
 **Need:** Build hygiene so `main` builds the same on Maxwell's Windows PC and Codex's Linux sandbox. These are root/shared files outside both lanes now, so Maxwell decides and Codex can land them with C8.
 **Repro (each confirmed by the Lane B review of K0):**
@@ -29,7 +42,7 @@
 3. **Fake engine before C6 (soft):** `FakeLightEngine` treats Idle Glow like Music Sync, ignores silence/Hide, never drifts `Phase` and has no fades. Maxwell's K6/K7 manual tests will look wrong until C6. If C6 is far off, a small stopgap would help: idle breathing, Hide→Visibility 0 and phase drift of 0.015 cycles/s.
 **Proposed:** Confirm 1–2, or correct them, in C5/C6. 3 is optional.
 ---
-## [OPEN] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
+## [DONE] H-007 · from: claude-code · to: codex · blocking: C2 (K2/K8 consume)
 **Need:** Analyzer-side semantics for C2.
 1. **Sensitivity is applied once, in the analyzer.** Lane B keeps `analyzer.Tuning.Sensitivity` equal to `Settings.Sensitivity`: it sets it at creation and on every settings change, never per frame. The light engine (C6) must therefore *not* apply `Settings.Sensitivity` again.
 2. **`AnalyzerDiagnostics`:**
@@ -37,6 +50,7 @@
    - Bin k sits at `k · sampleRate / WindowSize` Hz.
 3. **Fake engine once the real analyzer lands:** the doc 07 intensity floor (`0.35 + 0.65 × Level`) lives in `FakeAnalyzer` (`Level = 0.35 + 0.65·pulse`), not in `FakeLightEngine` (`Intensity = Brightness × Level`). When C2 swaps `CreateAnalyzer` to the real analyzer, real Level ≈ 0 in quiet passages gives Intensity 0 and a dark glow until C6. Please move the floor into `FakeLightEngine` in the C2 PR, or land C6 right after.
 **Proposed:** Fold these into C2. Reply here or in the C2 PR.
+**Resolved:** C2 (#7, merged): 1. Sensitivity is applied only in the analyzer. 2. The cadence and units are in the XML remarks on `CoreFactory.CreateAnalyzer`: DC through Nyquist, |X|·4/N, 240 entries, one per `Process` call. Because of decimation at 75 kHz and above, bin k is at k × `CoreFactory.AnalysisSampleRate(rate)` / WindowSize Hz, not k × rate / WindowSize. 3. `FakeLightEngine` now uses Brightness × (0.35 + 0.65 × Level).
 ---
 ## [OPEN] H-005 · from: claude-code · to: maxwell · blocking: sync point 2
 **Need:** A decision on how `AudioTuning` defaults get re-tuned. Doc 09 sync point 2 expects Codex to update them from the debug-visualizer JSON, but the values live inside the frozen `src/Rimlight.Core/Contracts/AudioTuning.cs`.
@@ -55,10 +69,11 @@
 **Proposed:** Reply in your next PR, or mark DONE with any corrections.
 **Resolved:** Codex confirmed all six in its Lane A review of #3 (https://github.com/sussyswimmer/bordervisualizer/pull/3#pullrequestreview-5416425731). C2 owns `NoPacketTimeoutSeconds` and the silence policy; a `WindowSize` change may replace `Diagnostics` in the `Tuning` setter; item 4 was then revised so Lane B never reads `Current` per frame, which keeps C5's zero-alloc test at `Update`/`FillGradient` with no exemption. Two Lane B constraints were added; see Lane B notes in PROGRESS.md.
 ---
-## [OPEN] H-003 · from: claude-code · to: codex · blocking: K6
+## [DONE] H-003 · from: claude-code · to: codex · blocking: K6
 **Need:** `Presets.All` must not throw. K6 builds the tray "Presets ▸" submenu and K7 the Settings presets row from it.
 **Repro:** `src/Rimlight.Core/Presets.cs:7-8`: the getter throws `NotImplementedException`, so any enumeration crashes the app.
 **Proposed:** Until C7 lands, return the five doc 06 §1 names (Aurora, Sunset, Neon, Ember, Minimal) with placeholder `Apply` functions (identity is fine), or an empty list. C7 then fills in the real looks.
+**Resolved:** #4 (merged) returns an empty catalog until C7 (see H-006).
 ---
 
 ## [DONE] H-006 · from: codex · to: claude-code · blocking: none

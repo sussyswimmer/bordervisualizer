@@ -71,13 +71,13 @@
 
 - [x] K0 scaffold — by Codex — effort: M (validation details below)
 - [x] K0 follow-up: Lane B fixes on Codex's K0 (tray Efficiency Mode off, Rimlight.exe, placeholder .ico, CsWin32 DPI check), HANDOFF H-003..H-005 — PR #3 — effort: S
-- [ ] K1 Overlay windows, D3D11 + DirectComposition, `Glow.hlsl`, multi-monitor/DPI, device-loss recovery, topmost re-assert
-- [ ] K2 `LoopbackCapture` + lock-free ring buffer + device-change restart. Render thread drains the ring → `IAudioAnalyzer` (fake until C2 lands)
-- [ ] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale
-- [ ] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip
-- [ ] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause
-- [ ] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow
-- [ ] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names
+- [x] K1 Overlay windows, D3D11 + DirectComposition, `Glow.hlsl`, multi-monitor/DPI, device-loss recovery, topmost re-assert — PR #8 — effort: L (notes below; Windows manual test pending)
+- [x] K2 `LoopbackCapture` + lock-free ring buffer + device-change restart. Render thread drains the ring → `IAudioAnalyzer` (real since C2) — PR #9 — effort: M (notes below; Windows manual test pending)
+- [x] K3 Render loop: frame pacing, waitable swap chain, idle/static optimization driven by `ILightEngine.IsStatic`, battery fps cap, render scale — PR #14 — effort: L (notes below; Windows manual test pending)
+- [x] K4 `NowPlayingService` (GSMTC), thumbnail decode to 64×64 BGRA → `IPaletteExtractor`, debounce/retry quirks, tray tooltip — PR #18 — effort: M (notes below; Windows manual test pending)
+- [x] K5 System watchers: monitors, power/battery, lock, display-off, fullscreen detection, per-monitor pause — PR #19 — effort: M (notes below; Windows manual test pending)
+- [x] K6 Tray icon + menu, single instance, hotkey, startup registration, first-run flow — PR #22 — effort: M (notes below; Windows manual test pending)
+- [x] K7 Settings window (WPF-UI, Mica) with all 6 pages, live preview, presets row, monitor list with friendly names — PR #24 — effort: L (notes below; Windows manual test pending)
 - [ ] K8 `--debug-visualizer` window (binds `AnalyzerDiagnostics` + live `AudioTuning` sliders + "Copy params as JSON") and `--demo` mode
 - [ ] K9 Velopack bootstrap in App (`VelopackApp.Build().Run()`), update checks, "Update ready" toast
 - [ ] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues
@@ -93,6 +93,372 @@
 - Verified with .NET SDK 8.0.425 on Linux: `dotnet build Rimlight.Core.slnf -c Release` and `dotnet build Rimlight.sln -c Release` both pass with 0 warnings / 0 errors. Both solution-filter and full-solution test runs pass: 1 passed, 0 failed, 0 skipped.
 - H.NotifyIcon.Wpf is pinned to 2.3.2 (includes .NET 8 assets); 2.4.1 targets .NET 10. No DSP accuracy or performance figures apply to K0 fakes.
 - Manual Windows check pending: run `dotnet run --project src/Rimlight.App -c Release`, verify the purple placeholder tray icon and tooltip, then choose “Quit Rimlight”; the icon and process should exit cleanly.
+
+## K1 notes
+
+- **Structure (`src/Rimlight.Platform/Overlay/`):**
+  - `OverlayHost` runs one overlay thread that owns every window and GPU object and pumps their messages. Nothing crosses threads except the settings snapshot (`Volatile`) and two request flags, so there are no locks.
+  - The thread waits on a high-resolution waitable timer, a wake event and the message queue (`MsgWaitForMultipleObjectsEx`).
+  - The app supplies each frame through `IOverlayFrameSource`: a `LightState` plus the 64-texel gradient, refilled only when the colors change. K1's `StaticGlowSource` (App) draws the default settings' manual colors. K3 replaces it with analyzer → light engine.
+- **Windows (doc 04 §1):**
+  - `WS_POPUP` with `WS_EX_NOREDIRECTIONBITMAP | LAYERED | TRANSPARENT | TOPMOST | TOOLWINDOW | NOACTIVATE`, `SetLayeredWindowAttributes(255)`, `HTTRANSPARENT` / `MA_NOACTIVATE`, `DWMWA_EXCLUDED_FROM_PEEK`, and `WDA_EXCLUDEFROMCAPTURE` when Hide from screen capture is on.
+  - Each window is created directly at its monitor's physical rectangle, so the initial placement never sends `WM_DPICHANGED`. Later `WM_DPICHANGED` messages are ignored apart from triggering a rebuild.
+  - Topmost is re-asserted on `EVENT_SYSTEM_FOREGROUND`, at most every 250 ms, with a trailing re-assert so the last change in a burst still counts.
+- **Monitors:**
+  - One overlay per selected monitor (All / PrimaryOnly / Custom by `DISPLAY_DEVICE.DeviceID`), at `rcMonitor` or, with Cover taskbar off, `rcWork`.
+  - A hidden top-level helper window receives `WM_DISPLAYCHANGE` and `WM_SETTINGCHANGE(SPI_SETWORKAREA)` (message-only windows don't get broadcasts). Overlays receive `WM_DPICHANGED`.
+  - Each of these schedules a rebuild 300 ms later. The rebuild matches overlays by GDI device name, so unchanged overlays don't flicker.
+  - With no overlay (no selected monitor present) the loop stops its frame timer and releases the GPU until a display or settings change brings one back.
+  - DIP sizes become pixels at each monitor's `GetDpiForMonitor` effective DPI.
+- **GPU (doc 04 §2):**
+  - One D3D11 device (hardware, else WARP) and one DirectComposition device are shared by every overlay.
+  - Each overlay has a composition swap chain: B8G8R8A8_UNORM, premultiplied, FLIP_SEQUENTIAL, 2 buffers, maximum frame latency 1. Its latency object is polled without blocking, so a frame is skipped rather than queued when DWM or the display is behind.
+  - `DXGI_ERROR_DEVICE_REMOVED/RESET` from Present, resize or creation releases everything. The device and surfaces are recreated on the next frame and retried every second while that fails; the windows stay.
+  - Debug builds have a tray item, "Simulate GPU device loss (debug)", that runs the same path (doc 07 Phase 1).
+  - `Glow.hlsl` is embedded and compiled at runtime (vs_4_0 / ps_4_0, feature level 10.0+). The gradient texture is R16G16B16A16_FLOAT, which every feature level ≥ 10.0 must be able to filter (32-bit float filtering is optional there).
+- **Spec clarifications and deviations (doc 04 §3):**
+  - **Rounded glow field (deviation):** the glow's distance field has corners of radius ≥ 2 × spread. With doc 04's square field, the glows from two edges meet in a visible 45° crease (a picture-frame bevel); rounded, the light pools softly into the corners. The solid core still follows `CornerRadiusDip`.
+  - **Perimeter coordinate:** arc length along a rounded path (radius ≥ 6 × spread and ≥ 2 × the core), starting at the top-left corner and running clockwise (H-008). It is continuous through the corners, at most 0.0008 per pixel within 150 px of the edge. Its seam (the medial axis, ≥ that radius inside) is hidden: between 3 and 6 spreads deep the colour blends to the gradient's mean, so a wide glow that reaches the screen centre shows no seam.
+  - **Glow → spread (PRD §1):** "0 means a hairline; 100 means about 35% of the shorter screen dimension". Spill is taken as three e-folding distances, with a squared slider so it feels even. The e-folding distance is max(1 DIP, Glow² × 0.35 / 3 × shorter side); the default 0.45 gives about 25 px at 1080p.
+  - **Core at thickness 0** draws no line.
+  - **sRGB:** the gradient is linear RGB (H-008). The 8-bit swap chain is read by DWM as sRGB-encoded, so the shader encodes before premultiplying.
+  - **Dither** is ±0.5/255 interleaved gradient noise, added to all four premultiplied channels so every colour channel gets the full half LSB. Pixels whose alpha is below half a code value return early ("cost almost nothing").
+  - **Visibility** multiplies alpha like Intensity (H-008).
+- **Left for later tasks:** FpsCap "native" (0) runs at 60 fps until K3 adds DwmFlush pacing. K3 also adds idle/static throttling, Half render scale and the battery cap. K5 adds fullscreen pause and power/lock watchers. Logging is `Trace` (rebuilds, GPU state) until logging lands. The tray tooltip, settings UI and live settings come in K6/K7.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes.
+  - `Glow.hlsl` compiles under DXC with warnings as errors (vs_6_0/ps_6_0, `-HV 2018`).
+  - A NumPy port of the pixel shader renders the expected look and checks perimeter continuity. Every Vortice and CsWin32 call was checked against the 3.8.3 API surface and the generated P/Invoke sources.
+  - An adversarial multi-agent review (Win32, D3D/DComp, shader, threading, monitors, spec/performance) runs on this PR; its upheld findings are fixed here before merge.
+  - Nothing has run on Windows yet: Maxwell's manual checklist is in the PR.
+
+## K2 notes
+
+- **Structure:**
+  - `LoopbackCapture` (`src/Rimlight.Platform/Audio/`) runs a supervisor on its own MTA thread; NAudio's WASAPI objects must not live on the WPF STA thread.
+  - Each capture session opens the default render endpoint (`DataFlow.Render`, `Role.Multimedia`) in loopback. It converts every packet to mono float and writes it into an `AudioRingBuffer`, all on the audio thread.
+  - `LoopbackCapture.Current` publishes the session's `CapturedAudio` (ring, sample rate, device name, format). A new instance after every restart signals a device change.
+  - `MusicGlowSource` (App, replacing K1's static source) runs on the overlay thread each frame: it drains the ring, calls `analyzer.Process`, then `lightEngine.Update`, and returns the `LightState`. On a device change it calls `analyzer.Reset()`, which keeps `IsSilent`. Analyzer `Sensitivity` comes from settings (H-007).
+- **Ring buffer:**
+  - Single producer, single consumer; capacity is 2 s rounded up to a power of two (131,072 samples at 44.1/48 kHz).
+  - Each side owns one counter and publishes it with a release store (`Volatile.Write`); the other side reads it with an acquire load. It is correct on x64 and ARM64, with no locks and no waits.
+  - When the reader falls 2 s behind (a stalled render thread), the newest samples are dropped and counted (`DroppedSamples`) rather than overwriting unread ones.
+  - A read into a smaller destination skips the oldest, so the newest audio always arrives.
+- **Spec clarifications and deviations (doc 03 §1, §3):**
+  - **Lower-latency loopback (deviation from using `WasapiLoopbackCapture` as is):** NAudio's class always uses a 100 ms buffer polled every ~50 ms (really ~62 ms at the default 15.6 ms timer tick), so packets can be ~60 ms old. That is outside doc 03 §3's 10–20 ms loopback budget. Our own capture loop on NAudio's `AudioClient`/`AudioCaptureClient` opens the loopback stream event-driven (supported from Windows 10 1703; the minimum is 2004), so each ~10 ms engine packet is read as it is produced. The 200 ms buffer is only overflow headroom; a 100 ms wait timeout covers silence (loopback signals nothing then), a stop, and a driver that never signals. The thread runs above normal priority. The loop replaces `WasapiCapture` because that class's capture thread calls `IAudioClient::Stop` in a `finally`, which throws on an invalidated device (unplug) on a thread with no handler and ends the process. Its `Dispose` also races its own thread. Packets go straight from the WASAPI buffer into the ring.
+  - **Formats:** 32-bit float, or 16/24/32-bit PCM by container size (24-in-32 is read as 32-bit), detected from the format tag or the `WAVE_FORMAT_EXTENSIBLE` subtype. Channels are averaged to mono. Any other mix format fails the session, which is then retried with backoff.
+  - **Restarts:** a default render device change (Multimedia role, settled 250 ms) restarts at once. A stopped capture (unplug, format change, exclusive takeover) or no device at all is retried after 0.5, 1, 2, 4, then 5 s, and the backoff resets after a 5 s healthy session. While there is no device, `Current` is null and the analyzer gets empty spans (silence after its timeout).
+  - **Allocations:** none per packet. Packets are converted straight from the WASAPI buffer into the ring through a mono scratch array allocated once per session.
+  - **Privacy:** only a loopback stream on a render endpoint is ever opened. No capture endpoint and no microphone is touched, and nothing is sent anywhere.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes.
+  - A scratch harness (not committed; Lane B has no test project) checks the ring's semantics and stress-tests it between two threads: 102 M samples, 0 out-of-sequence values, including while it was full and with small reads. It also checks the mono conversion is exact for float32, int16, int24 (sign extension), int32 and 5.1, and that convert + write + read allocates 0 bytes.
+  - An adversarial multi-agent review (WASAPI/NAudio, concurrency, integration) runs on this PR; its upheld findings are fixed here before merge.
+
+## K3 notes
+
+- **Structure:**
+  - `FramePacer` (`src/Rimlight.Platform/Overlay/`, no Windows calls) decides how the overlay thread waits after each frame: full rate, 10 fps, or blocked. `OverlayHost` waits accordingly in `MsgWaitForMultipleObjectsEx`, so it keeps pumping messages in every mode.
+  - `IOverlayFrameSource.NextFrame(dt, settings, paused, gradient)` gets the settings snapshot and the pause state every frame. It returns `OverlayFrame(state, gradientChanged, FrameMotion)`:
+    - `Full`: music, or a transition.
+    - `Slow`: Idle Glow breathing.
+    - `Listening`: static, but music could change it.
+    - `Still`: static until an input changes.
+  - Inputs for K5 are thread-safe single-field writes followed by a wake: `SetPaused`, `SetOnBattery` (starts from `GetSystemPowerStatus`), and `SetPausedMonitors` (GDI device names; `DisplayMonitors.PrimaryDeviceName()`). `OverlayHost.Status` (`RenderStatus`) reports pace, frames/s, presents/s, half scale and shown overlays.
+  - `LoopbackCapture.SetActive` opens or closes the loopback stream on the capture thread, and is inactive until first asked. `MusicGlowSource` asks for audio only in Music Sync while the glow is enabled and not paused.
+  - **App:**
+    - `AppController` is the composition root; `App.xaml.cs` only creates and disposes it.
+    - `SettingsService` holds the immutable snapshot. `Update` runs on the UI thread and raises `Changed`. Saves go through `ISettingsStore` with a 500 ms debounce, serialized, and are flushed on exit.
+    - The tray has "Glow on" and "Mode". Debug builds add "Render test (debug)": the live status plus stand-ins for K5/K7 (When silent, FPS cap, On battery, simulated battery, pause everywhere, pause primary, device loss).
+- **Pacing (doc 02):**
+  - The full rate is FpsCap (0 = the primary monitor's refresh, from `EnumDisplaySettings`). It never exceeds that refresh, and is at most 30 fps under "Reduce on battery".
+  - Source motion picks the pace:
+    - `Full`: full rate.
+    - `Slow`: 10 fps.
+    - `Listening`: 10 Hz frames that present nothing new.
+    - `Still`: no frames; the thread waits only on the wake event and messages, with no timer.
+  - Host overrides:
+    - An unfinished present or a per-monitor fade runs at the full rate until it is done.
+    - `Slow` runs at the full rate for 1 s after an input change, and for 0.5 s after a gradient refill or a state change faster than 0.25/s (idle breathing is about 0.1/s).
+    - With nothing on screen, frames run at 10 Hz.
+  - **Static:** each surface remembers what it last presented and skips Draw and Present while the new constants look the same: identical geometry, values within half an 8-bit code value, phase within 0.0002.
+  - **Hidden:** an overlay whose visibility drops below 0.5/255 presents one transparent frame, then hides its window. DWM then composes nothing of ours, and fullscreen apps below can flip directly. The window is shown again, topmost, just before its next visible frame; windows are created hidden.
+  - **Time:** a gap over 0.25 s, or a frame that an input brought forward, gets one full-rate frame of dt. There are no dt spikes, and fades start on the frame after the input.
+  - **Capture** is closed whenever audio can't change the glow: Off, `Enabled = false`, Idle Glow, and paused. The analyzer then hears silence. With When silent = Hide, a static invisible glow keeps listening at 10 Hz.
+- **Battery and render scale (PRD §5, doc 04 §2):**
+  - "Reduce" caps the rate at 30 fps and renders at half scale.
+    - Each swap chain is half the window's size, rounded up. Its DirectComposition visual is stretched back by `SetTransform` (an exact window/buffer ratio), with linear interpolation and hard borders so the edge-hugging core stays solid.
+    - Constants are computed in swap-chain pixels (DPI scale × render scale), so every pixel measure halves and `Glow.hlsl` is unchanged.
+    - The scale change resizes buffers before the pipeline is bound, because a resize clears the context state. The transform is committed right after that frame's presents.
+  - "Pause" counts as paused.
+- **Per-monitor pause (doc 04 §4):** each overlay fades its own visibility multiplier over 300 ms. Once every overlay is paused and fully faded, the engine also gets `paused`, so it goes static and the loop stops.
+- **Spec clarifications and deviations:**
+  - **Native pacing waits on the frame-latency object, not `DwmFlush` (doc 02).**
+    - When the full rate equals the refresh (native, or a cap at least 97% of it, so 60 on 59.94 Hz qualifies), the thread waits on the overlay swap chain's frame-latency object inside `MsgWaitForMultipleObjectsEx`. With a maximum latency of 1, it is signaled when DWM takes the previous frame.
+    - `DwmFlush` would block for up to a frame without pumping messages. It also follows DWM's clock, not our surface.
+    - A successful wait takes the frame, so the surface remembers it holds it (`HoldsFrame`) and presents without waiting again; the host never waits on a frame it holds.
+    - A 100 ms timer covers a display that stops refreshing.
+    - Vsync is used only on a surface whose monitor has the pacing refresh rate, so a faster secondary can't exceed the cap. With an unknown refresh rate only Native uses vsync.
+    - Lower caps use K1's waitable timer. Cap 60 on a 60 Hz display is now vsync-paced, which removes the timer's drift against the refresh.
+  - **A cap above the refresh runs at the refresh** (120 on 60 Hz → 60).
+  - **Capture also closes in Idle Glow and while paused,** not only for Off and disabled. K7's live level meter and K8's visualizer will need a way to request audio while they are open.
+  - **The `AppController`/`SettingsService` skeleton lands in K3** because K3 needs live settings. The store stays in memory until C7.
+  - **What the loop assumes about C6** (`IsStatic` means time alone changes nothing; hidden means `Visibility == 0`; idle motion is slow; dt after gaps) is in HANDOFF H-011.
+- **Left for later:**
+  - K5 drives `SetPaused`, `SetOnBattery` (`WM_POWERBROADCAST`) and `SetPausedMonitors`.
+  - K7/K8 need an "audio wanted" input on the source.
+  - Swap chains stay allocated while Off. They could be released after a long Off if memory matters.
+  - The fake engine has no fades, no Hide and no breathing, so those paths can't be seen on Windows until C6.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Signatures were checked against CsWin32 0.3.346's generated sources (`EnumDisplaySettings`/`DEVMODEW`, `GetSystemPowerStatus`, `MsgWaitForMultipleObjectsEx`, `SWP_HIDEWINDOW`), decompiled Vortice 3.8.3 (`IDCompositionVisual.SetTransform(Matrix3x2)`, `SetBitmapInterpolationMode`, `SetBorderMode`) and H.NotifyIcon 2.3.2 (the WPF `ContextMenu` opens with `IsOpen`, so `Opened` fires).
+  - **Scratch harness 1 (not committed; Lane B has no test project)** links `FramePacer.cs` and `GlowConstants.cs`.
+    - It checks 14 cap/refresh/battery combinations, every pace decision, the change-rate threshold, the `LooksLike` tolerances, and that half scale halves every pixel measure.
+    - Pacer + constants allocate 0 bytes over 100,000 frames.
+    - An 85 s timeline with a C6-like engine reaches these steady states:
+      - music: 60 frames and presents/s
+      - silence → Idle Glow: 10/10
+      - Hide: 10 frames/s, 0 presents, hidden, listening
+      - Off, global pause and single-monitor pause: 0/0, capture closed
+      - Idle Glow: 10 fps
+      - Reduce: 30 fps
+    - Timings: music returns from Hide within 83 ms. Off and pause stop after 283 ms, and a monitor pause hides after its 300 ms fade. The largest dt is 100 ms.
+  - **Scratch harness 2** runs the real `MusicGlowSource` (real analyzer, fake engine) on Linux:
+    - motion is correct in every mode
+    - gradient refills are exact
+    - 0 bytes per frame in music sync, Idle Glow, Off and paused
+    - `SettingsService` debounces and flushes saves
+  - Three bugs found by walking through scenarios were fixed before the PR:
+    - the half-scale resize cleared the bound pipeline
+    - fades jumped up to 100 ms ahead when an input arrived between 10 fps frames
+    - vsync on a faster secondary monitor could exceed the cap
+  - Nothing has run on Windows yet: Maxwell's checklist, with CPU measurement steps, is in #14.
+
+## K4 notes
+
+- **Structure:**
+  - `NowPlayingService` (`src/Rimlight.Platform/Media/`) reads Windows' media sessions on the thread pool.
+    - `RequestAsync` runs once. If it throws, `IsAvailable` is false and the glow keeps the manual colors for the session.
+    - Manager events (`CurrentSessionChanged`, `SessionsChanged`) and every session's `MediaPropertiesChanged` and `PlaybackInfoChanged` only schedule a refresh. `RefreshScheduler` debounces them: 250 ms after the last event, and at least once a second under a stream of events. One refresh runs at a time.
+    - A refresh picks the playing session (Windows' current one if several play, or if none plays) and reads its properties. The track ID is `app|artist|title`. The thumbnail is decoded and passed to `IPaletteExtractor`.
+  - Published, immutable and by reference: `Current` (`NowPlaying`), `AlbumPalette` (null = manual colors), `Art` (≤ 64×64 straight-alpha BGRA8, for K7's "Now playing" row). `NowPlayingChanged` and `AlbumArtChanged` fire on the pool only on real changes.
+  - `AlbumArtDecoder`: `BitmapDecoder` with a `BitmapTransform` (Fant, ≤ 64 px on the long side, aspect kept, never enlarged), `Bgra8`/`Straight`, EXIF and color profile ignored. Rows are repacked to exactly width × height × 4 bytes, which the real extractor (C4) requires.
+  - `MusicGlowSource` reads `AlbumPalette` once per frame.
+    - Album colors are used in Album Art mode without Override; the manual colors otherwise, and whenever there is no album palette.
+    - `SetTarget` gets 800 ms for album changes and album/manual switches, 200 ms for manual edits. It reports `Full` motion while the blender animates.
+  - `OverlayHost.RequestFrame()` wakes a static glow for a new palette.
+  - `TrayToolTip` builds the tooltip, and `AppController` marshals it to the UI thread (coalesced) and disposes the service first.
+  - The tray menu gains doc 06's "Colors ▸". Debug builds add a media status line and an "Override album color" toggle.
+- **Spec clarifications and deviations (doc 05 §1, §3; doc 06 §2):**
+  - **`BitmapAlphaMode.Straight`** (doc 05 says "premultiplied-ignore"): the extractor reads straight color and skips alpha < 128, and `Ignore` leaves the alpha byte undefined.
+  - **The tooltip names the track only while it plays**; paused reads "Waiting for music". Doc 05 exposes `IsPlaying` for the tooltip.
+  - **Tooltip text:**
+    - It is cut to 127 UTF-16 units (NOTIFYICONDATA.szTip) between whole text elements, with "…". The title gives way before the artist.
+    - Control characters become spaces.
+    - A failed `Shell_NotifyIcon` update is caught (H.NotifyIcon throws).
+  - **No art → manual colors** (doc 05 also allows keeping the previous palette). While a new track's art is read (up to about 1 s, including the 750 ms retry), the previous colors stay, so tracks never flash the manual colors in between. A track without a palette is read again on its later events, because some apps send a generic icon first and the cover later.
+  - **200 ms only for a manual edit while manual colors show**; every switch between album and manual colors uses 800 ms.
+  - **Robustness additions:**
+    - All sessions are subscribed, so a session that starts playing is noticed even if Windows keeps another one current.
+    - The debounce waits at most 1 s.
+    - Properties and decodes are bounded at 5 s.
+    - A session manager whose process died (RPC disconnected, e.g. an Explorer restart) is requested again every 5 s.
+  - `NowPlaying.SourceApp` is the raw `SourceAppUserModelId`. Track text is never logged.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Every WinRT, CsWinRT, H.NotifyIcon and WPF call was checked against the decompiled assemblies:
+    - the SDK projection 10.0.19041.57
+    - `AsTask(token)` only cancels the operation, hence `WaitAsync`
+    - `EventSource` add/remove semantics
+    - `TrayIcon.UpdateToolTip` throws, and `SetTo` truncates at 127
+    - `Dispatcher.InvokeAsync` after shutdown
+  - The real C4 extractor accepts the decoded layout and rejects padded rows.
+  - **Scratch harness (not committed), 73 checks:**
+    - session choice, decode sizing and repacking, and tooltip fitting over 20,000 random titles with emoji, ZWJ and combining marks
+    - the `SrgbHex` round trip
+    - scheduler timings (debounce, burst, endless stream, retry, 4-thread hammering)
+    - the unavailable path on Linux
+    - `MusicGlowSource`'s full palette-selection matrix with a recording blender, including 0 bytes per frame
+  - The harness found one scheduler bug, fixed before the PR: a compare-and-swap claim could spin forever under a stream of events.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #18.
+- **Left for later:**
+  - **K6:**
+    - Re-apply the tooltip after `TaskbarCreated` (Explorer restart). A tooltip update refused by the shell is otherwise retried only on the next track.
+    - Check whether a single `&` shows in the tooltip.
+  - **K7:**
+    - The "Now playing" row reads `Current` and `Art` (compare `Art.TrackId` with `Current.TrackId` to hide stale art), with swatches via `SrgbHex.Format`.
+    - Subscribe to the two events and marshal them to the dispatcher.
+  - **C4/C5 (via K10):** with the fakes, colors are averaged, never "no art", and switch instantly.
+
+## K5 notes
+
+- **Structure (`src/Rimlight.Platform/Watchers/`):**
+  - `SystemWatcher` runs its own thread with a hidden top-level window and a `GetMessage` loop. `WM_POWERBROADCAST` and `WM_DISPLAYCHANGE` reach top-level windows only.
+    - It publishes an immutable `SystemState` (locked, disconnected, suspended, display off, battery, remote session, fullscreen everywhere, fullscreen monitors) on every real change.
+    - It raises `StateChanged` and `Resumed` (wake, unlock, reconnect, display back on) on its own thread.
+    - `Start` waits up to 2 s for the first state. `Dispose` unregisters everything on the watcher thread, then destroys the window.
+  - `PowerWatcher`:
+    - `PBT_APMSUSPEND` / `PBT_APMRESUMEAUTOMATIC` / `PBT_APMRESUMESUSPEND`.
+    - `PBT_APMPOWERSTATUSCHANGE` → `GetSystemPowerStatus`.
+    - `RegisterPowerSettingNotification(GUID_CONSOLE_DISPLAY_STATE)`: 0 is off, dimmed is on.
+  - `SessionWatcher`:
+    - `WTSRegisterSessionNotification(NOTIFY_FOR_THIS_SESSION)` for lock/unlock and console/remote connect/disconnect.
+    - The state at start comes from `WTSSessionInfoEx`, so a start while locked starts paused.
+    - Registration is retried every 5 s while the session service is still starting.
+  - `FullscreenDetector` gathers facts from Windows, and `FullscreenRules` (pure, no Windows calls) decides.
+    - It re-evaluates on `EVENT_SYSTEM_FOREGROUND`, every 2 s, on `WM_DISPLAYCHANGE`, and right after a wake or unlock.
+    - It runs only while `PauseInFullscreen` is on.
+  - `OverlayHost.CheckDevices()` (new, thread-safe) asks the GPU device on the next frame and schedules K1's debounced monitor rebuild, which also catches a replaced adapter.
+  - Paused monitors are now applied before settings, so overlays created at start begin paused on a fullscreen monitor.
+  - **App:** `SystemPauseBridge` maps the state onto `SetPaused` / `SetOnBattery` / `SetPausedMonitors` (sent only on change) and `Resumed` onto `CheckDevices`. One lock orders the watcher and UI threads; it is never taken per frame.
+    - The Debug menu's simulated battery and pauses (K3) are combined with the real state.
+    - The Debug menu adds a `System:` status line and a "Pause in fullscreen apps" toggle.
+- **Effects:**
+  - Lock, a disconnected session, sleep, display off, a screen saver (`QUNS_NOT_PRESENT`) and presentation mode pause everywhere. That goes through the engine's `paused`: no frames, and the capture is closed.
+  - Fullscreen apps pause per monitor through K3's 300 ms monitor fade.
+  - Battery feeds K3's "On battery".
+- **Spec clarifications and deviations:**
+  - **Folder `Watchers/`, not doc 02's `System/`:** a `…System` namespace would shadow `System`. K6's hotkey and startup classes can go to `Platform/Shell/`.
+  - **Own thread and top-level window, not doc 02's message-only window:** message-only windows get no broadcasts. Keeping it off the overlay thread means shell queries and session RPCs never touch frame timing.
+  - **Fullscreen pauses only its monitor (doc 07 Phase 5 over doc 04's literal `QUNS_BUSY` → pause):**
+    - Doc 04's rule: the foreground window's `GetWindowRect` equals its monitor's `rcMonitor`. Maximized windows never match, because of their resize borders.
+    - With `QUNS_BUSY`, a non-maximized window that covers its monitor also counts.
+    - `QUNS_RUNNING_D3D_FULL_SCREEN` pauses the foreground window's monitor, or everything without a window to tie it to.
+  - **Sticky (addition):** a fullscreen window keeps its monitor paused while the focus is on another monitor. This lasts until it leaves fullscreen, moves, is minimized, hidden, cloaked or closed, or another window is activated on that monitor.
+  - **Exclusions:** every window of the shell's process (desktop, taskbar, Alt+Tab, Task View; F11 File Explorer as a side effect), `Progman`/`WorkerW`, the desktop window, and every window of our process (the overlays, the future settings window).
+  - **Detection runs whenever `PauseInFullscreen` is on**, even while the glow is off, so turning the glow on during a fullscreen app never flashes it. The cost is a few user32 calls every 2 s.
+  - **Display off** applies only while the session is on the physical console (`WTSGetActiveConsoleSessionId`).
+  - **Modern Standby** sends no suspend, and display off covers it. The display coming back also clears a missed suspend.
+  - **RDP (decided):** the glow keeps working in a connected remote session and pauses while disconnected; fast user switching pauses it too. A reconnect re-checks the GPU and monitors. RDP bandwidth is K11's to measure.
+  - **Do Not Disturb / Focus assist** has no documented API; only what `SHQueryUserNotificationState` reports pauses.
+  - **F11-style fullscreen** (no foreground change) is found by the 2 s poll, per doc 04's cadence.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Every new Win32 call, struct and constant was checked against CsWin32 0.3.346's generated sources. That includes `GUID_CONSOLE_DISPLAY_STATE`'s value, `POWERBROADCAST_SETTING`'s inline data, `WTSINFOEX_LEVEL1_W`, `QUERY_USER_NOTIFICATION_STATE`, and `WTS_CURRENT_SERVER_HANDLE` living on `HANDLE`.
+  - **Scratch harness (not committed)** linking `FullscreenRules.cs` and `SystemState.cs`, 35 checks:
+    - exact and loose cover, and maximized windows never pausing
+    - `QUNS_BUSY` never pausing everywhere
+    - D3D with and without a window
+    - screen saver and presentation mode
+    - every sticky keep and drop case
+    - `SystemState` equality and `PausesEverywhere`
+  - Nothing has run on Windows yet: Maxwell's checklist is in #19.
+- **Left for later:**
+  - **K7:** the Behavior page's "Pause in fullscreen apps" toggle (already wired through `settings.Changed`). `SystemState` can feed diagnostics.
+  - **K11:** sleep/hibernate, Modern Standby, RDP (bandwidth too), TDR and hotplug on real hardware. Also check whether `QUNS_NOT_PRESENT` ever shows up spuriously, for example in a remote session.
+  - **C6 (via K10):** global pauses fade over 300 ms once the real engine lands (H-008); with the fake they are instant.
+
+## K6 notes
+
+- **Structure:**
+  - `src/Rimlight.Platform/Shell/` (namespace `Rimlight.Platform.Shell`):
+    - `HotkeyGesture`: pure parser and writer for H-009's `Modifier+…+Key` (105 key names; `TryCreate` is K7's recorder seam).
+    - `GlobalHotkey`: `RegisterHotKey` + `MOD_NOREPEAT` on a message-only window on the UI thread. `Register` returns a `HotkeyStatus` (None, Registered, Invalid, InUse, Failed).
+    - `SingleInstance`: mutex `Local\Rimlight-{SID}` + a current-user pipe (`Rimlight-{SID}-{session}`). One server instance serves every start (`Disconnect`), reads at most 64 bytes with a 2 s timeout. A second start sends `show-settings` after `AllowSetForegroundWindow` for the running process; a `--background` start sends nothing. If nobody answers, the new start waits up to 5 s to take over.
+    - `StartupRegistration`: HKCU `Run` value `Rimlight` = `"<launcher>" --background`. The launcher is Velopack's stub in the install root when installed (`sq.version` + `..\Update.exe`), else `Environment.ProcessPath`. `Remove()` is for K9's uninstall hook.
+    - `SystemTheme`: light/dark app mode and the dark title bar.
+  - App:
+    - `AppController` owns the hotkey, the startup entry, the first-run flow and the hooks: `IShowSettings` (K7 sets `SettingsWindow`), `IUpdateCheck` (K9 sets `Updates`), `Hotkey` + `HotkeyChanged` (K7's inline warning), `StartupRegistered`, `IsFirstRunSession` (K7's one-time tray toast), `Tray.Notify` + `NotificationClicked` (K7/K9).
+    - `TrayIconHost`: doc 06's full menu, click/double-click commands, keyboard menu, dimmed icon, re-creation with the icon and tooltip re-applied. `TrayIconImages` builds both icons at `SM_CXSMICON`.
+    - `WelcomeWindow`: first run, and the stand-in for Settings until K7.
+    - `Logging/RollingFileLog` (a `TraceListener`) + `Logging/AppLog` (start line, unhandled exceptions, open folder).
+    - `App.xaml.cs`: claim → log → controller; exit releases the mutex last.
+- **Spec clarifications and deviations:**
+  - **Logging** is a rolling-file `TraceListener` fed by the existing `Trace` calls, not `Microsoft.Extensions.Logging` (doc 02): no package, same folder and 5 × 1 MB. Lines are queued and written 500 ms later on the pool, the file is opened per batch with full sharing, a burst rolls over line by line, lines over 32 K characters are cut, and it never traces its own failures.
+  - **Hotkey rules:** Ctrl, Alt or Win required, except F1–F24; F12 alone is reserved by Windows. Punctuation keys are named by their US position (`Plus`, `Minus`, `Backtick`, …).
+  - **Enter/Space on the focused icon open the menu** (Windows can send `NIN_KEYSELECT` twice for Enter, which would toggle twice).
+  - **The icon dims only for "Glow on" off,** not for Mode = Off.
+  - **`FirstRunComplete` is set when the welcome is shown.** A normal start (no `--background`) of a set-up app opens Settings; until K7 that is the welcome window.
+  - **The startup entry is checked at every start** (repairs a stale path). A build that isn't installed never replaces an entry pointing to an installed copy. Task Manager's `StartupApproved` switch is not touched.
+  - **Tray icon size:** both icons are built at `SM_CXSMICON` (system DPI); H.NotifyIcon's own conversion picks 16 px at every DPI.
+  - **Tooltip `&`** becomes the fullwidth `＆` (K4 follow-up): the shell can take a lone `&` as an access-key marker.
+  - **Unhandled UI exceptions** are logged and survived, so the tray stays usable.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - Signatures checked against CsWin32 0.3.346's generated sources; H.NotifyIcon 2.3.2, .NET 8's Windows pipes and `System.Drawing.Icon`, and Velopack 1.2.161 (locator and vpk's stub naming) decompiled.
+  - **Scratch harness (not committed), 432 checks:** the hotkey parser (every key round-trips), the rolling log (rotation, limits, concurrency, `Trace` integration, failures), the single instance across real processes (hand-over, background start, silent and junk clients, take-over after exit and after a kill), the tooltip. It found two problems, fixed before the PR: a large batch could grow one log file past 1 MB, and re-creating the pipe between clients could make a waiting start miss it. K4's harness still passes against the new tooltip.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #22.
+- **Left for later:**
+  - **K7:** set `SettingsWindow`; the Behavior page's Launch at startup and hotkey recorder (`HotkeyGesture.TryCreate` + `KeyInterop.VirtualKeyFromKey`, warning from `AppController.Hotkey`); the one-time "still running in the tray" toast via `IsFirstRunSession` and `Tray.Notify`; the welcome then shows its "Open Settings" button; theme the tray menu.
+  - **K9:** set `Updates`; "Update ready" via `Tray.Notify` + `NotificationClicked`; call `StartupRegistration.Remove(AppInfo.Name)` from Velopack's uninstall hook; check that the stub passes `--background` through.
+  - **K10:** with C7's store, the welcome shows once and `LaunchAtStartup`/`ToggleHotkey` persist.
+
+## K7 notes
+
+- **Structure:**
+  - `src/Rimlight.App/SettingsUi/` (namespace `Rimlight.App.SettingsUi`; a `…Settings` namespace would shadow the Core record):
+    - `SettingsWindow`: a WPF-UI `FluentWindow` with Mica, the title bar, and a `NavigationView` over six `ISettingsPage` user controls, handed to it by an `INavigationViewPageProvider`.
+      - Close hides the window (`AppController.IsExiting` lets Quit and session end really close it), with the one-time tray toast.
+      - Only the selected page is active, and only while the window is shown and not minimized. Outside events, timers and the audio request stop otherwise.
+    - `SettingsWindowLauncher` is K6's `IShowSettings`. It creates the window on first use, makes it the app's main window, and falls back to the welcome if it can't be built.
+    - The pages:
+      - Appearance: `GlowPreview` drawn by `GlowRaster`, the shape sliders, Cover taskbar, and preset chips.
+      - Color: `GlowColorEditor` ×2 and `SrgbColor`, plus the now-playing row.
+      - Motion: mode, when quiet, sensitivity, and the level meter.
+      - Displays: `MonitorChoice` and the frame rate limit.
+      - Behavior: the toggles, battery, and the shortcut recorder.
+      - About.
+    - Shared: `PageEdits` (live edits, guarded while a page shows the settings) and `PageStyles.xaml`.
+    - `UiTheme` loads WPF-UI app-wide, follows Windows' app mode and high contrast, and applies the brand accent.
+  - Platform:
+    - `DisplayMonitors.Describe()` returns the public `MonitorInfo`, with Windows' monitor names from the CCD API (`MonitorNames`).
+    - `HotkeyGesture` refuses Windows' window and task keys.
+  - App:
+    - `MusicGlowSource.SetAudioWanted` and `LatestAudio` (`AudioReading`: one packed `long`, written with `Volatile`).
+    - `AppController`: `RequestAudio()` (counted, for K8 too), `SuspendHotkey()` / `ResumeHotkey()`, `Glow`, `IsExiting`, and `EndSession()` (formerly `Flush()`).
+    - The tray re-syncs the theme when its menu opens.
+- **Spec clarifications and deviations:**
+  - **WPF-UI 4.3.0** (newest, MIT, net8 assets) is loaded in code at start, not in `App.xaml`. A second start that only hands over doesn't pay for it, and the tray menu gets Fluent light/dark styles too (K6 follow-up). A `--background` start pays a one-time load.
+  - **Theme:** it follows `AppsUseLightTheme` (as the welcome does) and `SystemParameters.HighContrast`, not WPF-UI's guess from the `.theme` file name. The accent is the brand #7C5CFF, not the system accent.
+  - **Pages are user controls with their own scroll viewer.** WPF's `Frame` is an inheritance boundary (`SkipToAppNow`), so each page sets its foreground and font and merges `PageStyles.xaml`. WPF-UI styles controls implicitly, so no page sets `Style` on a WPF-UI control.
+  - **Preview:**
+    - `GlowRaster` ports `Glow.hlsl` into a 352×198 `Pbgra32` bitmap at 30 fps. It caches the shape per pixel, so a frame costs about one exp per lit pixel.
+    - The card stands for a 1280-DIP-wide screen: thickness and corner radius scale by it, and the glow by the card's shorter side, as on screen.
+    - Its own engine and blender come from `CoreFactory` (H-012), with `MusicGlowSource`'s color rules and 800/200 ms crossfades.
+    - Its features come from the overlay's analyzer, and count as silence after 0.5 s without a new frame.
+    - It shows the glow as it looks when on: "Glow on" off, or Off mode, shows Idle Glow with a caption.
+  - **Audio wanted:** the meter, and the preview in music sync, keep the capture open and the analyzer at 10 Hz or more. The overlay's engine still hears silence outside music sync, so Settings never changes the glow.
+  - **Color picker:** a hex box plus hue and saturation sliders at the color's own brightness, instead of a 2-D field, so the keyboard and screen readers work with standard controls. Six-digit hex applies as it is typed; three digits apply on Enter or focus loss.
+  - **Displays:**
+    - All / Main display / Choose, plus a toggle per monitor. A toggle flipped under All or Main switches to Choose, starting from what is lit now.
+    - Choose restores the previous custom list if it lights an attached monitor. Unplugged IDs are always kept (H-009).
+    - Names are Windows' EDID names, "Built-in display", or "Display N" (numbered left to right).
+  - **Shortcut recorder:**
+    - The current shortcut is released while recording.
+    - Esc cancels, Tab and Shift+Tab leave, and Alt+F4 still closes.
+    - Alt+F4, Alt(+Shift)+Tab, Alt(+Shift)+Esc, Alt+Space, Ctrl+Esc and Ctrl+Shift+Esc are refused for every shortcut (`HotkeyGesture.IsAllowed`): `RegisterHotKey` would take them from every app.
+  - **200% text:** WPF ignores Windows' Text size. The content gets a `LayoutTransform` of `UISettings.TextScaleFactor` (up to 225%), and the first opening enlarges the window within the work area.
+  - **The toast** shows once per first-run session (K6's decision). Until C7 every run is a first run.
+  - **Presets row** is hidden while `Presets.All` is empty.
+  - **With Windows animations off,** pages switch without the slide.
+- **Verified here (Linux):**
+  - Release and Debug builds have 0 warnings, and `dotnet test` passes (165).
+  - WPF-UI 4.3.0 was decompiled: `FluentWindow` (Mica needs `ExtendsContentIntoTitleBar`), the theme and accent managers, `UiApplication`'s binding on first use, `NavigationView` (the page provider; its frame swallows F5, so the recorder listens with `handledEventsToo`), `TextBlockMetadata`, `HyperlinkButton`, `TitleBar` close, and every theme key the pages use.
+  - The WPF 8.0.31 runtime was decompiled: `Frame`'s inheritance boundary, `DoShutdown` closing windows before `OnExit`, and `MainWindow` accepting null.
+  - The CCD signatures were checked against CsWin32 0.3.346's generated sources.
+  - **Scratch harness (not committed), 87 checks:**
+    - `SrgbColor`: HSV round trips exact on 85³ colors.
+    - Every `MonitorChoice` H-009 case.
+    - The refused system keys.
+    - `AudioReading`: round trip, the counter never 0, and 580 M concurrent reads without tearing.
+    - `MusicGlowSource` with audio wanted: capture, pacing and an engine that hears silence; 0 bytes over 100,000 frames.
+    - `GlowRaster` against a direct shader port:
+      - alpha exact, colors within 1 code value
+      - no lit pixel dropped
+      - 0 bytes per frame
+      - 0.5 ms a frame at the default look, 0.9 ms at 100% glow
+  - Rendered preview frames were checked by eye.
+  - Nothing has run on Windows yet: Maxwell's checklist is in #24.
+- **Left for later:**
+  - **K8:** use `AppController.RequestAudio()` and `MusicGlowSource.LatestAudio`.
+  - **K9:** set `AppController.Updates`; About's button and the tray already call it.
+  - **K10:**
+    - The presets row with C7.
+    - The preview with the real C5/C6 (H-012).
+    - Check the WPF-UI tray menu on Windows.
+    - Optionally drop the Debug tray items Settings now covers.
+  - **K11:** measure CPU with Settings open on Appearance (target: about 3% or less) and with it hidden (idle).
+  - **K12:** use the About privacy bullets verbatim in the README.
 
 ## Lane B notes
 

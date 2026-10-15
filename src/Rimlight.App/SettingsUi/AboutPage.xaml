@@ -1,0 +1,63 @@
+<UserControl x:Class="Rimlight.App.SettingsUi.AboutPage"
+             x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+             FontFamily="{DynamicResource ContentControlThemeFontFamily}"
+             FontSize="14">
+    <UserControl.Resources>
+        <ResourceDictionary Source="PageStyles.xaml" />
+    </UserControl.Resources>
+
+    <ScrollViewer Style="{StaticResource PageScroller}">
+        <StackPanel Style="{StaticResource PageContent}">
+            <TextBlock Style="{StaticResource PageTitle}" Text="About" />
+
+            <Border Style="{StaticResource Row}">
+                <DockPanel>
+                    <Image x:Name="AppIcon" DockPanel.Dock="Left" Width="48" Height="48" Margin="0,0,16,0" VerticalAlignment="Center"
+                           AutomationProperties.Name="App icon" />
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="NameText" FontSize="20" FontWeight="SemiBold" />
+                        <TextBlock x:Name="VersionText" Style="{StaticResource RowDescription}" />
+                        <TextBlock x:Name="TaglineText" Style="{StaticResource RowDescription}" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <Border Style="{StaticResource Row}">
+                <WrapPanel>
+                    <Button x:Name="UpdateButton" Content="Check for updates" Margin="0,0,8,4" Click="OnCheckForUpdates"
+                            AutomationProperties.Name="Check for updates" />
+                    <Button Content="Open logs folder" Margin="0,0,8,4" Click="OnOpenLogs" AutomationProperties.Name="Open logs folder" />
+                </WrapPanel>
+            </Border>
+
+            <Border Style="{StaticResource Row}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource RowLabel}" Text="Free and open source" />
+                    <TextBlock x:Name="LicenseText" Style="{StaticResource RowDescription}" />
+                    <WrapPanel Margin="-12,4,0,0">
+                        <ui:HyperlinkButton x:Name="SourceLink" Content="Source code on GitHub" AutomationProperties.Name="Source code on GitHub" />
+                        <ui:HyperlinkButton x:Name="LicenseLink" Content="MIT License" AutomationProperties.Name="MIT License" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Style="{StaticResource SectionHeader}" Text="Privacy" />
+            <Border Style="{StaticResource Row}">
+                <ItemsControl x:Name="PrivacyList" Focusable="False" AutomationProperties.Name="Privacy">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <DockPanel Margin="0,2,0,2">
+                                <TextBlock DockPanel.Dock="Left" Text="•" Margin="0,0,8,0" />
+                                <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            </DockPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
