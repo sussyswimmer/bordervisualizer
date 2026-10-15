@@ -607,7 +607,7 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
 - [x] K9 Velopack bootstrap in App (`VelopackApp.Build().Run()`), update checks, "Update ready" toast — PR #28 — effort: M (notes below; Windows manual test pending)
 - [x] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues — PR #29 — effort: M (notes below; Windows manual test pending)
 - [ ] K11 Hardening on real Windows: sleep/wake, RDP, TDR, hotplug, device switching. Results go in PROGRESS.md.
-- [ ] K12 `assets/icon.svg`, `assets/banner.svg/png`, README, repo settings text for Maxwell, recording instructions
+- [x] K12 `assets/icon.svg`, `assets/banner.svg/png`, README, repo settings text for Maxwell, recording instructions — PR #30 — effort: M (the icon is C10's, reused; notes below; the GIF and screenshots wait for Maxwell)
 
 ## K0 notes
 
@@ -1233,6 +1233,35 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - **K11:** sleep/wake, RDP, TDR, hotplug, device switching, and the 8-hour `--demo` soak (H-018 item 2).
   - **K12:** the README, banner and repo settings (H-012 item 2, H-014 item 4).
   - **Known edge:** a `settings.json` held by another program through all three read tries at start-up (about 40 ms) reads as defaults, and the welcome's save then replaces it (documented in C7's store).
+
+### K12 notes
+
+- **What it is:** `assets/banner.svg` and `assets/banner.png` (1280×640, doc 08 §1), `build/banner.mjs`, which renders the PNG, and `README.md` in doc 08 §2's order. The repo settings text (doc 08 §4) and the GIF and screenshot recording steps are in the body of #30, not in the repo.
+- **Spec clarifications (simplest robust option):**
+  - **Wordmark and tagline letters:** an original monoline geometric design, drawn as stroked centreline paths (lines, circles, ellipses), with the diagonals as flat-cut filled polygons. The SVG has no `<text>` and needs no font. Converting a system font was not an option: the fonts on the build machine aren't geometric, and an original design has no font licence to track. Each letter is a short path in font units (cap height 700, x-height 500), commented, so it can be edited by hand. The i dots carry the two glow colors.
+  - **Rendering:** `node build/banner.mjs` needs Node.js 22 or later (built-in WebSocket) and a Chromium-based browser: Edge (preinstalled on Windows), Chrome, a Playwright Chromium, or `BANNER_BROWSER`. It drives the browser over the DevTools protocol with a throwaway profile, a 1280×640 viewport at 1 device pixel per pixel, and sRGB.
+    - Why not `--screenshot`: in headless mode it reserves room for browser UI, and Chromium 141 cut the bottom 87 px off a 1280×640 page.
+    - Why not `tools/icon-gen`: it renders square bitmaps only.
+  - **Banding:** a light grain (`feTurbulence`, a fraction of a code value on average) dithers the dark glow gradients. Every glow blur uses a filter region the size of the whole banner, because the default regions cut the brighter stretches off in straight lines. The PNG is 737 KB, under GitHub's 1 MB limit for a social preview image.
+  - **Download button:** Simple Icons no longer has a Windows logo, so `logo=windows` (doc 08's template) and its variants render no logo on shields.io. The button keeps doc 08's text, color, style and height, with a download arrow as an inline SVG data-URI logo. The "Windows 10 | 11" badge is text-only.
+  - **Badges:** latest release, total downloads and CI are live shields.io badges. They read "no releases" and "no status" until v1.0.0 is published and `ci.yml` has run on `main`. License, Windows and .NET are static.
+  - **Demo GIF and screenshots:** neither is recorded yet. Their markup (the `<img>` and the dark/light `<picture>`) waits in HTML comments behind a one-line italic note, so no image is broken.
+  - **No other app is named.** Album colors come from "apps that share what's playing with Windows' media controls". The roadmap's smart-light item has no brand name. Exclusive-mode output is the one case loopback can't hear.
+  - **Numbers:** the only performance figure is the Core's 0.36 % of one core at 60 fps (`docs/PERF.md`). The README says it was measured on the engine alone, in an 8-hour run on a Linux VM. The whole app's CPU on Windows is K11's measurement, so the README claims none.
+- **HANDOFF:**
+  - H-012 item 2: the banner reuses `icon.svg`'s gradient and screen colors. The icon is unchanged.
+  - H-014 item 4: the README links the real asset names (`RimlightSetup.exe`, `RimlightSetup-arm64.exe`, `Rimlight-win-Portable.zip`, `Rimlight-win-arm64-Portable.zip`). The SmartScreen sentence stays until signing is on. The demo GIF at the top of `.github/release-notes-intro.md` waits for the recording.
+- **Verified here:**
+  - The banner was looked at in full and in 2× crops, at 830 and 400 px wide on light and dark page colors, and with dark tones stretched 4–5× for banding and clipping. Two renders were byte-identical.
+  - `banner.mjs`'s failure paths exit 1 with a message.
+  - The README was rendered with a GFM renderer, GitHub's light and dark markdown CSS and Mermaid 11, and read with the FAQ open. Every relative link and anchor resolves.
+  - All seven badge URLs return 200, and the credit links match each NuGet package's repository URL. The download links return 404 until the first release.
+  - `maxwellolander.com` doesn't resolve (NXDOMAIN) as of today; it is linked as Maxwell asked.
+  - No compiled file changed. CI on #30 builds and tests.
+- **Left for later (Maxwell, steps in #30):**
+  - Record `assets/demo.gif` (one 24 s demo loop) and `settings-dark.png`/`settings-light.png`, then uncomment the README blocks.
+  - Set the description, website, topics and social preview. Turn on Discussions, then the commented "Ask a question" link in `.github/ISSUE_TEMPLATE/config.yml` can be switched on. Pin the repo.
+  - After tagging v1.0.0, check that the download links and badges resolve (doc 08 §5).
 
 ## Lane B notes
 
