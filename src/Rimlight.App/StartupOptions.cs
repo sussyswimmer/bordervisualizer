@@ -33,6 +33,17 @@ internal sealed record StartupOptions(bool Background, bool ShowVisualizer, bool
     public bool ShowsSomething => ShowVisualizer || Demo;
 
     /// <summary>
+    /// The window this start opens (doc 06 §4): the welcome on the first run, whatever the command line says, until
+    /// <see cref="Rimlight.Core.Settings.FirstRunComplete"/> is saved; then Settings for a start by hand, and nothing at
+    /// sign-in or when the start shows the demo or the visualizer.
+    /// </summary>
+    /// <param name="firstRunComplete">The saved <see cref="Rimlight.Core.Settings.FirstRunComplete"/>.</param>
+    public StartupWindow WindowAtStart(bool firstRunComplete) =>
+        !firstRunComplete ? StartupWindow.Welcome
+        : Background || ShowsSomething ? StartupWindow.None
+        : StartupWindow.Settings;
+
+    /// <summary>
     /// What to ask of a copy that is already running (<see cref="SingleInstance.Claim"/>): the visualizer and the demo
     /// when asked for, separated by a space; otherwise Settings for a start by hand, and nothing at sign-in.
     /// </summary>
@@ -43,4 +54,17 @@ internal sealed record StartupOptions(bool Background, bool ShowVisualizer, bool
         (false, true) => SingleInstance.DemoCommand,
         _ => Background ? null : SingleInstance.ShowSettingsCommand,
     };
+}
+
+/// <summary>The window a start opens (<see cref="StartupOptions.WindowAtStart"/>).</summary>
+internal enum StartupWindow
+{
+    /// <summary>None: the app starts in the tray.</summary>
+    None,
+
+    /// <summary>The first-run welcome.</summary>
+    Welcome,
+
+    /// <summary>The settings window.</summary>
+    Settings,
 }

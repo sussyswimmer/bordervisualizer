@@ -11,7 +11,7 @@ namespace Rimlight.App.SettingsUi;
 
 /// <summary>
 /// Appearance (doc 06 §3.1): the live preview, the shape sliders (ranges from doc 06 §1), Cover taskbar, and the
-/// presets as color chips (<see cref="Presets.All"/>; the section is hidden while the catalog is empty).
+/// presets as color chips (<see cref="Presets.All"/>; the section is hidden only if the catalog is ever empty).
 /// </summary>
 internal partial class AppearancePage : UserControl, ISettingsPage
 {
@@ -139,7 +139,7 @@ internal partial class AppearancePage : UserControl, ISettingsPage
             }
             primary.Fill = Brush(look?.PrimaryHex);
             secondary.Fill = Brush(look?.SecondaryHex);
-            bool chosen = look is not null && look == settings;
+            bool chosen = PresetChoice.IsShowing(apply, settings);
             chip.SetResourceReference(BorderBrushProperty, chosen ? "AccentFillColorDefaultBrush" : "ControlElevationBorderBrush");
             chip.BorderThickness = new Thickness(chosen ? 2 : 1);
             AutomationProperties.SetItemStatus(chip, chosen ? "Chosen" : "");

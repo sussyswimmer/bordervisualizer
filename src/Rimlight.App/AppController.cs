@@ -104,7 +104,8 @@ internal sealed class AppController : IDisposable
 
     public void Start()
     {
-        // %APPDATA%\Rimlight (doc 02 "Settings storage"). The store is in memory until C7.
+        // %APPDATA%\Rimlight\settings.json (doc 02 "Settings storage"): validated on load, a bad file set aside as
+        // settings.bad.json, every save atomic (Core's store, C7).
         string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppInfo.Name);
         settings = new SettingsService(CoreFactory.CreateSettingsStore(directory));
         Settings initial = settings.Current;
@@ -182,16 +183,18 @@ internal sealed class AppController : IDisposable
             instance.StartListening();
         }
 
-        if (!initial.FirstRunComplete)
+        switch (options.WindowAtStart(initial.FirstRunComplete))
         {
-            // First run: say where the app went and how to use it, once.
-            IsFirstRunSession = true;
-            ShowWelcome(offerSettings: true);
-            settings.Update(s => s with { FirstRunComplete = true });
-        }
-        else if (!options.Background && !options.ShowsSomething)
-        {
-            ShowSettings(); // started by hand: show something (doc 06 §4)
+            case StartupWindow.Welcome:
+                // First run: say where the app went and how to use it, once. Saved like any change, so the next
+                // start skips it.
+                IsFirstRunSession = true;
+                ShowWelcome(offerSettings: true);
+                settings.Update(s => s with { FirstRunComplete = true });
+                break;
+            case StartupWindow.Settings:
+                ShowSettings(); // started by hand: show something (doc 06 §4)
+                break;
         }
 
         // --demo and --debug-visualizer (doc 04 §5, doc 03 §4).
