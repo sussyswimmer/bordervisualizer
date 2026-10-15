@@ -19,7 +19,8 @@ namespace Rimlight.App;
 /// Owns the notification-area icon (doc 06 §2): the icon, dimmed to half opacity while the glow is off; the
 /// now-playing tooltip; click to turn the glow on or off, double-click for Settings; and the right-click menu, which
 /// the keyboard opens too. Re-creates the icon when it can't be added at sign-in or Explorer restarts, and shows
-/// notifications for later tasks (K7's "still running in the tray", K9's "update ready"). Use it on the UI thread only.
+/// notifications (K7's "still running in the tray", K9's "update ready", whose click restarts into the update). Use it
+/// on the UI thread only.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {

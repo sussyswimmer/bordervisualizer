@@ -15,8 +15,8 @@ internal interface IShowSettings
 }
 
 /// <summary>
-/// Checks for updates when asked ("Check for updates" in the tray, doc 06 §5). Called on the UI thread. K9 implements
-/// it with Velopack; until then <see cref="AppController"/> only tells which version runs.
+/// Checks for updates when asked ("Check for updates" in the tray and in Settings > About, doc 06 §5). Called on the UI
+/// thread. <see cref="Updates.UpdateService"/> implements it with Velopack.
 /// </summary>
 internal interface IUpdateCheck
 {
