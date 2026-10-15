@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **For contributors:**
   - `wav-analyze` runs the beat detector on any WAV file and writes the beats, the tempo, a CSV and a plot. It can also generate synthetic test tracks, and there's an analyzer benchmark. All of it runs on Linux too. ([#13](https://github.com/sussyswimmer/bordervisualizer/pull/13))
   - Continuous integration builds and tests every pull request on Linux and Windows, labels it from its title, and sorts it into release-note sections. ([#10](https://github.com/sussyswimmer/bordervisualizer/pull/10))
+  - An 8-hour soak test runs the beat detection, lighting and color code the way the app does, for hours of synthetic music in a few minutes. It reports allocations, frame cost and memory, and a 2-minute version runs in CI. The results are in `docs/PERF.md`. ([#25](https://github.com/sussyswimmer/bordervisualizer/pull/25))
   - A contributing guide, security policy, code of conduct, issue forms and a pull request template.
 
 ## [0.1.0] - YYYY-MM-DD

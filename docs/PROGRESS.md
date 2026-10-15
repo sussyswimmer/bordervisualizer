@@ -15,7 +15,7 @@
 - [x] C9 Packaging: `build/pack.ps1` (Velopack, x64+ARM64, self-contained), `release.yml` on tag `v*` with `vpk upload github`, optional signing step gated on secrets — PR [#21](https://github.com/sussyswimmer/bordervisualizer/pull/21) — effort: M (made by Claude Code on Maxwell's instruction; notes below)
 - [x] C10 `tools/icon-gen`: SVG → multi-size `.ico` + PNGs (consumes `assets/icon.svg` from Lane B) — PR #15 — effort: M
 - [x] C11 Community health files + issue/PR templates + CHANGELOG — PR [#17](https://github.com/sussyswimmer/bordervisualizer/pull/17) — effort: S (made by Claude Code on Maxwell's instruction; notes below)
-- [ ] C12 Perf + soak harness in Bench: run analyzer + light engine for 8 simulated hours of synthetic audio, and report allocations, p99 frame cost, and memory
+- [x] C12 Perf + soak harness in Bench: run analyzer + light engine for 8 simulated hours of synthetic audio, and report allocations, p99 frame cost, and memory — PR [#25](https://github.com/sussyswimmer/bordervisualizer/pull/25) — effort: L (made by Claude Code on Maxwell's instruction; notes below)
 - [ ] C13 Delete `Fakes/` and make `CoreFactory` return the real implementations. Final Core API docs (`docs/CORE-API.md`).
 
 ### C1 completion log
@@ -461,6 +461,50 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - 33 mutants each fail at least one test: no wrap at u = 0, blend widths 0.04 and 0.16, an uncentered blend, RGB spatial blend, RGB crossfade, linear easing, three retarget errors, three ratio-clamp errors, two dt-guard errors, `>` at the end of the fade, two stale-cache errors, a fade with same colors, an animated zero duration, two input-clamp errors, no gamut clamp, no span check, a mirrored arc, texels at i/64, alpha 0, swapped pure colors, and four allocations (in `FillGradient`, `Update`, `SetTarget` and idle `Current`).
   - Review fixes: 13 more mutants each fail at least one test: a plain smoothstep restart, ease-out on every retarget, ease-out lost for a second retarget in one frame, smoothstep as the ease-out, no same-colors keep, a keep that ignores a zero duration, a keep on either or only the Primary color, a keep with a stale `Current`, `&&` and Primary-only in the same-colors check, `||` in the input range check, and no lower gamut clamp.
   - Cost (shared Linux machine, optimized JIT): about 0.5–0.7 µs per fill, idle or mid-fade.
+
+### C12 notes
+
+- **Where things are:**
+  - All in `src/Rimlight.Bench`. `SoakProgram.cs` is the synthetic listening program and the warm-up tour, built on C3's streaming `SyntheticTrack`. `SoakRun.cs` is the render-thread simulator, the measurement and the Markdown summary. `SoakReport.cs` writes `--json`, and `BenchCli.cs` has the options.
+  - Tests: `src/Rimlight.Tests/Tools/SoakTests.cs`. Numbers, method and the Windows instructions: `docs/PERF.md`.
+- **A frame:** the app's render-thread calls in `MusicGlowSource.NextFrame`'s order (K3).
+  - `SetTarget` (800 ms) on a new track, then `Reset` on a new session (a new device), then `Process` with the whole 10 ms packets that arrived (an empty span while none do).
+  - Then the blender's `Update`, the engine's `Update` and `FillGradient`, which runs every frame; the app fills only on change, so this is an upper bound.
+  - Last, the frame pacing's `IsAnimating`/`IsStatic` reads.
+  - Frames are 60 fps ± 20 % jitter at 48 kHz. Timing and allocation counting cover only these calls; streaming the program between frames stands in for draining the ring buffer.
+- **Program:**
+  - Sessions of 40–80 minutes alternate Idle Glow and Hide for silence. Each starts with a device change and, after the first, a 3–12 minute pause with no packets.
+  - Tracks of 2–5 minutes run at 80–170 BPM and −24 to 0 dB, in four sections. A quarter continue an album (same colors, new track ID).
+  - Gaps alternate between digital silence and no packets; every fifth is 4–20 s.
+  - The 8-hour seed-1 run has 8 sessions, 121 tracks and 121 palette changes: music 88 %, silence 0.7 %, no packets 11.3 %.
+  - `--shape compressed` packs the same structure into about a minute per session for the 2-minute quick soak.
+- **Command line:**
+  - `soak` defaults to 8 hours. Options: `--hours`/`--minutes`, `--fps` (60), `--json`, `--shape`, `--seed`, `--jitter`, `--packet-ms`, `--rate`, `--warmup-seconds` (2) and `--report-every` (16 lines).
+  - Exit 1 when a measured frame allocates or the live managed heap grows over 256 KB.
+  - This replaces C3's 1-minute default and its 5-simulated-second warm-up.
+- **Results** (8 hours, seed 1, the shared Linux VM, 4 min 36 s of real time):
+  - **0 B in all 1,727,743 frames**, no GCs.
+  - Frame mean 60.5 µs, p50 69.4 µs, p99 140.8 µs. The max is a 186 ms VM stall. The analyzer is 99 % of the cost.
+  - 0.36 % of one core at 60 fps.
+  - Live heap +15 KB (the same in 10-minute, 1-hour and 4-hour runs). Handles 50 → 50.
+  - Working set 34.6 → 37.1 MB, which doesn't grow with time. With one progress line it ended 1.2 MB up after both 1 hour and 4 hours; the rest comes from the progress lines' uncollected garbage (120 lines in 1 hour: +3.6 MB).
+- **Spec clarifications:**
+  - **Scope:** doc 07 Phase 7's soak runs the app in `--demo` mode (overlay, handles, GPU), which is K11's job on Windows (H-017). C12 is the Core part, in simulated time.
+  - **CPU budget:** "< 2 % while playing" is doc 07 Phase 3 (and CLAUDE.md's definition of done), not doc 01. PERF.md converts the Core's share to Task Manager's all-CPU scale.
+  - **Steady state:** everything after the warm-up tour, which repeats for at least 2 s of real time, so tiered compilation is done. Allocation must be 0 there in every frame, `SetTarget` and `Reset` frames included.
+  - **Memory flat:** the live managed heap, after a forced compacting collection, grows at most 256 KB. The working set is reported but not gated: it also moves with the harness's own output. A leak on the render thread would show first as an allocation.
+  - **Session order:** a session's settings and device change take effect before its pause, so a pause into a Hide session hides the light. With the pause first, the 2-minute program never hid the light for seed 1.
+- **Test-suite form, and two flaky tests fixed:**
+  - The quick soak (2 simulated minutes, compressed) runs twice:
+    - In the test process, for coverage and 0 allocations, which are counted per thread.
+    - As a child process through the CLI (`SoakInItsOwnProcessPassesAndWritesTheJsonReport`), for the whole verdict including memory.
+  - **Why the child process:** inside the test host, the runner's threads allocated about 1 MB and kept about 350 KB during a 0.3 s in-process soak. The old in-process CLI test failed its memory check in 13 of 13 runs with `--filter Soak`, while its frames allocated 0 B.
+  - `ReadDeliversMusicAndZerosButNothingWithoutPackets` failed whenever it ran first in its process: 264 B of first-time initialization landed in the measured read. It now reads once before the checked pass.
+  - C3's single soak test is replaced by 10: 6 soak tests and 4 program tests.
+- **Verification:**
+  - `dotnet build Rimlight.sln -c Release` gives 0 warnings. `dotnet test Rimlight.sln -c Release` passed 6 runs in a row: 666 + 73 tests.
+  - 15 mutants each fail at least one soak test: allocations in `SetTarget`, in `Reset`, in `Process` on empty spans, and in the engine while hidden or static; allocations counted around `Process` only; session settings or palette events ignored; the old session order; no-packet gaps delivering zeros; warm-up measurements kept; the memory check always passing; the verdict ignoring memory; no `FillGradient`; and `--shape compressed` running the day.
+  - A discarded `new` in a hot method was removed by the tier-1 JIT, so the hot-path mutants keep the allocation alive (`GC.KeepAlive`).
 
 ## Lane B — Claude Code
 
