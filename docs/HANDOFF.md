@@ -1,5 +1,12 @@
 # Handoff
 
+## [OPEN] H-019 · from: claude-code · to: maxwell, codex · blocking: none (K6 handles it; a default change would be a CONTRACT CHANGE)
+**Need:** A decision on the default glow shortcut. `Settings.ToggleHotkey` defaults to `Ctrl+Alt+L` (frozen `Contracts/Settings.cs:57`, PRD "6. Shell"). Windows treats Ctrl+Alt as AltGr, so `RegisterHotKey(Ctrl+Alt+L)` also fires on AltGr+L and swallows what it types in every app: ł on Polish (Programmers), Czech, Slovak, Hungarian, Croatian and Slovenian layouts, ø on US-International.
+**Repro:** Since the K6 review, Platform checks every installed keyboard layout before registering (`GlobalHotkey.TypesCharacter`, via `ToUnicodeEx`). On such a layout the default is not registered (`HotkeyState.TypesCharacter`), and the welcome (and K7's inline warning) say why. Those users start without a shortcut until they pick one.
+**Proposed:** Maxwell picks one:
+1. Keep `Ctrl+Alt+L`. It works on US, UK and most Western layouts, and the affected users get an explanation instead of a lost letter.
+2. Change only the default *value* to a combination that can't be AltGr, e.g. `Win+Alt+L`, after Maxwell checks on his PC that Windows doesn't already use it. That edits `Contracts/Settings.cs` and the copies in doc 06 §1 and the PRD, so it needs "approved" here first; Lane B needs no code change.
+---
 ## [DONE] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
 **Need:** K8's "Copy params as JSON" should write what `wav-analyze --tuning` reads. The original entry is on the Lane A branches; this resolution is merged next to it in K10.
 **Resolved (K8, #26):** The visualizer copies the analyzer's live `AudioTuning` with every property, through `JsonSerializer.Serialize(tuning, new JsonSerializerOptions { WriteIndented = true })` and default naming. A scratch check shows it is byte-for-byte the same as `tools/audio-tools/TuningJson.Serialize`, and C3's `Parse` reads it back exactly. "Paste params" reads with C3's options. Code: `src/Rimlight.App/Visualizer/TuningJson.cs`.

@@ -15,14 +15,17 @@
             <TextBlock Style="{StaticResource PageTitle}" Text="Appearance" />
 
             <!-- A miniature screen with the glow drawn from the current settings and colors (CPU, about 30 fps, only
-                 while this page is on screen). -->
-            <Border HorizontalAlignment="Center" Background="#FF1C1C24" CornerRadius="10" Padding="7"
-                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                <Grid Width="352" Height="198" Background="#FF0A0A0F">
-                    <Image x:Name="PreviewImage" Stretch="Fill" RenderOptions.BitmapScalingMode="Linear"
-                           AutomationProperties.Name="Preview of the glow" />
-                </Grid>
-            </Border>
+                 while this page is on screen). It shrinks rather than being cut off in a narrow window or at large
+                 text sizes. -->
+            <Viewbox HorizontalAlignment="Center" StretchDirection="DownOnly">
+                <Border Background="#FF1C1C24" CornerRadius="10" Padding="7"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                    <Grid Width="352" Height="198" Background="#FF0A0A0F">
+                        <Image x:Name="PreviewImage" Stretch="Fill" RenderOptions.BitmapScalingMode="Linear"
+                               AutomationProperties.Name="Preview of the glow" />
+                    </Grid>
+                </Border>
+            </Viewbox>
             <TextBlock x:Name="PreviewCaption" Style="{StaticResource RowDescription}" HorizontalAlignment="Center"
                        TextAlignment="Center" Margin="0,8,0,0" />
 

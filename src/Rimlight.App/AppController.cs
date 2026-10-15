@@ -541,7 +541,9 @@ internal sealed class AppController : IDisposable
 
     private void ShowNowPlaying()
     {
-        Volatile.Write(ref toolTipQueued, 0);
+        // A full fence: a plain store could pass the read of Current below (x64 store buffer), and a track published in
+        // between would then find the flag still set and never be shown.
+        Interlocked.Exchange(ref toolTipQueued, 0);
         try
         {
             tray?.SetNowPlaying(media?.Current); // null after Dispose
