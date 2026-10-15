@@ -126,9 +126,10 @@ public sealed class OklabTests(ITestOutputHelper output)
         // that skipped it, the test failed (1,048 B) whenever it was the first in its process to touch Srgb.
         float sink = 0;
         for (int i = 0; i < 100; i++) sink += Convert(i);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++) sink += Convert(i);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 10_000; i++) sink += Convert(i);
+        }));
         Assert.True(float.IsFinite(sink));
 
         static float Convert(int i)

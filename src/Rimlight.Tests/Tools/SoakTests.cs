@@ -37,6 +37,13 @@ public sealed class SoakTests
         var reported = new List<SoakSnapshot>();
         SoakProgram? played = null;
         SoakResult r = SoakRun.Run(Quick, reported.Add, program => played = program);
+        // Up to two more runs while one counted allocations (see AllocationProbe): every run plays the same program
+        // with the same calls, so an allocating path allocates in each; a one-off count on this thread lands in one.
+        for (int run = 1; run < 3 && r.AllocatedBytes > 0; run++)
+        {
+            reported.Clear();
+            r = SoakRun.Run(Quick, reported.Add, program => played = program);
+        }
 
         // The two minutes cover what the 8 hours do: sessions with both silent behaviors and a device change, tracks
         // with new and same-album palettes, digital silence and no-packet gaps, and a light that fades out and idles.
@@ -101,14 +108,23 @@ public sealed class SoakTests
     [Fact]
     public void AnAllocatingFrameFailsTheSoakAndIsLocated()
     {
-        // A light engine that allocates on every 100th update: each of those frames is counted, with its bytes.
+        // A light engine that allocates on every 100th update: each of those frames is counted, with its bytes. Every
+        // run allocates the same arrays in the same frames, and a one-off count on this thread (see AllocationProbe)
+        // adds to one run, so the run with the fewest bytes of up to three is checked, stopping at one that counted
+        // just its arrays.
         var kept = new AllocatingEngine.Keeper();
-        SoakResult r = SoakRun.Run(Quick with
+        SoakOptions options = Quick with
         {
             Hours = 0.25 / 60,
             WarmupSeconds = 0,
             WrapLightEngine = engine => new AllocatingEngine(engine, every: 100, retain: false, kept),
-        });
+        };
+        SoakResult r = SoakRun.Run(options);
+        for (int run = 1; run < 3 && r.AllocatedBytes != r.AllocatingFrames * AllocatingEngine.ArrayBytes; run++)
+        {
+            SoakResult again = SoakRun.Run(options);
+            if (again.AllocatedBytes < r.AllocatedBytes) r = again;
+        }
         long expected = r.Frames / 100;
         Assert.True(expected >= 8);
         Assert.InRange(r.AllocatingFrames, expected, expected + 1);
@@ -225,8 +241,16 @@ public sealed class SoakTests
         string json = Path.Combine(directory, "report.json");
         try
         {
+            string[] args = ["soak", "--minutes", "0.5", "--fps", "30", "--seed", "7", "--warmup-seconds", "0", "--report-every", "0.25", "--json", json];
             var output = new StringWriter();
-            int exit = BenchCli.Run(["soak", "--minutes", "0.5", "--fps", "30", "--seed", "7", "--warmup-seconds", "0", "--report-every", "0.25", "--json", json], output, TextWriter.Null);
+            int exit = BenchCli.Run(args, output, TextWriter.Null);
+            // Up to two more runs while one counted allocations (see AllocationProbe): each run is the same, so an
+            // allocating path allocates in all of them, and a one-off count on this thread lands in one.
+            for (int run = 1; run < 3 && AllocatedBytes(json) > 0; run++)
+            {
+                output = new StringWriter();
+                exit = BenchCli.Run(args, output, TextWriter.Null);
+            }
             string text = output.ToString();
             Assert.Contains("0:00:30 simulated at 30 fps", text);
             Assert.Contains("seed 7", text);
@@ -250,6 +274,12 @@ public sealed class SoakTests
         finally
         {
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+
+        static long AllocatedBytes(string report)
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(report));
+            return document.RootElement.GetProperty("allocations").GetProperty("bytes").GetInt64();
         }
     }
 
@@ -417,7 +447,8 @@ public sealed class SoakProgramTests
 
         // A pass in uneven pieces: music where there is music, zeros for silence, nothing for the no-packet gap. The
         // first pass runs the code for the first time, and first-time initialization allocates (264 B when this test
-        // is the first in its process to read a SyntheticTrack); the second pass is checked, allocations included.
+        // is the first in its process to read a SyntheticTrack); the second pass is checked, allocations included,
+        // with the smallest count of up to three passes (see AllocationProbe).
         float[] buffer = new float[1000];
         int[] pieces = [999, 1, 777, 1000, 0, 333, 1000];
         (List<float> Delivered, long Allocated, long End) Pass()
@@ -438,6 +469,7 @@ public sealed class SoakProgramTests
         }
         Pass();
         (List<float> delivered, long allocated, long end) = Pass();
+        for (int run = 1; run < 3 && allocated > 0; run++) allocated = Math.Min(allocated, Pass().Allocated);
         Assert.Equal(program.Length, end);
         Assert.Equal(0, allocated);
         Assert.Equal(20000, delivered.Count);

@@ -71,9 +71,10 @@ public sealed class SyntheticTrackTests
         var track = new SyntheticTrack(new SyntheticTrackOptions { Seconds = 60 }.WithFullMix());
         float[] buffer = new float[800];
         for (int i = 0; i < 100; i++) track.Read(buffer); // past the tier-up call counts
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 500; i++) track.Read(buffer);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 500; i++) track.Read(buffer);
+        }));
     }
 
     [Theory]

@@ -384,9 +384,10 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
             frame++;
         }
         for (int i = 0; i < 2000; i++) Step();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1600; i++) Step();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal(0, AllocationProbe.MinBytes(() =>
+        {
+            for (int i = 0; i < 1600; i++) Step();
+        }));
     }
 
     [Fact]
