@@ -34,7 +34,9 @@ internal sealed class TrayIconHost : IDisposable
         toolTipSuffix = DpiAwareness.IsPerMonitorV2() ? "" : " (warning: not Per-Monitor V2 DPI aware)";
         var menu = new ContextMenu();
 
-        glowOn = new MenuItem { Header = "Glow on" };
+        // Checkable, not only checked: WPF exposes the on/off state to screen readers only then. Refresh() resets
+        // the check marks from the settings each time the menu opens, so WPF's own toggle on click is harmless.
+        glowOn = new MenuItem { Header = "Glow on", IsCheckable = true };
         glowOn.Click += (_, _) => Update(s => s with { Enabled = !s.Enabled });
         menu.Items.Add(glowOn);
 
@@ -115,7 +117,7 @@ internal sealed class TrayIconHost : IDisposable
 
     private (MenuItem, AnimationMode) Choice(MenuItem parent, string header, AnimationMode mode)
     {
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, IsCheckable = true };
         item.Click += (_, _) => Update(s => s with { Animation = mode });
         parent.Items.Add(item);
         return (item, mode);
