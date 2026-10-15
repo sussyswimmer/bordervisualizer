@@ -9,9 +9,9 @@ using PaceModel = Rimlight.Bench.PaceModel;
 namespace Rimlight.Platform.Tests;
 
 // Rimlight.Bench (C12) times the render thread on Linux through copies of two Lane B pieces, because the app is
-// Windows-only: FramePipeline copies MusicGlowSource.NextFrame and PaceModel copies FramePacer.Next and FrameDt. These
-// tests keep the copies honest, so PERF.md's numbers and the 8-hour soak measure what the app runs (HANDOFF, C12's
-// item 2).
+// Windows-only: FramePipeline copies MusicGlowSource.NextFrame and PaceModel copies FramePacer.Next, FrameDt and
+// InputWaits. These tests keep the copies honest, so PERF.md's numbers and the 8-hour soak measure what the app runs
+// (HANDOFF, C12's item 2).
 public sealed class BenchMirrorTests
 {
     [Fact]
@@ -72,6 +72,27 @@ public sealed class BenchMirrorTests
             }
         }
         Assert.Equal(FramePacer.MaxFrameDtSeconds, PaceModel.MaxFrameDtSeconds);
+    }
+
+    [Fact]
+    public void PaceModelHoldsInputsLikeTheOverlay()
+    {
+        // The soak's NextFrameTime asks PaceModel.InputWaits whether an input brings a frame forward, the overlay loop
+        // asks FramePacer.InputWaits (K3's input cap).
+        var pacer = new FramePacer();
+        foreach ((int cap, double refresh, bool reduce) in new[] { (60, 60.0, false), (0, 144.0, false), (0, 240.0, true) })
+        {
+            pacer.Configure(cap, refresh, reduce);
+            double full = pacer.FullInterval;
+            foreach (Pace pace in Enum.GetValues<Pace>())
+            {
+                foreach (double elapsed in new[] { 0, 0.001, full * 0.5, Math.BitDecrement(full), full, Math.BitIncrement(full), 0.05, 0.1, 5 })
+                {
+                    Assert.True(pacer.InputWaits(pace, elapsed) == PaceModel.InputWaits(Enum.Parse<BenchPace>(pace.ToString()), elapsed, full),
+                        $"{pace} at {elapsed} s, full interval {full} s");
+                }
+            }
+        }
     }
 
     [Fact]

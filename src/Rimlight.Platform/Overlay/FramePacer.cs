@@ -97,6 +97,12 @@ internal sealed class FramePacer
     public float FrameDt(double elapsedSeconds, bool frameDue) =>
         (float)(elapsedSeconds > MaxFrameDtSeconds ? FullInterval : frameDue ? elapsedSeconds : Math.Min(elapsedSeconds, FullInterval));
 
+    // Whether an input that arrives elapsedSeconds after the previous frame waits for the next scheduled frame instead
+    // of bringing one forward (K3's review). An input brings a frame forward only from the slow or stopped pace: at the
+    // full rate the next frame draws it within one interval, so a slider drag can't push frames or presents past the
+    // cap. Bench's soak holds inputs by the same rule (PaceModel.InputWaits; BenchMirrorTests compares them).
+    public bool InputWaits(Pace pace, double elapsedSeconds) => pace == Pace.Full && elapsedSeconds < FullInterval;
+
     // When the frame after one drawn at `now` is due, `period` later, in any time unit the three share (OverlayHost
     // counts Stopwatch ticks). It keeps a steady cadence, one period after the last deadline; after a stall, or a frame
     // an input brought forward, the cadence restarts from now.

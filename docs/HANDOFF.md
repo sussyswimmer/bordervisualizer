@@ -61,15 +61,16 @@
    - Release build, Settings window closed
    - music playing at 60 fps on 1 and on 2 monitors: target under 2 %
    - Idle Glow, "Hide the glow" while quiet, and Off: target about 0 %, with no presents and GPU at 0 %
-2. **Keep the Bench copies in step.** `Rimlight.Bench` times the render thread on Linux through copies of two Lane B pieces:
+2. **Keep the Bench copies in step.** `Rimlight.Bench` times the render thread on Linux through copies of Lane B pieces:
    - `FramePipeline` copies `MusicGlowSource.NextFrame`, including its refill rule, `Motion` and `ApplySettings`.
-   - `PaceModel` copies `FramePacer.Next` and the dt rule of `OverlayHost`'s loop.
+   - `PaceModel` copies `FramePacer.Next` and the dt and input rules of `OverlayHost`'s loop (`FrameDt`, `InputWaits`).
+   - `SoakRun.NextFrameTime` copies the loop's wait: the pace's interval, an input bringing the frame forward, and, through `PaceModel.InputWaits`, an input at the full rate waiting for the scheduled frame (since the stack merge).
    - A Lane B change to those (for example K8's `--demo` source or K10 fixes) should update the copy in the same PR, or add a line here.
 **Repro:** n/a.
-**Proposed:** K11 records the numbers along with the CPU model, the logical processor count and the monitors' refresh rates. Lane B checks the two Bench files when it touches `MusicGlowSource` or `FramePacer`.
+**Proposed:** K11 records the numbers along with the CPU model, the logical processor count and the monitors' refresh rates. Lane B checks the Bench copies when it touches `MusicGlowSource`, `FramePacer` or `OverlayHost`'s loop.
 **Progress (K10):** item 2 is now enforced by a test.
 - `src/Rimlight.Platform.Tests/Overlay/BenchMirrorTests.cs` runs FramePipeline next to the app's real MusicGlowSource over a 45 s session. Light state, refills, gradient and motion must match bit for bit.
-- It also compares PaceModel with FramePacer over 200,000 random frames, and `PaceModel.FrameDt` with `FramePacer.FrameDt`.
+- It also compares PaceModel with FramePacer over 200,000 random frames, `PaceModel.FrameDt` with `FramePacer.FrameDt`, and (since the stack merge) `PaceModel.InputWaits` with `FramePacer.InputWaits`. `SoakTests.InputsAtTheFullRateAddNoFrames` checks that SoakRun applies it.
 - It found PaceModel without C13's fade rule; that is fixed (H-018).
 
 Item 1 (Maxwell's Windows CPU numbers) stays open: row 14 of the K11 checklist in PROGRESS.md.
@@ -82,8 +83,14 @@ Item 1 (Maxwell's Windows CPU numbers) stays open: row 14 of the K11 checklist i
 - `src/Rimlight.Tests/Tools/SoakTests.cs`: one assertion for the fade rule.
 - `Rimlight.Core.slnf`: it now also holds `Rimlight.Platform` and `Rimlight.Platform.Tests`. Both build on Linux with `EnableWindowsTargeting`, but the sandbox's restore now needs Platform's packages (CsWin32, NAudio.Wasapi, Vortice 3.8.3) and the Windows SDK reference pack.
 - `.github/labeler.yml`, `ci.yml` comments, `bug_report.yml`, `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/PERF.md`, and doc 09 (§2's lane table and rule 4).
+- **Stack merge** (`wip/stack-merge` and its review fixes), which brought K3's input cap into the soak:
+  - `src/Rimlight.Bench/SoakRun.cs`: `NextFrameTime` holds an input at the full rate until the scheduled frame, as `OverlayHost`'s loop has since K3's review. It asks the new `PaceModel.InputWaits`, the copy of `FramePacer.InputWaits`. A 2-hour run (seed 1) moved 8 of 290,509 frames and 9 of 729 refills, so PERF.md stands.
+  - `src/Rimlight.Bench/PaceModel.cs`: `InputWaits`, and the class comment now names stalled surfaces among what a simulation leaves out.
+  - `src/Rimlight.Tests/Tools/SoakTests.cs`: `InputsAtTheFullRateAddNoFrames` (40 edits during music add no frames), and `InputWaits` assertions in `PaceModelFollowsTheFramePacer`.
+  - `docs/PERF.md`: a note on the input hold above the 8-hour results.
+  - `bug_report.yml` and `CONTRIBUTING.md`: logs write the profile folder as `%USERPROFILE%` (K6's private logs); an error message can still name a device or a file, and Velopack's own log isn't redacted.
 
-**New contract:** Bench's `FramePipeline` and `PaceModel` are checked against the app's `MusicGlowSource`, `FramePacer.Next` and `FramePacer.FrameDt` by `Rimlight.Platform.Tests/Overlay/BenchMirrorTests.cs`. A change to either side must change the other in the same PR.
+**New contract:** Bench's `FramePipeline` and `PaceModel` are checked against the app's `MusicGlowSource`, `FramePacer.Next`, `FramePacer.FrameDt` and `FramePacer.InputWaits` by `Rimlight.Platform.Tests/Overlay/BenchMirrorTests.cs`. A change to either side must change the other in the same PR.
 
 **For Maxwell:** doc 09 now puts `src/Rimlight.Platform.Tests/**` in Lane B. Please confirm. The agents' own instruction files are out of date, and agents don't edit those:
 - CLAUDE.md "Your lane" and AGENTS.md "Never edit" don't name `src/Rimlight.Platform.Tests/**`.

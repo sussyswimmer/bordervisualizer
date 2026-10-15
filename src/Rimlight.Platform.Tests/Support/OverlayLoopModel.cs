@@ -20,13 +20,13 @@ internal readonly record struct ModelFrame(
 /// <summary>
 /// A model of <see cref="OverlayHost"/>'s overlay thread on a simulated clock, driving the app's real
 /// <c>MusicGlowSource</c> (through <see cref="GlowRig"/>, with the real Core behind it). The rules OverlayHost keeps in
-/// Windows-free code are the real ones here too: <see cref="FramePacer"/> (the pace, the dt rule and the cadence),
-/// <see cref="OverlayRules"/> ("Reduce on battery", the per-monitor 300 ms fades, and when the glow counts as paused
-/// everywhere, also with no overlay), <see cref="GlowConstants"/> and <see cref="OverlaySurface"/>'s half-scale buffer
-/// size. The control flow around them mirrors OverlayHost line for line: <c>Loop</c> (the first frame at once, a frame
-/// when the timer is due or an input arrives, but at the full rate an input waits for the next scheduled frame),
-/// <c>Wait</c> (Block waits for an input only), <c>ApplyPendingInputs</c> (paused monitors, settings, battery, pause
-/// and frame requests, each noted on the pacer), <c>RenderFrame</c> (the light hidden below
+/// Windows-free code are the real ones here too: <see cref="FramePacer"/> (the pace, the dt rule, the input hold and
+/// the cadence), <see cref="OverlayRules"/> ("Reduce on battery", the per-monitor 300 ms fades, and when the glow
+/// counts as paused everywhere, also with no overlay), <see cref="GlowConstants"/> and <see cref="OverlaySurface"/>'s
+/// half-scale buffer size. The control flow around them mirrors OverlayHost line for line: <c>Loop</c> (the first frame
+/// at once, a frame when the timer is due or an input arrives, but at the full rate an input waits for the next
+/// scheduled frame), <c>Wait</c> (Block waits for an input only), <c>ApplyPendingInputs</c> (paused monitors, settings,
+/// battery, pause and frame requests, each noted on the pacer), <c>RenderFrame</c> (the light hidden below
 /// <see cref="GlowConstants.MinVisibility"/> after one transparent present, no present while the screen already shows
 /// the frame, the window shown before anything else, and the switch to or from half scale under "Reduce" only on a
 /// shown overlay's frame, which then always presents) and <see cref="OverlaySurface"/>'s presented-frame bookkeeping.
@@ -181,7 +181,7 @@ internal sealed class OverlayLoopModel
             if (!frameDue && !inputChanged) continue;
             // An input brings a frame forward only from the slow or stopped pace (K3's review): at the full rate the next
             // scheduled frame draws it, so a slider drag can't push frames past the cap.
-            if (!frameDue && pace == Pace.Full && Now - lastFrame < pacer.FullInterval) continue;
+            if (!frameDue && pacer.InputWaits(pace, Now - lastFrame)) continue;
 
             double fullInterval = pacer.FullInterval;
             float dt = pacer.FrameDt(Now - lastFrame, frameDue);

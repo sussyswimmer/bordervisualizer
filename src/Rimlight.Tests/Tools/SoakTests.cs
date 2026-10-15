@@ -336,6 +336,41 @@ public sealed class SoakTests
         Assert.Equal(0.1f, PaceModel.FrameDt(0.1, 1 / 60.0, due: true));
         Assert.Equal(1 / 60f, PaceModel.FrameDt(0.05, 1 / 60.0, due: false));              // brought forward
         Assert.Equal(0.01f, PaceModel.FrameDt(0.01, 1 / 60.0, due: false));
+
+        Assert.True(PaceModel.InputWaits(Pace.Full, 0.01, 1 / 60.0));                       // the next frame draws it
+        Assert.False(PaceModel.InputWaits(Pace.Full, 1 / 60.0, 1 / 60.0));
+        Assert.False(PaceModel.InputWaits(Pace.Slow, 0.01, 1 / 60.0));                      // brought forward
+        Assert.False(PaceModel.InputWaits(Pace.Block, 0.01, 1 / 60.0));
+    }
+
+    [Fact]
+    public void InputsAtTheFullRateAddNoFrames()
+    {
+        // The overlay loop's input cap (FramePacer.InputWaits since K3's review): while music runs at the full rate, an
+        // input waits for the next scheduled frame. Every edit here lands within one interval after a frame, off the
+        // frame grid, so without the cap each one would draw an extra frame and restart the cadence from it (about 20
+        // frames more over the 40 edits).
+        var settings = new Settings();
+        SyntheticTrackOptions track = new SyntheticTrackOptions { SampleRate = Rate, Seconds = 12, Bpm = 120 }.WithFullMix();
+        SoakSegment[] music = [new SoakSegment(0, 12, SoakAudio.Music, track)];
+        SoakEvent[] edits = Enumerable.Range(0, 40)
+            .Select(i => new SoakEvent(2 + i * 0.243, SoakEventKind.Settings, "Brightness", settings with { Brightness = i % 2 == 0 ? 0.9f : 1 }))
+            .ToArray();
+        SoakReport Run(SoakEvent[] events) => SoakRun.Execute(new SoakOptions
+        {
+            Minutes = 12 / 60.0,
+            Schedule = new SoakSchedule(12, settings, music, events),
+            Jitter = 0,
+            WarmupSeconds = 1,
+            JitWarmupSeconds = 0,
+            MemoryEverySeconds = 5,
+        });
+
+        SoakReport quiet = Run([]);
+        SoakReport edited = Run(edits);
+        Assert.Equal(40, edited.SettingsEdits);
+        Assert.InRange(quiet.Frames, 11 * 60 - 1, 11 * 60 + 1);                          // the measured 11 s at 60 fps
+        Assert.Equal(quiet.Frames, edited.Frames);
     }
 
     [Fact]

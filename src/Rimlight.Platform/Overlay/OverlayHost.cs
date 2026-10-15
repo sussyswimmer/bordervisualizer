@@ -332,10 +332,11 @@ public sealed class OverlayHost : IDisposable
                 if (!frameDue && !inputChanged) continue;
                 // An input brings a frame forward only from the slow or stopped pace. At the full rate the next frame
                 // draws it within one interval, so a slider drag can't push frames or presents past the cap.
-                if (!frameDue && pace == Pace.Full && now - lastFrame < (long)(pacer.FullInterval * Stopwatch.Frequency)) continue;
+                double elapsed = (now - lastFrame) / (double)Stopwatch.Frequency;
+                if (!frameDue && pacer.InputWaits(pace, elapsed)) continue;
 
                 // A gap in frames, or the time before an input that brought this one forward, counts as one frame.
-                float dt = pacer.FrameDt((now - lastFrame) / (double)Stopwatch.Frequency, frameDue);
+                float dt = pacer.FrameDt(elapsed, frameDue);
                 lastFrame = now;
 
                 int presents = RenderFrame(dt);

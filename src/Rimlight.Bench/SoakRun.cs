@@ -449,7 +449,8 @@ internal static class SoakRun
         // The overlay loop: the next frame comes after the pace's interval (jittered, plus any stall), or earlier when
         // an input arrives (settings, pause, a new album palette), though not before a stall ends; while blocked only an
         // input brings it. At the full rate an input less than one full interval after the frame waits for the scheduled
-        // frame instead, as in OverlayHost's loop since K3's review, so inputs never add frames past the cap.
+        // frame instead, as in OverlayHost's loop since K3's review (PaceModel.InputWaits), so inputs never add frames
+        // past the cap.
         private (double Next, bool Due) NextFrameTime(double now, Pace pace)
         {
             double wake = NextInput(now);
@@ -464,7 +465,7 @@ internal static class SoakRun
             if (pendingStall > 0 && measuring) stallFrames++;
             pendingStall = 0;
             double woken = Math.Max(wake, earliest);
-            bool waits = pace == Pace.Full && woken - now < fullInterval;
+            bool waits = PaceModel.InputWaits(pace, woken - now, fullInterval);
             return wake < due && !waits ? (woken, false) : (due, true);
         }
 

@@ -161,7 +161,9 @@ internal partial class SettingsWindow : FluentWindow
 
     private void OnSystemStateQueued()
     {
-        Volatile.Write(ref systemQueued, 0);
+        // A full fence, as for the tray's tooltip: a plain store could pass the read of the state below (x64 store
+        // buffer), and a change published in between would then find the flag still set and never be applied.
+        Interlocked.Exchange(ref systemQueued, 0);
         UpdateActivity();
     }
 

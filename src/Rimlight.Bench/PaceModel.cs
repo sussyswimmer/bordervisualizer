@@ -13,11 +13,12 @@ internal enum Pace
     Block,
 }
 
-// The frame schedule of the overlay thread (doc 02 "Frame pacing"): Platform's FramePacer.Next and FramePacer.FrameDt
-// (the dt rule of OverlayHost's loop), for one monitor that presents every frame it draws. Rimlight.Platform is
-// Windows-only, so the policy is mirrored here: keep the two in step (Rimlight.Platform.Tests' BenchMirrorTests compares
-// them). Per-monitor pause fades and unfinished presents (both keep the full rate in the app) and stalled surfaces
-// (a display that takes no frames, kept at 10 fps or more) don't occur in a simulation without a display.
+// The frame schedule of the overlay thread (doc 02 "Frame pacing"): Platform's FramePacer.Next, FramePacer.FrameDt and
+// FramePacer.InputWaits (the dt and input rules of OverlayHost's loop), for one monitor that presents every frame it
+// draws. Rimlight.Platform is Windows-only, so the policy is mirrored here: keep the two in step
+// (Rimlight.Platform.Tests' BenchMirrorTests compares them). Per-monitor pause fades and unfinished presents (both keep
+// the full rate in the app) and stalled surfaces (a display that takes no frames, kept at 10 fps or more) don't occur
+// in a simulation without a display.
 internal sealed class PaceModel
 {
     /// <summary>Seconds between slow frames: 10 fps for breathing and for listening (FramePacer.SlowInterval).</summary>
@@ -77,6 +78,16 @@ internal sealed class PaceModel
     /// <returns>The dt in seconds.</returns>
     public static float FrameDt(double elapsedSeconds, double fullInterval, bool due) =>
         (float)(elapsedSeconds > MaxFrameDtSeconds ? fullInterval : due ? elapsedSeconds : Math.Min(elapsedSeconds, fullInterval));
+
+    /// <summary>Whether an input that arrives this long after the previous frame waits for the next scheduled frame
+    /// instead of bringing one forward (FramePacer.InputWaits): at the full rate it does, so inputs never add frames
+    /// past the cap.</summary>
+    /// <param name="pace">The pace chosen after the previous frame.</param>
+    /// <param name="elapsedSeconds">Time from the previous frame to the input.</param>
+    /// <param name="fullInterval">Seconds between frames at the full rate.</param>
+    /// <returns>True when the input waits.</returns>
+    public static bool InputWaits(Pace pace, double elapsedSeconds, double fullInterval) =>
+        pace == Pace.Full && elapsedSeconds < fullInterval;
 
     // FramePacer.ChangeRate: the fastest change of anything the glow shows, per second (colors reach the screen through
     // the gradient, whose refills count on their own).
