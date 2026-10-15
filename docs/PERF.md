@@ -218,7 +218,7 @@ Doc 07 Phase 7's 8-hour run of the app itself (working set at start and end, no 
 From the repository root, on Linux or Windows:
 
 ```bash
-dotnet build Rimlight.sln -c Release      # on Linux, Rimlight.Core.slnf builds Core, the tests and Bench
+dotnet build Rimlight.sln -c Release      # or Rimlight.Core.slnf: everything but the WPF app
 
 # Frame benchmark (three runs of each for this report); --rates 48000,44100,192000 is the default
 dotnet run -c Release --project src/Rimlight.Bench -- frame --frames 30000 --packet-ms 10   # 10 ms packets, as the app

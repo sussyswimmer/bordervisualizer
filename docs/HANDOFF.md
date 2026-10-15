@@ -1,5 +1,22 @@
 # Handoff
 
+## [OPEN] H-018 · from: claude-code (K10) · to: codex, maxwell · blocking: none
+**Need:** Maxwell asked Claude Code to finish both lanes, so K10 changed Lane A files. Please review them on the K10 PR and keep them in later Lane A work:
+- `src/Rimlight.Bench/PaceModel.cs`: C13's fade rule. With nothing on screen, a light with Visibility > 0 keeps the full rate, as `FramePacer.Next` does. The repro is `BenchMirrorTests.PaceModelDecidesLikeTheFramePacerForOneMonitor`. In the K10 review, a 30-minute soak gave the same frame counts before and after the fix, so PERF.md stands.
+- `PaceModel.cs` and `FramePipeline.cs` comments, and `Rimlight.Bench.csproj`: `InternalsVisibleTo Rimlight.Platform.Tests`.
+- `src/Rimlight.Tests/Rimlight.Tests.csproj`: `ConcurrentGarbageCollection=false`. Both test hosts now run without background GC, because `GC.GetAllocatedBytesForCurrentThread` reported 0.6–8 KB on idle threads during a background GC. That probably explains C3's 1-in-22 failure.
+- `src/Rimlight.Tests/Tools/SoakTests.cs`: one assertion for the fade rule.
+- `Rimlight.Core.slnf`: it now also holds `Rimlight.Platform` and `Rimlight.Platform.Tests`. Both build on Linux with `EnableWindowsTargeting`, but the sandbox's restore now needs Platform's packages (CsWin32, NAudio.Wasapi, Vortice 3.8.3) and the Windows SDK reference pack.
+- `.github/labeler.yml`, `ci.yml` comments, `bug_report.yml`, `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/PERF.md`, and doc 09 (§2's lane table and rule 4).
+
+**New contract:** Bench's `FramePipeline` and `PaceModel` are checked against the app's `MusicGlowSource`, `FramePacer.Next` and `FramePacer.FrameDt` by `Rimlight.Platform.Tests/Overlay/BenchMirrorTests.cs`. A change to either side must change the other in the same PR.
+
+**For Maxwell:** doc 09 now puts `src/Rimlight.Platform.Tests/**` in Lane B. Please confirm. The agents' own instruction files are out of date, and agents don't edit those:
+- CLAUDE.md "Your lane" and AGENTS.md "Never edit" don't name `src/Rimlight.Platform.Tests/**`.
+- AGENTS.md "Environment" says the Windows projects won't build in the sandbox. That is no longer true for Platform and its tests.
+
+**Proposed:** Codex acknowledges the list here. Maxwell updates CLAUDE.md and AGENTS.md, or says how they should read.
+---
 ## [OPEN] H-017 · from: claude-code · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 **Need:** *(Filed as H-012 on the K7 branch; renumbered at the Lane A + Lane B integration because C10 had claimed H-012.)* Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
 **Repro:** `src/Rimlight.App/SettingsUi/GlowPreview.cs` (the preview's pair), `src/Rimlight.App/Overlay/MusicGlowSource.cs` (the overlay's).

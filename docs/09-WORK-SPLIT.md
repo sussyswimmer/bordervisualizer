@@ -33,7 +33,7 @@ FROZEN after Step 0:                    src/Rimlight.Core/Contracts/**
 1. **Never edit a file in the other lane.** If you need a change there, add an entry to `docs/HANDOFF.md` (format in §5) and work around it with a local stub until it lands.
 2. Work on branches named `codex/<task-id>-<slug>` or `claude/<task-id>-<slug>`. Open PRs into `main`. Squash-merge. Use Conventional Commits.
 3. **Cross-review:** before merging, the *other* agent reviews the PR (Maxwell pastes the PR link to it). The reviewer checks contract compliance, threading rules (doc 02), and allocations in hot paths. Reviews are short: blockers first, then nits.
-4. `main` must always build. The Codex sandbox builds `Rimlight.Core.slnf` (Core + Tests + Bench). Windows CI builds the full `.sln`.
+4. `main` must always build. The Codex sandbox builds `Rimlight.Core.slnf`: Core, Tests, Bench and the tools, plus Platform and its tests since K10 (they build on Linux with `EnableWindowsTargeting`). Windows CI builds the full `.sln`.
 
 ## 3. Contracts (frozen interface between lanes)
 

@@ -12,8 +12,9 @@ Rimlight/
 ├─ assets/                        # icon sources, README banner, GIFs, screenshots
 ├─ build/                         # Velopack pack script, icon generation script
 ├─ .github/                       # workflows, issue templates (doc 08)
+├─ tools/                         # wav-analyze, audio-tools (synthetic tracks), icon-gen
 └─ src/
-   ├─ Directory.Build.props       # AppName, version, nullable, TreatWarningsAsErrors, LangVersion latest
+   ├─ Directory.Build.props       # AppName, version, nullable, TreatWarningsAsErrors, LangVersion 12, AnalysisLevel 8.0
    ├─ Rimlight.Core/              # net8.0 — NO Windows/UI references
    │  ├─ AppInfo.cs
    │  ├─ Audio/                   # Fft, BandAnalyzer, BeatDetector, Envelope, AudioFeatures
@@ -21,13 +22,15 @@ Rimlight/
    │  ├─ Lighting/                # LightState, LightEngine (features + palette + settings → LightState)
    │  └─ Settings/                # Settings model, defaults, JSON (de)serialization, migration
    ├─ Rimlight.Platform/          # net8.0-windows10.0.19041.0 — Win32/WinRT/D3D code
-   │  ├─ Audio/LoopbackCapture.cs
-   │  ├─ Media/NowPlayingService.cs
-   │  ├─ Overlay/                 # OverlayWindow, OverlayManager, D3D renderer, Glow.hlsl
-   │  ├─ System/                  # MonitorWatcher, PowerWatcher, FullscreenDetector, HotkeyService, StartupRegistration
+   │  ├─ Audio/                   # LoopbackCapture, AudioRingBuffer, MonoConverter
+   │  ├─ Media/                   # NowPlayingService, AlbumArtDecoder
+   │  ├─ Overlay/                 # OverlayHost, OverlayWindow, OverlaySurface, GpuDevice, FramePacer, Glow.hlsl
+   │  ├─ Shell/                   # GlobalHotkey, SingleInstance, StartupRegistration, SystemTheme
+   │  ├─ Watchers/                # SystemWatcher, PowerWatcher, SessionWatcher, FullscreenDetector
    │  └─ NativeMethods.txt        # CsWin32 API list
    ├─ Rimlight.App/               # WPF exe — composition root, tray, settings UI, Velopack bootstrap
-   ├─ Rimlight.Tests/             # xUnit, references Core only
+   ├─ Rimlight.Bench/             # frame benchmark and soak run of the render thread's Core work (C12)
+   ├─ Rimlight.Tests/             # xUnit for Core, Bench and the tools
    └─ Rimlight.Platform.Tests/    # xUnit, the parts of Platform and App that make no Windows calls (K10)
 ```
 
@@ -81,7 +84,8 @@ public readonly record struct LightState(
 `LightEngine` is a pure function plus internal smoothing state. All the "feel" lives here and in the audio engine, and it's fully unit-testable.
 
 ## Lifetime events (Platform → App)
-- `MonitorWatcher`: `WM_DISPLAYCHANGE`, `WM_DPICHANGED`, and `WM_SETTINGCHANGE` (work area) → `OverlayManager.Rebuild()` debounced by 300 ms.
+The watcher names below are the spec's. In the code, `OverlayHost`'s hidden helper window takes the display messages, and `SystemWatcher` (with `PowerWatcher`, `SessionWatcher` and `FullscreenDetector`) the power, session and fullscreen ones on a thread of its own. Both are hidden top-level windows rather than message-only ones, because broadcasts and power and session notifications reach only top-level windows.
+- `MonitorWatcher`: `WM_DISPLAYCHANGE`, `WM_DPICHANGED`, and `WM_SETTINGCHANGE` (work area) → `OverlayHost.Rebuild()` debounced by 300 ms.
 - `PowerWatcher`: `WM_POWERBROADCAST` (suspend/resume, AC/DC via `PBT_APMPOWERSTATUSCHANGE`), `WTSRegisterSessionNotification` (lock/unlock), and `RegisterPowerSettingNotification(GUID_CONSOLE_DISPLAY_STATE)` (display off).
 - `LoopbackCapture`: subscribe to `IMMNotificationClient.OnDefaultDeviceChanged` and restart capture on the new default render device. Retry with backoff (0.5 s → 5 s) on failure.
 - **GPU device loss** (`DXGI_ERROR_DEVICE_REMOVED/RESET` on Present): tear down and recreate the device and all swap chains, then continue.

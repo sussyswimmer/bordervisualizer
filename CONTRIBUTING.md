@@ -56,7 +56,8 @@ src/
                           media session, monitor and power watchers
   Rimlight.App/           The WPF tray app: startup, tray menu, Settings window, updates
   Rimlight.Tests/         xUnit tests for Core and the tools
-  Rimlight.Platform.Tests/  xUnit tests for the Windows-free parts of Platform and App (run on Linux too)
+  Rimlight.Platform.Tests/
+                          xUnit tests for the Windows-free parts of Platform and App (run on Linux too)
   Rimlight.Bench/         Benchmarks and long soak runs
 tools/                    Offline tools: WAV analyzer, synthetic test tracks, icon generator
 build/                    Packaging and release scripts
@@ -121,7 +122,7 @@ Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\lo
 2. Select every file in the folder, right-click, and zip them: **Compress to** on Windows 11, or **Send to > Compressed (zipped) folder** on Windows 10.
 3. [Open a bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) and drag the zip into the **Logs** box.
 
-Logs never contain audio or track titles, but they can include device and monitor names. Have a quick look before you upload them.
+Logs never contain audio or track titles, but they can include device and monitor names, and file paths that contain your Windows user name. Have a quick look before you upload them.
 
 If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight.
 
