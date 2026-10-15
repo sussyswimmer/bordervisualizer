@@ -5,6 +5,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The Windows-free parts (frame pacing, glow constants, the audio ring and conversion, the fullscreen rules) are
+         tested on Linux and Windows by Rimlight.Platform.Tests (K10). -->
+    <InternalsVisibleTo Include="Rimlight.Platform.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
     <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.346" PrivateAssets="all" />
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />

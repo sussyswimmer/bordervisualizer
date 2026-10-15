@@ -10,6 +10,8 @@
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Rimlight.Tests" />
+    <!-- Lane B's tests check FramePipeline and PaceModel against the app's MusicGlowSource and FramePacer. -->
+    <InternalsVisibleTo Include="Rimlight.Platform.Tests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
