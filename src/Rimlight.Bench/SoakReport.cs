@@ -129,7 +129,10 @@ internal sealed class SoakReport
     public string MemoryContext => string.Create(C,
         $"Working set from the end of warm-up ({Clock(Memory.TimeAt(0))}) to the end: " +
         $"{ProcessMemory.SignedKilobytes(WorkingSetGrowthSinceWarmup)}, one-time growth included; trend from {Clock(SettledAt)} on: " +
-        $"{(WorkingSetTrendPerHour >= 0 ? "+" : "-")}{Math.Abs(WorkingSetTrendPerHour) / 1024:N0} KB per simulated hour (least squares over {Memory.Count - SettledIndex} readings).");
+        $"{ProcessMemory.SignedKilobytes((long)WorkingSetTrendPerHour)} per simulated hour (least squares over {Memory.Count - SettledIndex} readings). " +
+        $"The JIT had compiled {AfterWarmup.CompiledMethods:N0} methods by the end of warm-up and compiled " +
+        $"{End.CompiledMethods - AfterWarmup.CompiledMethods:N0} more during the measured part (tier-ups of paths that run rarely), " +
+        $"{End.CompiledMethods - Settled.CompiledMethods:N0} of them after {Clock(SettledAt)}.");
 
     /// <summary>Writes the plain-text summary printed after the progress lines.</summary>
     /// <param name="output">Where to write.</param>
@@ -210,20 +213,25 @@ internal sealed class SoakReport
     private void WriteMemoryTimeline(TextWriter output)
     {
         double step = SimulatedSeconds >= 7200 ? 3600 : SimulatedSeconds / 8;
-        output.WriteLine("| simulated time | working set | managed heap |");
-        output.WriteLine("|---|---:|---:|");
+        output.WriteLine("| simulated time | working set | managed heap | methods compiled by the JIT |");
+        output.WriteLine("|---|---:|---:|---:|");
         int previous = -1;
         for (double t = 0; t <= SimulatedSeconds + 1e-6; t += step)
         {
             int i = Memory.IndexAt(t);
             if (i < 0 || i == previous) continue;
             previous = i;
-            output.WriteLine($"| {Clock(Memory.TimeAt(i))} | {Kilobytes(Memory[i].WorkingSetBytes)} | {Kilobytes(Memory[i].ManagedHeapBytes)} |");
+            Row(i);
         }
-        if (previous != Memory.Count - 1) output.WriteLine($"| {Clock(Memory.TimeAt(Memory.Count - 1))} | {Kilobytes(End.WorkingSetBytes)} | {Kilobytes(End.ManagedHeapBytes)} |");
+        if (previous != Memory.Count - 1) Row(Memory.Count - 1);
+
+        void Row(int i) => output.WriteLine(string.Create(C,
+            $"| {Clock(Memory.TimeAt(i))} | {Kilobytes(Memory[i].WorkingSetBytes)} | {Kilobytes(Memory[i].ManagedHeapBytes)} | {Memory[i].CompiledMethods:N0} |"));
     }
 
     private static string Kilobytes(long bytes) => string.Create(C, $"{bytes / 1024.0:N0} KB");
+
+    private static string Count(long count, string singular, string plural) => string.Create(C, $"{count:N0} {(count == 1 ? singular : plural)}");
 
     private string DescribeSchedule()
     {
@@ -265,10 +273,11 @@ internal sealed class SoakReport
         }
         string editList = string.Join(", ", edits.Select(p => $"{p.Key} {p.Value}"));
         return string.Create(C,
-            $"{tracks} tracks ({noArt} without art, {sameAlbum} with the previous track's colors), {silentGaps + emptyGaps} gaps " +
-            $"({silentGaps} with silent packets, {emptyGaps} without packets; {longGaps} of 4 s or more), " +
-            $"{edits.Values.Sum()} settings edits ({editList}), {pauses} fullscreen pauses, {hotkey} hotkey offs, " +
-            $"{stalls} stalls ({longStalls} over {PaceModel.MaxFrameDtSeconds} s)");
+            $"{Count(tracks, "track", "tracks")} ({noArt} without art, {sameAlbum} with the previous track's colors), " +
+            $"{Count(silentGaps + emptyGaps, "gap", "gaps")} ({silentGaps} with silent packets, {emptyGaps} without packets; " +
+            $"{longGaps} of 4 s or more), {Count(edits.Values.Sum(), "settings edit", "settings edits")} ({editList}), " +
+            $"{Count(pauses, "fullscreen pause", "fullscreen pauses")}, {Count(hotkey, "hotkey off", "hotkey offs")}, " +
+            $"{Count(stalls, "stall", "stalls")} ({longStalls} over {PaceModel.MaxFrameDtSeconds} s)");
     }
 
     private string DescribeFrames() => string.Create(C,

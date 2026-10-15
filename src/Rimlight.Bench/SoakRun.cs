@@ -45,11 +45,14 @@ internal sealed record SoakSnapshot(double SimulatedSeconds, long Frames, double
 /// <summary>A memory reading.</summary>
 /// <param name="WorkingSetBytes">The process working set.</param>
 /// <param name="ManagedHeapBytes">The managed heap, garbage not yet collected included (GC.GetTotalMemory(false)).</param>
-internal readonly record struct MemoryReading(long WorkingSetBytes, long ManagedHeapBytes)
+/// <param name="CompiledMethods">Methods the JIT has compiled so far, tier-ups included (JitInfo): the working set
+/// steps up with the code and JIT memory of each batch, so this tells one-time growth from a leak.</param>
+internal readonly record struct MemoryReading(long WorkingSetBytes, long ManagedHeapBytes, long CompiledMethods = 0)
 {
-    /// <summary>Reads both, without allocating.</summary>
+    /// <summary>Reads all three, without allocating.</summary>
     /// <returns>The reading.</returns>
-    public static MemoryReading Now() => new(ProcessMemory.WorkingSetBytes(), GC.GetTotalMemory(false));
+    public static MemoryReading Now() =>
+        new(ProcessMemory.WorkingSetBytes(), GC.GetTotalMemory(false), System.Runtime.JitInfo.GetCompiledMethodCount());
 }
 
 // Simulated-time soak of the app's render thread (doc 07 Phase 7, C12). Every frame runs FramePipeline, i.e. what
@@ -431,7 +434,7 @@ internal static class SoakRun
 
         public SoakReport Report(MemoryReading start, double wallSeconds, double jitWarmupWallSeconds, double clockReadNs)
         {
-            memory.Add(end, MemoryReading.Now());
+            if (memory.Count == 0 || memory.TimeAt(memory.Count - 1) < end) memory.Add(end, MemoryReading.Now());
             (int g0, int g1, int g2) = (GC.CollectionCount(0) - gen0, GC.CollectionCount(1) - gen1, GC.CollectionCount(2) - gen2);
             GC.Collect();
             GC.WaitForPendingFinalizers();

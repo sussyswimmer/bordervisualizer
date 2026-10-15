@@ -5,15 +5,14 @@ namespace Rimlight.Bench;
 internal sealed class MemoryLog
 {
     private readonly double[] times;
-    private readonly long[] workingSets, heaps;
+    private readonly MemoryReading[] readings;
 
     /// <summary>Creates a log for up to <paramref name="capacity"/> readings; later readings are dropped.</summary>
     /// <param name="capacity">The most readings the run takes.</param>
     public MemoryLog(int capacity)
     {
         times = new double[capacity];
-        workingSets = new long[capacity];
-        heaps = new long[capacity];
+        readings = new MemoryReading[capacity];
     }
 
     /// <summary>The number of readings.</summary>
@@ -27,11 +26,11 @@ internal sealed class MemoryLog
     /// <param name="reading">The reading.</param>
     public void Add(double seconds, MemoryReading reading)
     {
-        Peak = new MemoryReading(Math.Max(Peak.WorkingSetBytes, reading.WorkingSetBytes), Math.Max(Peak.ManagedHeapBytes, reading.ManagedHeapBytes));
+        Peak = new MemoryReading(Math.Max(Peak.WorkingSetBytes, reading.WorkingSetBytes), Math.Max(Peak.ManagedHeapBytes, reading.ManagedHeapBytes),
+            Math.Max(Peak.CompiledMethods, reading.CompiledMethods));
         if (Count == times.Length) return;
         times[Count] = seconds;
-        workingSets[Count] = reading.WorkingSetBytes;
-        heaps[Count] = reading.ManagedHeapBytes;
+        readings[Count] = reading;
         Count++;
     }
 
@@ -43,7 +42,7 @@ internal sealed class MemoryLog
     /// <summary>Reading <paramref name="index"/>.</summary>
     /// <param name="index">From 0 to <see cref="Count"/> − 1.</param>
     /// <returns>The reading.</returns>
-    public MemoryReading this[int index] => new(workingSets[index], heaps[index]);
+    public MemoryReading this[int index] => readings[index];
 
     /// <summary>The first reading at or after a time (the last one if none is).</summary>
     /// <param name="seconds">Simulated seconds.</param>
@@ -62,18 +61,19 @@ internal sealed class MemoryLog
     /// <returns>Bytes per hour; 0 with fewer than two readings.</returns>
     public double WorkingSetTrendPerHour(int from)
     {
-        int n = Count - Math.Max(0, from);
+        from = Math.Max(0, from);
+        int n = Count - from;
         if (n < 2) return 0;
         double meanT = 0, meanW = 0;
         for (int i = from; i < Count; i++)
         {
             meanT += times[i] / n;
-            meanW += workingSets[i] / (double)n;
+            meanW += readings[i].WorkingSetBytes / (double)n;
         }
         double covariance = 0, variance = 0;
         for (int i = from; i < Count; i++)
         {
-            covariance += (times[i] - meanT) * (workingSets[i] - meanW);
+            covariance += (times[i] - meanT) * (readings[i].WorkingSetBytes - meanW);
             variance += (times[i] - meanT) * (times[i] - meanT);
         }
         return variance > 0 ? covariance / variance * 3600 : 0;

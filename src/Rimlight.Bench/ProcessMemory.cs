@@ -67,7 +67,11 @@ internal static class ProcessMemory
     /// <summary>A signed byte count in KB, e.g. "+120 KB".</summary>
     /// <param name="bytes">The count.</param>
     /// <returns>The text.</returns>
-    public static string SignedKilobytes(long bytes) => string.Create(CultureInfo.InvariantCulture, $"{(bytes >= 0 ? "+" : "-")}{Math.Abs(bytes) / 1024.0:N0} KB");
+    public static string SignedKilobytes(long bytes)
+    {
+        long kilobytes = (long)Math.Round(bytes / 1024.0);
+        return string.Create(CultureInfo.InvariantCulture, $"{(kilobytes >= 0 ? "+" : "-")}{Math.Abs(kilobytes):N0} KB");
+    }
 
     private static SafeFileHandle? OpenStatm()
     {

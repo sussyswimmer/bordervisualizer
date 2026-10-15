@@ -152,7 +152,10 @@ public sealed class SoakTests
         report.WriteMarkdown(markdown);
         Assert.Contains("| whole frame |", markdown.ToString());
         Assert.Contains("| light engine |", markdown.ToString());
-        Assert.Contains("1 fullscreen pauses, 1 hotkey offs", markdown.ToString());
+        Assert.Contains("4 tracks (1 without art, 0 with the previous track's colors), 3 gaps", markdown.ToString());
+        Assert.Contains("1 fullscreen pause, 1 hotkey off, 1 stall (1 over 0.25 s)", markdown.ToString());
+        Assert.Contains("| methods compiled by the JIT |", markdown.ToString());
+        Assert.True(report.End.CompiledMethods >= report.AfterWarmup.CompiledMethods && report.AfterWarmup.CompiledMethods > 0);
     }
 
     [Fact]
