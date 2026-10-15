@@ -13,4 +13,8 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Platform targets Windows, but its mono conversion has no Windows dependencies: compiled in so it runs here. -->
+    <Compile Include="../Rimlight.Platform/Audio/MonoConverter.cs" Link="Platform/MonoConverter.cs" />
+  </ItemGroup>
 </Project>
