@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640">
+  <!-- The Rimlight banner (doc 08 §1): the README header and the repository's social preview image.
+       A screen whose edges glow violet to cyan, as the app lights a real screen, with the wordmark and the
+       tagline inside. The letters are an original monoline geometric design drawn as paths (stroked lines,
+       circles and ellipses), so the file needs no fonts. The i dots carry the two glow colors.
+       Colors: #0A0A0F background, #7C5CFF violet and #22D3EE cyan, as in assets/icon.svg.
+       After editing, run `node build/banner.mjs` to render assets/banner.png. -->
+  <title>Rimlight. Your screen, lit by your music.</title>
+  <defs>
+    <!-- The glow colors run from the top left to the bottom right, as in the icon. -->
+    <linearGradient id="rim" gradientUnits="userSpaceOnUse" x1="196" y1="92" x2="1084" y2="516">
+      <stop offset="0" stop-color="#7C5CFF"/>
+      <stop offset="0.5" stop-color="#5A8CFA"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <linearGradient id="core" gradientUnits="userSpaceOnUse" x1="196" y1="92" x2="1084" y2="516">
+      <stop offset="0" stop-color="#D9CFFF"/>
+      <stop offset="1" stop-color="#C8F6FD"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14121D"/>
+      <stop offset="1" stop-color="#0C0B12"/>
+    </linearGradient>
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse" x1="196" y1="92" x2="684" y2="516">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.045"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="ambientViolet" gradientUnits="userSpaceOnUse" cx="276" cy="132" r="560">
+      <stop offset="0" stop-color="#7C5CFF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#7C5CFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ambientCyan" gradientUnits="userSpaceOnUse" cx="1004" cy="476" r="560">
+      <stop offset="0" stop-color="#22D3EE" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Light the screen casts on the surface below it: a flat ellipse. -->
+    <radialGradient id="floor" gradientUnits="userSpaceOnUse" cx="640" cy="520" r="444"
+        gradientTransform="translate(0 520) scale(1 0.16) translate(0 -520)">
+      <stop offset="0" stop-color="#6E7BFA" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#6E7BFA" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="reflectionFade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="reflection" maskUnits="userSpaceOnUse" x="0" y="516" width="1280" height="124">
+      <rect x="0" y="516" width="1280" height="124" fill="url(#reflectionFade)"/>
+    </mask>
+    <radialGradient id="vignette" gradientUnits="userSpaceOnUse" cx="640" cy="320" r="794">
+      <stop offset="0.55" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.55"/>
+    </radialGradient>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="0" y1="-700" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E2DCFF"/>
+    </linearGradient>
+    <linearGradient id="inkGlow" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="3647" y2="0">
+      <stop offset="0" stop-color="#8B6CFF"/>
+      <stop offset="1" stop-color="#2FD6F0"/>
+    </linearGradient>
+
+    <!-- Blurs for the glow. Their regions cover the whole banner, so no glow is cut off at a filter edge. -->
+    <filter id="blur4" filterUnits="userSpaceOnUse" x="0" y="0" width="1280" height="640"><feGaussianBlur stdDeviation="4"/></filter>
+    <filter id="blur12" filterUnits="userSpaceOnUse" x="0" y="0" width="1280" height="640"><feGaussianBlur stdDeviation="12"/></filter>
+    <filter id="blur24" filterUnits="userSpaceOnUse" x="0" y="0" width="1280" height="640"><feGaussianBlur stdDeviation="24"/></filter>
+    <filter id="blur36" filterUnits="userSpaceOnUse" x="0" y="0" width="1280" height="640"><feGaussianBlur stdDeviation="36"/></filter>
+    <!-- The wordmark's glow, in font units (1 px is about 5.5 units): a tight edge and a wide bloom. -->
+    <filter id="textEdge" x="-10%" y="-30%" width="120%" height="160%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="textBloom" x="-25%" y="-80%" width="150%" height="260%"><feGaussianBlur stdDeviation="90"/></filter>
+    <!-- Fine grain, a fraction of a code value on average: it dithers the dark gradients so they don't band. -->
+    <filter id="grain" filterUnits="userSpaceOnUse" x="0" y="0" width="1280" height="640">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" stitchTiles="stitch"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0.06 0 0 0 -0.03"/>
+    </filter>
+
+    <clipPath id="inside"><rect x="196" y="92" width="888" height="424" rx="30"/></clipPath>
+    <rect id="edge" x="196" y="92" width="888" height="424" rx="30" fill="none" stroke="url(#rim)"/>
+
+    <!-- "Rimlight", in font units: cap height 700, x-height 500, baseline at 0, stroke width 92. The
+         lines are stroked (fill="none"); the dots and the diagonals, which are cut flat, are filled (stroke="none"). -->
+    <g id="wordmark">
+      <g><path fill="none" d="M46 0V-700"/><path fill="none" d="M46 -654H186A176.5 176.5 0 0 1 362.5 -477.5A176.5 176.5 0 0 1 186 -301H46"/><path stroke="none" d="M215.3 -301L438.4 0L323.8 0L100.7 -301Z"/></g><!-- R -->
+      <g transform="translate(497.7 0)"><path fill="none" d="M46 0V-500"/><circle stroke="none" fill="#AE98FF" cx="46" cy="-633.4" r="55.2"/></g><!-- i -->
+      <g transform="translate(754.6 0)"><path fill="none" d="M46 0V-500"/><path fill="none" d="M46 -302.5A156.5 156.5 0 0 1 202.5 -459A156.5 156.5 0 0 1 359 -302.5V0"/><path fill="none" d="M359 -302.5A156.5 156.5 0 0 1 515.5 -459A156.5 156.5 0 0 1 672 -302.5V0"/></g><!-- m -->
+      <g transform="translate(1637.5 0)"><path fill="none" d="M46 0V-730"/></g><!-- l -->
+      <g transform="translate(1894.4 0)"><path fill="none" d="M46 0V-500"/><circle stroke="none" fill="#4FE3F7" cx="46" cy="-633.4" r="55.2"/></g><!-- i -->
+      <g transform="translate(2131 0)"><path fill="none" d="M474 -500V45.7A209.7 133.3 0 0 1 79.1 108.3"/><path fill="none" d="M260 -464A214 214 0 0 0 46 -250A214 214 0 0 0 260 -36A214 214 0 0 0 474 -250A214 214 0 0 0 260 -464Z"/></g><!-- g -->
+      <g transform="translate(2815.9 0)"><path fill="none" d="M46 0V-730"/><path fill="none" d="M46 -288A171 171 0 0 1 217 -459A171 171 0 0 1 388 -288V0"/></g><!-- h -->
+      <g transform="translate(3366.9 0)"><path fill="none" d="M117.6 0V-642.4"/><path fill="none" d="M0 -454H280"/></g><!-- t -->
+    </g>
+    <!-- "Your screen, lit by your music.", in the same units, stroke width 84. -->
+    <g id="tagline">
+      <g><path fill="none" d="M308 0V-309"/><path stroke="none" d="M100.7 -700L308 -384.5L308 -231.5L0.1 -700Z"/><path stroke="none" d="M615.9 -700L308 -231.5L308 -384.5L515.3 -700Z"/></g>
+      <g transform="translate(607.6 0)"><path fill="none" d="M260 -468A218 218 0 0 0 42 -250A218 218 0 0 0 260 -32A218 218 0 0 0 478 -250A218 218 0 0 0 260 -468Z"/></g>
+      <g transform="translate(1272.9 0)"><path fill="none" d="M388 0V-500"/><path fill="none" d="M42 -500V-210A173 173 0 0 0 215 -37A173 173 0 0 0 388 -210"/></g>
+      <g transform="translate(1866.6 0)"><path fill="none" d="M42 0V-500"/><path fill="none" d="M42 -290A173 173 0 0 1 314.2 -431.7"/></g>
+      <g transform="translate(2523.5 0)"><path fill="none" d="M386.1 -413.6A174.8 102.5 0 0 0 82 -418.3A174.8 102.5 0 0 0 231.8 -263.1A189.8 115.5 0 0 1 394.5 -88A189.8 115.5 0 0 1 64.2 -93.3"/></g>
+      <g transform="translate(3103.8 0)"><path fill="none" d="M405.9 -412A218 218 0 0 0 42 -250A218 218 0 0 0 405.9 -88"/></g>
+      <g transform="translate(3736.5 0)"><path fill="none" d="M42 0V-500"/><path fill="none" d="M42 -290A173 173 0 0 1 314.2 -431.7"/></g>
+      <g transform="translate(4152.5 0)"><path fill="none" d="M42 -250H478A218 218 0 0 0 56.5 -328.1A218 218 0 0 0 422 -104.1"/></g>
+      <g transform="translate(4794.3 0)"><path fill="none" d="M42 -250H478A218 218 0 0 0 56.5 -328.1A218 218 0 0 0 422 -104.1"/></g>
+      <g transform="translate(5454.5 0)"><path fill="none" d="M42 0V-500"/><path fill="none" d="M42 -290A173 173 0 0 1 215 -463A173 173 0 0 1 388 -290V0"/></g>
+      <g transform="translate(5999.6 0)"><path stroke="none" d="M108.8 -50.4L35.7 105L-25.6 105L47.5 -50.4Z"/><circle stroke="none" cx="50.4" cy="-50.4" r="50.4"/></g>
+      <g transform="translate(6491.5 0)"><path fill="none" d="M42 0V-730"/></g>
+      <g transform="translate(6739.3 0)"><path fill="none" d="M42 0V-500"/><circle stroke="none" cx="42" cy="-621.8" r="50.4"/></g>
+      <g transform="translate(6943.4 0)"><path fill="none" d="M117.6 0V-642.4"/><path fill="none" d="M0 -458H280"/></g>
+      <g transform="translate(7589.5 0)"><path fill="none" d="M42 0V-730"/><path fill="none" d="M260 -468A218 218 0 0 0 42 -250A218 218 0 0 0 260 -32A218 218 0 0 0 478 -250A218 218 0 0 0 260 -468Z"/></g>
+      <g transform="translate(8201.1 0)"><path stroke="none" d="M446.2 -500L193.6 215L104.5 215L357.2 -500Z"/><path stroke="none" d="M92.8 -500L247.3 -63L202.7 63L3.8 -500Z"/></g>
+      <g transform="translate(8973.5 0)"><path stroke="none" d="M446.2 -500L193.6 215L104.5 215L357.2 -500Z"/><path stroke="none" d="M92.8 -500L247.3 -63L202.7 63L3.8 -500Z"/></g>
+      <g transform="translate(9515.1 0)"><path fill="none" d="M260 -468A218 218 0 0 0 42 -250A218 218 0 0 0 260 -32A218 218 0 0 0 478 -250A218 218 0 0 0 260 -468Z"/></g>
+      <g transform="translate(10180.3 0)"><path fill="none" d="M388 0V-500"/><path fill="none" d="M42 -500V-210A173 173 0 0 0 215 -37A173 173 0 0 0 388 -210"/></g>
+      <g transform="translate(10774.1 0)"><path fill="none" d="M42 0V-500"/><path fill="none" d="M42 -290A173 173 0 0 1 314.2 -431.7"/></g>
+      <g transform="translate(11459.5 0)"><path fill="none" d="M42 0V-500"/><path fill="none" d="M42 -306.5A156.5 156.5 0 0 1 198.5 -463A156.5 156.5 0 0 1 355 -306.5V0"/><path fill="none" d="M355 -306.5A156.5 156.5 0 0 1 511.5 -463A156.5 156.5 0 0 1 668 -306.5V0"/></g>
+      <g transform="translate(12333.3 0)"><path fill="none" d="M388 0V-500"/><path fill="none" d="M42 -500V-210A173 173 0 0 0 215 -37A173 173 0 0 0 388 -210"/></g>
+      <g transform="translate(12898.5 0)"><path fill="none" d="M386.1 -413.6A174.8 102.5 0 0 0 82 -418.3A174.8 102.5 0 0 0 231.8 -263.1A189.8 115.5 0 0 1 394.5 -88A189.8 115.5 0 0 1 64.2 -93.3"/></g>
+      <g transform="translate(13497.3 0)"><path fill="none" d="M42 0V-500"/><circle stroke="none" cx="42" cy="-621.8" r="50.4"/></g>
+      <g transform="translate(13726.6 0)"><path fill="none" d="M405.9 -412A218 218 0 0 0 42 -250A218 218 0 0 0 405.9 -88"/></g>
+      <g transform="translate(14320.6 0)"><circle stroke="none" cx="50.4" cy="-50.4" r="50.4"/></g>
+    </g>
+  </defs>
+
+  <rect width="1280" height="640" fill="#0A0A0F"/>
+  <rect width="1280" height="640" fill="url(#ambientViolet)"/>
+  <rect width="1280" height="640" fill="url(#ambientCyan)"/>
+
+  <!-- Wide bloom around the screen. -->
+  <use xlink:href="#edge" stroke-width="34" opacity="0.55" filter="url(#blur36)"/>
+  <!-- The screen, and the light spilling inward from its edges. -->
+  <rect x="196" y="92" width="888" height="424" rx="30" fill="url(#screen)"/>
+  <g clip-path="url(#inside)">
+    <use xlink:href="#edge" stroke-width="90" opacity="0.42" filter="url(#blur36)"/>
+    <use xlink:href="#edge" stroke-width="26" opacity="0.55" filter="url(#blur12)"/>
+  </g>
+  <!-- Brighter light along the top left and the bottom right. -->
+  <ellipse cx="456" cy="92" rx="300" ry="26" fill="#8C70FF" opacity="0.55" filter="url(#blur24)"/>
+  <ellipse cx="824" cy="516" rx="300" ry="26" fill="#2CD8F0" opacity="0.5" filter="url(#blur24)"/>
+  <!-- The halo, the rim and its hot core. -->
+  <use xlink:href="#edge" stroke-width="12" opacity="0.85" filter="url(#blur12)"/>
+  <use xlink:href="#edge" stroke-width="6" opacity="0.9" filter="url(#blur4)"/>
+  <use xlink:href="#edge" stroke-width="4"/>
+  <rect x="196" y="92" width="888" height="424" rx="30" fill="none" stroke="url(#core)" stroke-width="1.6" opacity="0.9"/>
+  <!-- A faint sheen on the glass. -->
+  <rect x="196" y="92" width="888" height="424" rx="30" fill="url(#sheen)"/>
+
+  <!-- The surface below: cast light and a soft reflection of the screen. -->
+  <rect x="0" y="516" width="1280" height="124" fill="url(#floor)"/>
+  <g mask="url(#reflection)">
+    <g transform="translate(0 1038) scale(1 -1)" opacity="0.7" filter="url(#blur4)">
+      <use xlink:href="#edge" stroke-width="5"/>
+    </g>
+  </g>
+
+  <!-- The wordmark, lit from behind. -->
+  <g transform="translate(306.6 326) scale(0.182857)" fill="url(#inkGlow)" stroke="url(#inkGlow)" stroke-width="92">
+    <use xlink:href="#wordmark" opacity="0.4" filter="url(#textBloom)"/>
+    <use xlink:href="#wordmark" opacity="0.5" filter="url(#textEdge)"/>
+  </g>
+  <g transform="translate(306.6 326) scale(0.182857)" fill="url(#ink)" stroke="url(#ink)" stroke-width="92">
+    <use xlink:href="#wordmark"/>
+  </g>
+  <!-- The tagline. -->
+  <g transform="translate(315.5 420) scale(0.045)" fill="#B8B3D1" stroke="#B8B3D1" stroke-width="84">
+    <use xlink:href="#tagline"/>
+  </g>
+
+  <rect width="1280" height="640" fill="url(#vignette)"/>
+  <rect width="1280" height="640" filter="url(#grain)"/>
+</svg>
