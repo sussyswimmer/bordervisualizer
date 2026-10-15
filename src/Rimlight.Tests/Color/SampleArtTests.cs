@@ -68,10 +68,16 @@ public sealed class SampleArtTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void DarkCoverPicksItsLogo()
+    public void DarkCoverPicksItsLogoAndAGlowingSecondary()
     {
         var palette = Extract("dark-cover-logo");
-        Assert.True(OklabTests.HueDistance(Lch(palette.Primary).H, SampleArt.LogoColor.ToOklab().ToLch().H) < 10);
+        var primary = Lch(palette.Primary);
+        var secondary = Lch(palette.Secondary);
+        Assert.True(OklabTests.HueDistance(primary.H, SampleArt.LogoColor.ToOklab().ToLch().H) < 10, $"primary {primary}");
+        // The near-black background is the best qualifying group, but it would glow grey (#707179 before C13). Under a
+        // colorful Primary, Secondary is derived instead: the logo's hue turned +35°, as saturated as a glow color.
+        Assert.True(secondary.C >= 0.1f, $"secondary is grey: {secondary}");
+        Assert.True(OklabTests.HueDistance(secondary.H, primary.H + 35) < 2, $"secondary hue {secondary.H}, primary {primary.H}");
     }
 
     [Fact]

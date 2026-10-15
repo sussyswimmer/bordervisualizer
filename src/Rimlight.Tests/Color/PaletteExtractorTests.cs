@@ -356,9 +356,12 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     {
         // 75 % grey against 25 % pure blue: share^0.6 lets the vivid quarter win (0.245 to 0.210); with plain share
         // the grey would (0.141 to 0.188).
-        var palette = Extract(ArtImage.Bands(64, 64, (MidGrey, 0.75f), (new Rgba8(0, 0, 255), 0.25f)));
+        var image = ArtImage.Bands(64, 64, (MidGrey, 0.75f), (new Rgba8(0, 0, 255), 0.25f));
+        var palette = Extract(image);
         Assert.True(Lch(palette.Primary).C > 0.1f, $"primary {Lch(palette.Primary)}");
-        Assert.True(Lch(palette.Secondary).C < Glow.NeutralChroma, $"secondary {Lch(palette.Secondary)}");
+        // The grey is the only other group, and it is neutral under a colorful Primary: Secondary is derived (C13).
+        Assert.Equal(-1, Analyze(image).SecondaryIndex);
+        Assert.True(Lch(palette.Secondary).C > 0.1f, $"secondary {Lch(palette.Secondary)}");
     }
 
     [Fact]
@@ -430,6 +433,71 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         Assert.Equal(3, analysis.Centers.Length);
         Assert.True(Oklab.Distance(analysis.PrimarySource, Blue.ToOklab()) < 1e-4f, $"primary {analysis.PrimarySource}");
         Assert.True(Oklab.Distance(analysis.SecondarySource, Orange.ToOklab()) < 1e-4f, $"secondary {analysis.SecondarySource}");
+    }
+
+    // ---- Secondary: a colorful Primary never takes a neutral group (C13, spec clarification of step 5) ----
+
+    [Theory]
+    [InlineData(0f, true)]
+    [InlineData(0.022f, true)]
+    [InlineData(0.038f, false)]
+    [InlineData(0.06f, false)]
+    public void ColorfulPrimaryGetsADerivedSecondaryInsteadOfANeutralGroup(float candidateChroma, bool derived)
+    {
+        // 40 % blue (Primary: 0.244 against at most 0.226) and 60 % a mid grey tinted to `candidateChroma`, far from
+        // the blue. Below doc 05's grayscale level (0.03) the grey would glow neutral, so Secondary is derived from the
+        // blue instead; at or above it the tinted grey is a real color and stays Secondary.
+        var tint = Rgba8.FromOklab(new OkLch(0.62f, candidateChroma, 90f).ToOklab());
+        float measured = tint.ToOklab().Chroma;
+        Assert.True(measured < Glow.NeutralChroma == derived, $"quantized chroma {measured}");
+
+        var image = ArtImage.Bands(64, 64, (Blue, 0.4f), (tint, 0.6f));
+        var analysis = Analyze(image);
+        Assert.True(Oklab.Distance(analysis.PrimarySource, Blue.ToOklab()) < 1e-4f, $"primary {analysis.PrimarySource}");
+        var palette = Extract(image);
+        output.WriteLine($"candidate chroma {measured:F4}: secondary index {analysis.SecondaryIndex}, glow {Lch(palette.Secondary)}");
+        if (derived)
+        {
+            Assert.Equal(-1, analysis.SecondaryIndex);
+            Assert.Equal(PaletteExtractor.DeriveSecondary(analysis.PrimarySource), analysis.SecondarySource);
+            Assert.True(Lch(palette.Secondary).C >= 0.1f, $"secondary {Lch(palette.Secondary)}");
+        }
+        else
+        {
+            Assert.True(Oklab.Distance(analysis.SecondarySource, tint.ToOklab()) < 1e-4f, $"secondary {analysis.SecondarySource}");
+            Assert.True(OklabTests.HueDistance(Lch(palette.Secondary).H, 90f) < 10, $"secondary {Lch(palette.Secondary)}");
+        }
+    }
+
+    [Theory]
+    [InlineData(0f, false)]
+    [InlineData(0.022f, false)]
+    [InlineData(0.038f, true)]
+    public void OnlyAColorfulPrimaryReplacesANeutralSecondary(float primaryChroma, bool derived)
+    {
+        // 55 % a mid grey tinted to `primaryChroma` (Primary) and 45 % a dark neutral grey (the qualifying group;
+        // 55 % keeps the image under the no-art flat share). A grayscale Primary keeps the neutral group, so grayscale
+        // art still glows soft white (doc 05 step 6); a colorful one gets the derived Secondary.
+        var tinted = Rgba8.FromOklab(new OkLch(0.6f, primaryChroma, 250f).ToOklab());
+        var dark = Rgba8.FromOklab(new Oklab(0.32f, 0, 0));
+        Assert.True(tinted.ToOklab().Chroma >= Glow.NeutralChroma == derived, $"quantized chroma {tinted.ToOklab().Chroma}");
+
+        var image = ArtImage.Bands(64, 64, (tinted, 0.55f), (dark, 0.45f));
+        var analysis = Analyze(image);
+        Assert.True(Oklab.Distance(analysis.PrimarySource, tinted.ToOklab()) < 1e-4f, $"primary {analysis.PrimarySource}");
+        Assert.False(analysis.IsNoArt);
+        var palette = Extract(image);
+        if (derived)
+        {
+            Assert.Equal(-1, analysis.SecondaryIndex);
+            Assert.True(Lch(palette.Primary).C >= 0.1f && Lch(palette.Secondary).C >= 0.1f, $"{Lch(palette.Primary)} / {Lch(palette.Secondary)}");
+        }
+        else
+        {
+            Assert.True(Oklab.Distance(analysis.SecondarySource, dark.ToOklab()) < 1e-4f, $"secondary {analysis.SecondarySource}");
+            Assert.True(Lch(palette.Primary).C < Glow.NeutralChroma && Lch(palette.Secondary).C < Glow.NeutralChroma,
+                $"{Lch(palette.Primary)} / {Lch(palette.Secondary)}");
+        }
     }
 
     // ---- merging near clusters before scoring (spec clarification) ----

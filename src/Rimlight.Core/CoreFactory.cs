@@ -54,7 +54,10 @@ public static class CoreFactory
     /// <para>Output: <see cref="Palette.Primary"/> and <see cref="Palette.Secondary"/> are linear RGB with every channel in
     /// 0..1 (H-008), glow-ified in OkLCh: lightness 0.55..0.85 and chroma at least 0.12, reduced only where sRGB can't
     /// hold it. A grayscale artwork color (chroma below 0.03) stays neutral and glows soft white.
-    /// <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
+    /// <see cref="Palette.SourceTrackId"/> is <c>trackId</c>. Secondary is the best-scoring color at least 0.12 from
+    /// Primary in Oklab. When there is none, or when Primary is colorful and that color is neutral (a dark cover's
+    /// near-black background), Secondary is Primary turned +35° in hue and 0.08 lighter, so the glow keeps two
+    /// colors; a grayscale Primary keeps a grayscale Secondary.</para>
     /// <para>Returns null for "no art" (doc 05 §1): when no pixel has alpha 128 or more, or when the palette is nearly
     /// grayscale (Primary and Secondary below chroma 0.03 before glow-ify) and the image is mostly one flat color (at
     /// least 60 % of the pixels within Oklab distance 0.03 of the largest cluster), as with a player's generic app

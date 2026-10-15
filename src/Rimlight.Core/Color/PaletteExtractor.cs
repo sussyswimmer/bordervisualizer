@@ -16,8 +16,10 @@ namespace Rimlight.Core.Color;
 /// share^<see cref="PopulationExponent"/> × (<see cref="ChromaBias"/> + chroma) × <see cref="LightnessFitness"/>(L),
 /// where share is the group's fraction of the used pixels. Primary is the best score. Secondary is the best score
 /// among groups at least <see cref="SecondaryMinDistance"/> (Oklab distance) from Primary; without one, Secondary
-/// is Primary turned <see cref="DerivedHueShift"/>° in hue and <see cref="DerivedLightnessShift"/> lighter. Both are
-/// then glow-ified (<see cref="Glow"/>).</para>
+/// is Primary turned <see cref="DerivedHueShift"/>° in hue and <see cref="DerivedLightnessShift"/> lighter. That
+/// derived color is also used when Primary is colorful (chroma at least <see cref="Glow.NeutralChroma"/>) and the
+/// best qualifying group is neutral (below it), so a dark cover with one bright logo glows in two colors rather than
+/// the logo color and grey. Both are then glow-ified (<see cref="Glow"/>).</para>
 /// <para><b>No art</b> (doc 05 §1: a player's generic app icon instead of a cover). The result is null when the
 /// palette is nearly grayscale, meaning the Primary and Secondary sources are both below
 /// <see cref="NoArtMaxChroma"/> chroma, <i>and</i> the image is mostly one flat color, meaning at least
@@ -249,6 +251,13 @@ internal sealed class PaletteExtractor : IPaletteExtractor
         }
 
         Oklab primarySource = centers[primary];
+        // Spec clarification of doc 05 §2 step 5 (C13): a colorful Primary never takes a neutral Secondary. On a dark
+        // cover with one bright logo the best qualifying group is the near-black background, which glow-ify keeps
+        // neutral, so the glow was the logo color and a soft grey. The derived Secondary keeps it two-colored. A
+        // colorful group further down isn't used instead: there it is usually the logo's anti-aliased edge, the same
+        // hue darker. A neutral Primary keeps a neutral Secondary, so grayscale art still glows soft white.
+        if (secondary >= 0 && primarySource.Chroma >= Glow.NeutralChroma && centers[secondary].Chroma < Glow.NeutralChroma)
+            secondary = -1;
         Oklab secondarySource = secondary >= 0 ? centers[secondary] : DeriveSecondary(primarySource);
 
         int dominant = 0;
@@ -313,7 +322,8 @@ internal sealed class PaletteExtractor : IPaletteExtractor
 /// <param name="Shares">Each group's fraction of the used pixels.</param>
 /// <param name="Scores">Each group's score.</param>
 /// <param name="PrimaryIndex">The Primary group.</param>
-/// <param name="SecondaryIndex">The Secondary group, or −1 when Secondary was derived from Primary.</param>
+/// <param name="SecondaryIndex">The Secondary group, or −1 when Secondary was derived from Primary (no group
+/// qualified, or the best one was neutral while Primary is colorful).</param>
 /// <param name="PrimarySource">The Primary color before glow-ify.</param>
 /// <param name="SecondarySource">The Secondary color before glow-ify (a group centroid or the derived color).</param>
 /// <param name="FlatShare">The share of used pixels within the flat tolerance of the largest k-means cluster's centroid.</param>

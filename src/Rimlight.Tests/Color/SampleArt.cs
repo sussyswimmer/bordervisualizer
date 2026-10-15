@@ -60,7 +60,8 @@ internal static class SampleArt
     });
 
     // Doc 05 §4: a typical dark cover with a small bright logo (a pink ring, about 3 % of the pixels) and a thin
-    // line of white text. The logo, not the near-black, must become Primary.
+    // line of white text. The logo, not the near-black, must become Primary, and Secondary is derived from it rather
+    // than the near-black glowing grey (C13).
     private static ArtImage DarkCoverLogo() => ArtImage.Create(Size, Size, (x, y) =>
     {
         float dark = 6 + 16 * Noise.Fractal(x, y, 16, 31);
