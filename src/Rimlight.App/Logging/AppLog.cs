@@ -10,16 +10,20 @@ namespace Rimlight.App.Logging;
 
 /// <summary>
 /// Where the app logs and what it does with failures nobody caught (doc 02 "Logging"): every <see cref="Trace"/> line
-/// goes to <c>%LOCALAPPDATA%\Rimlight\logs</c>, and an exception that reaches the UI dispatcher is logged and survived,
-/// so the tray icon and the glow keep running.
+/// goes to <c>%APPDATA%\Rimlight\logs</c>, and an exception that reaches the UI dispatcher is logged and survived, so
+/// the tray icon and the glow keep running.
 /// </summary>
 internal static class AppLog
 {
     private static RollingFileLog? file;
 
-    /// <summary><c>%LOCALAPPDATA%\Rimlight\logs</c>, the folder the tray's "Open logs folder" shows.</summary>
+    /// <summary>
+    /// <c>%APPDATA%\Rimlight\logs</c>, next to <c>settings.json</c>; the folder the tray's "Open logs folder" shows. Not
+    /// in <c>%LOCALAPPDATA%\Rimlight</c>: that is Velopack's install folder, which uninstalling deletes (the logs stay,
+    /// doc 07 Phase 6) and whose existence makes Setup offer a repair (HANDOFF H-014).
+    /// </summary>
     public static string Folder { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppInfo.Name, "logs");
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppInfo.Name, "logs");
 
     /// <summary>The version shown to people, e.g. <c>0.1.0</c> (without the build's commit suffix).</summary>
     public static string Version { get; } = ReadVersion();

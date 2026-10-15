@@ -162,11 +162,6 @@ jobs:
         run: |
           # pack.ps1 drops the tag's "v" and stops on anything that isn't SemVer 2.
           $pack = @{ Stage = 'Pack'; Version = $env:PACK_VERSION }
-          if ($env:GITHUB_EVENT_NAME -ne 'push') {
-            # A dry run skips vpk's check that Rimlight.exe calls VelopackApp.Build().Run(), which
-            # K9 adds (HANDOFF H-014).
-            $pack.SkipVelopackAppCheck = $true
-          }
           if ($env:SIGN -eq 'true') {
             $pack.AzureTrustedSignFile = "$env:RUNNER_TEMP/trusted-signing.json"
           }

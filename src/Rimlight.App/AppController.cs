@@ -5,6 +5,7 @@ using System.Windows.Threading;
 using Rimlight.App.Logging;
 using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
+using Rimlight.App.Updates;
 using Rimlight.Core;
 using Rimlight.Platform.Audio;
 using Rimlight.Platform.Media;
@@ -15,9 +16,8 @@ namespace Rimlight.App;
 
 /// <summary>
 /// The composition root: owns the settings, the global shortcut, the tray icon, the media session reader, the system
-/// watchers, loopback capture, the glow overlay and the settings window, wires them together and tears them down in
-/// order. Created and used on the UI thread. Later tasks plug in the visualizer (K8) and updates (K9,
-/// <see cref="Updates"/>).
+/// watchers, loopback capture, the glow overlay, the settings window and the update checks, wires them together and
+/// tears them down in order. Created and used on the UI thread. A later task plugs in the visualizer (K8).
 /// </summary>
 internal sealed class AppController : IDisposable
 {
@@ -26,6 +26,7 @@ internal sealed class AppController : IDisposable
     private readonly bool background;
     private readonly Dispatcher dispatcher = Dispatcher.CurrentDispatcher; // the UI thread's
     private readonly SettingsWindowLauncher settingsWindow;
+    private readonly UpdateService updates;
     private SettingsService? settings;
     private GlobalHotkey? hotkey;
     private TrayIconHost? tray;
@@ -52,7 +53,8 @@ internal sealed class AppController : IDisposable
         this.background = background;
         settingsWindow = new SettingsWindowLauncher(this);
         SettingsWindow = settingsWindow;
-        Updates = new NoUpdateCheck(this);
+        updates = new UpdateService(this);
+        Updates = updates;
     }
 
     public SettingsService SettingsService => settings ?? throw new InvalidOperationException("Not started.");
@@ -90,7 +92,7 @@ internal sealed class AppController : IDisposable
     /// <summary>Opens Settings (the settings window, created on first use).</summary>
     public IShowSettings SettingsWindow { get; set; }
 
-    /// <summary>"Check for updates". K9 replaces the stand-in with the Velopack check.</summary>
+    /// <summary>"Check for updates": Velopack's check against GitHub Releases (<see cref="UpdateService"/>).</summary>
     public IUpdateCheck Updates { get; set; }
 
     public void Start()
@@ -161,6 +163,10 @@ internal sealed class AppController : IDisposable
         // registers it. Checked at every start, which also repairs a stale path.
         ApplyStartup(initial.LaunchAtStartup);
 
+        // Updates from GitHub Releases (doc 06 §5), the app's only network call: checks while "Update automatically" is
+        // on, and only in an installed copy.
+        updates.Start(settings);
+
         // A later start of the app hands over its request ("show-settings") instead of running twice.
         if (instance is not null)
         {
@@ -209,6 +215,20 @@ internal sealed class AppController : IDisposable
         catch (Exception exception)
         {
             Trace.WriteLine($"[App] Checking for updates failed: {exception}");
+        }
+    }
+
+    /// <summary>"Restart to update" in the tray, shown while a downloaded update waits for a restart.</summary>
+    public void RestartToUpdate()
+    {
+        if (disposed) return;
+        try
+        {
+            Updates.RestartToUpdate();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[App] Restarting to update failed: {exception}");
         }
     }
 
@@ -279,6 +299,7 @@ internal sealed class AppController : IDisposable
         welcome = null;
         hotkey?.Dispose();
         hotkey = null;
+        updates.Dispose(); // stops the checks and a download; never waits for the network
         media?.Dispose(); // first of the engine: no media event reaches the overlay or the tray after this
         media = null;
         systemPauses?.Dispose(); // then no system event either
@@ -365,8 +386,9 @@ internal sealed class AppController : IDisposable
         else Trace.WriteLine("[App] Ignored an unknown command from another start.");
     }
 
-    // A short message: a notification from the tray icon, or a message box if the tray can't show one.
-    private void Tell(string message)
+    /// <summary>A short message: a notification from the tray icon, or a message box if the tray can't show one. UI thread.</summary>
+    /// <param name="message">The text.</param>
+    internal void Tell(string message)
     {
         if (tray?.Notify(AppInfo.Name, message, userInitiated: true) == true) return;
         MessageBox.Show(message, AppInfo.Name, MessageBoxButton.OK, MessageBoxImage.Information);
@@ -414,11 +436,5 @@ internal sealed class AppController : IDisposable
             released = true;
             if (--app.audioRequests == 0) app.SetAudioWanted(false);
         }
-    }
-
-    // Until K9: says which version runs.
-    private sealed class NoUpdateCheck(AppController app) : IUpdateCheck
-    {
-        public void CheckNow() => app.Tell($"You're running {AppInfo.Name} {AppLog.Version}. Update checks start with the first release.");
     }
 }

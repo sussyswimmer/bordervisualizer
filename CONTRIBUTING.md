@@ -114,15 +114,15 @@ These hold for every change, in code and in docs:
 
 ## Reporting a bug with logs
 
-Logs make most bugs quick to find. Rimlight keeps them in `%LOCALAPPDATA%\Rimlight\logs` (up to five files of 1 MB each).
+Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\logs`, next to its settings (up to five files of 1 MB each). Uninstalling Rimlight leaves them there.
 
-1. Right-click the Rimlight tray icon and choose **Open logs folder**. If Rimlight won't start, paste `%LOCALAPPDATA%\Rimlight\logs` into the File Explorer address bar instead.
+1. Right-click the Rimlight tray icon and choose **Open logs folder**. If Rimlight won't start, paste `%APPDATA%\Rimlight\logs` into the File Explorer address bar instead.
 2. Select every file in the folder, right-click, and zip them: **Compress to** on Windows 11, or **Send to > Compressed (zipped) folder** on Windows 10.
 3. [Open a bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) and drag the zip into the **Logs** box.
 
 Logs never contain audio, but they can include device, monitor and track names. Have a quick look before you upload them.
 
-If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too.
+If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight.
 
 ## License
 

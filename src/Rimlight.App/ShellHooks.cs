@@ -15,13 +15,19 @@ internal interface IShowSettings
 }
 
 /// <summary>
-/// Checks for updates when asked ("Check for updates" in the tray, doc 06 §5). Called on the UI thread. K9 implements
-/// it with Velopack; until then <see cref="AppController"/> only tells which version runs.
+/// Checks for updates when asked ("Check for updates" in the tray and in Settings > About, doc 06 §5). Called on the UI
+/// thread. <see cref="Updates.UpdateService"/> implements it with Velopack.
 /// </summary>
 internal interface IUpdateCheck
 {
+    /// <summary>The version that is downloaded and installs at the next start, or null. The tray menu offers it.</summary>
+    string? ReadyVersion { get; }
+
     /// <summary>Starts a check and reports the outcome to the user.</summary>
     void CheckNow();
+
+    /// <summary>"Restart to update": installs <see cref="ReadyVersion"/> now and restarts into it; nothing without one.</summary>
+    void RestartToUpdate();
 }
 
 /// <summary>A command for the tray icon's click and double-click. A failure is logged, never thrown at the caller.</summary>
