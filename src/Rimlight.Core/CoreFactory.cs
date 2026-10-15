@@ -27,8 +27,10 @@ public static class CoreFactory
     /// <see cref="AnalyzerDiagnostics.FluxHistory"/> and <see cref="AnalyzerDiagnostics.ThresholdHistory"/> hold 240
     /// entries, exactly one per <c>Process</c> call (empty spans included), oldest first and zero until filled; a time
     /// axis must use the actual call cadence, not an assumed 60 Hz. Each flux entry is the largest flux of that call,
-    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is the median of
-    /// recent beat intervals and returns to 0 after 4 s without a beat. <see cref="IAudioAnalyzer.Reset"/> clears
+    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is
+    /// 60 over the mean of the last 16 beat intervals (each up to 2 s) that lie within ±25 % of their median, so missed
+    /// or extra beats drop out and a steady frame rate doesn't bias it (H-016). It is 0 until three intervals are in,
+    /// and returns to 0 after 4 s without a beat. <see cref="IAudioAnalyzer.Reset"/> clears
     /// everything except the current <see cref="AudioFeatures.IsSilent"/> state.</para>
     /// </remarks>
     public static IAudioAnalyzer CreateAnalyzer(AudioTuning? tuning = null) => new AudioAnalyzer(tuning);
