@@ -1,3 +1,4 @@
+using Rimlight.App.Visualizer;
 using Rimlight.Core;
 using Rimlight.Platform.Audio;
 using Rimlight.Platform.Media;
@@ -11,6 +12,11 @@ namespace Rimlight.App.Overlay;
 /// itself (doc 02 "Frame pacing"). The colors are the album palette the media service publishes, or the manual colors
 /// (PRD §3), crossfaded by the palette blender. Runs on the overlay thread only.
 /// </summary>
+/// <remarks>
+/// Two modes on top (K8): <see cref="SetDemo"/> feeds the light engine <see cref="DemoBeat"/>'s synthetic beat and
+/// palettes instead (doc 04 §5), and <see cref="SetVisualizer"/> lets the debug visualizer watch and tune the analyzer
+/// (doc 03 §4) through an <see cref="AnalyzerTap"/>.
+/// </remarks>
 internal sealed class MusicGlowSource : IOverlayFrameSource
 {
     private const int FallbackSampleRate = 48000; // used while no device is captured; only empty spans are passed then
@@ -28,6 +34,8 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     private readonly IAudioAnalyzer analyzer;
     private readonly ILightEngine engine;
     private readonly IPaletteBlender blender;
+    private readonly AnalyzerTap tap = new();       // the debug visualizer's recorder (doc 03 §4)
+    private readonly DemoBeat demoBeat = new();     // demo mode's beat and palettes (doc 04 §5)
     private Palette manual;  // the settings' colors
     private Palette? album;  // the album palette last read from the media service; null: none (no session, no art)
     private Palette palette; // the palette last passed to SetTarget, which the engine gets too (H-004)
@@ -42,6 +50,12 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     private int audioWanted;   // written by the UI thread (Settings' meter and preview), read once per frame
     private long latestAudio;  // AudioReading.Pack of the last frame's features, read by the UI thread
     private int audioSequence;
+    private int demoWanted;               // written by the UI thread, read once per frame
+    private VisualizerFeed? visualizer;   // written by the UI thread, read once per frame; null while none is open
+    private bool demo;                    // demo mode, as this thread follows it
+    private int demoPalette;              // the demo palette last passed to SetTarget
+    private Settings? demoSource;         // the settings demoSettings was made from
+    private Settings? demoSettings;       // them with the glow on in music sync, for the engine in demo mode
 
     /// <summary>Creates the source (on any thread); <see cref="NextFrame"/> then runs on the overlay thread.</summary>
     /// <param name="settings">The initial settings.</param>
@@ -71,6 +85,27 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     /// <param name="wanted">True while something shows the audio.</param>
     public void SetAudioWanted(bool wanted) => Volatile.Write(ref audioWanted, wanted ? 1 : 0);
 
+    /// <summary>
+    /// Demo mode (doc 04 §5): the light engine gets <see cref="DemoBeat"/>'s synthetic 120 BPM beat instead of the
+    /// music, and the colors cycle through its four palettes, 6 s each with 800 ms crossfades. The settings' shape
+    /// (thickness, glow, brightness, corner radius, monitors, taskbar) still applies; the glow is shown on and in music
+    /// sync for these frames only, and nothing is saved. Pauses still apply. The capture stays closed unless Settings
+    /// or the visualizer asks for audio. Safe to call from any thread; ask the overlay for a frame afterwards
+    /// (<see cref="OverlayHost.RequestFrame"/>).
+    /// </summary>
+    /// <param name="on">True to show the demo, false to go back to the music and the album or manual colors.</param>
+    public void SetDemo(bool on) => Volatile.Write(ref demoWanted, on ? 1 : 0);
+
+    /// <summary>
+    /// Attaches the debug visualizer (doc 03 §4): while a feed is attached, every frame applies its tuning requests,
+    /// records the analyzer's output and about 60 times a second publishes a snapshot, and the overlay is asked to call
+    /// at the full rate (<see cref="FrameMotion.Observed"/>). Safe to call from any thread; ask the overlay for a frame
+    /// afterwards (<see cref="OverlayHost.RequestFrame"/>), and request audio too (<see cref="SetAudioWanted"/>), so the
+    /// analyzer hears the music in every mode.
+    /// </summary>
+    /// <param name="feed">The open visualizer's feed, or null when it closes.</param>
+    public void SetVisualizer(VisualizerFeed? feed) => Volatile.Write(ref visualizer, feed);
+
     public OverlayFrame NextFrame(float dtSeconds, Settings settings, bool paused, Span<float> gradient)
     {
         if (!ReferenceEquals(settings, applied)) ApplySettings(settings);
@@ -83,9 +118,13 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
             ShowPalette(settings, AlbumFade);
         }
 
-        // Audio matters only in music sync while the glow is on and not paused, or while Settings shows it. Otherwise
-        // the capture is closed (no audio thread work at all) and the analyzer hears silence.
-        bool listen = settings.Enabled && settings.Animation == AnimationMode.MusicSync && !paused;
+        bool demoOn = Volatile.Read(ref demoWanted) != 0;
+        if (demoOn != demo) SwitchDemo(demoOn, settings);
+
+        // Audio matters only in music sync while the glow is on and not paused (and not showing the demo), or while
+        // Settings or the visualizer shows it. Otherwise the capture is closed (no audio thread work at all) and the
+        // analyzer hears silence.
+        bool listen = !demo && settings.Enabled && settings.Animation == AnimationMode.MusicSync && !paused;
         bool wanted = Volatile.Read(ref audioWanted) != 0;
         if ((listen || wanted) != listening)
         {
@@ -103,16 +142,33 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
             if (audio is not null && samples.Length < audio.Capacity) samples = new float[audio.Capacity];
         }
 
+        // The visualizer's tuning edits reach the analyzer here, on its own thread, before it runs (H-004).
+        VisualizerFeed? feed = Volatile.Read(ref visualizer);
+        if (feed is not null) tap.ApplyTuning(feed, analyzer, ClampSensitivity(settings.Sensitivity));
+        else tap.Detach(); // the analyzer runs on without it, so the next attachment starts its plots over
+
         int count = audio?.Read(samples) ?? 0;
-        AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), audio?.SampleRate ?? FallbackSampleRate, dtSeconds);
+        int sampleRate = audio?.SampleRate ?? FallbackSampleRate;
+        AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), sampleRate, dtSeconds);
         silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
         audioSequence = AudioReading.Next(audioSequence);
         Volatile.Write(ref latestAudio, AudioReading.Pack(in features, audioSequence));
+        if (feed is not null) tap.Record(feed, analyzer, in features, dtSeconds, audio, sampleRate, demo);
+
+        // Only music sync hears the audio; a meter in Settings or the visualizer must not change the glow. The demo
+        // plays its own beat, and its palette changes before the blender steps, like any other SetTarget.
+        AudioFeatures heard = listen ? features : Silence;
+        Settings look = settings;
+        if (demo)
+        {
+            heard = demoBeat.Advance(dtSeconds);
+            ShowDemoPalette(demoBeat.PaletteIndex);
+            look = DemoSettings(settings);
+        }
 
         bool crossfading = blender.IsAnimating;
         blender.Update(dtSeconds);
-        // Only music sync hears the audio; a meter in Settings must not change the glow.
-        LightState state = engine.Update(dtSeconds, listen ? features : Silence, palette, settings, paused);
+        LightState state = engine.Update(dtSeconds, heard, palette, look, paused);
 
         // Refill after every SetTarget, after every update that was animating before it (so the crossfade's last
         // frame is uploaded too, H-006), and when the ratio changes.
@@ -125,16 +181,19 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
             filledRatio = state.Ratio;
         }
 
-        return new OverlayFrame(state, refill, Motion(listen, wanted, in features, settings));
+        return new OverlayFrame(state, refill, Motion(listen, wanted, feed is not null, in features, settings));
     }
 
     // How the glow will change: the overlay draws music at the full rate, breathing at 10 fps, and stops drawing a
     // static glow (listening on at 10 Hz when music could bring it back, or while Settings shows the audio).
-    private FrameMotion Motion(bool listen, bool wanted, in AudioFeatures features, Settings settings)
+    private FrameMotion Motion(bool listen, bool wanted, bool observed, in AudioFeatures features, Settings settings)
     {
+        // The visualizer plots every analyzer frame, so it needs the full rate in every mode, on screen or not.
+        if (observed) return FrameMotion.Observed;
         // A crossfade changes the colors every frame, even on a glow that is otherwise static.
         if (blender.IsAnimating) return FrameMotion.Full;
         if (engine.IsStatic) return listen || wanted ? FrameMotion.Listening : FrameMotion.Still;
+        if (demo) return FrameMotion.Full; // the synthetic beat moves every frame
         if (!listen) return FrameMotion.Slow; // Idle Glow (or a fade the overlay sees as fast change)
         bool idle = features.IsSilent && silentSeconds >= IdleSettleSeconds && settings.WhenSilent == SilentBehavior.IdleGlow;
         return idle ? FrameMotion.Slow : FrameMotion.Full;
@@ -156,14 +215,57 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
     }
 
     // The album palette in Album Art mode unless Override album color is on; the manual colors otherwise, and whenever
-    // there is no album palette (no session, no art; PRD §3, doc 06 §1). Allocates only when a palette is new.
+    // there is no album palette (no session, no art; PRD §3, doc 06 §1). Allocates only when a palette is new. The demo
+    // shows its own palettes; the choice made meanwhile applies when it ends.
     private void ShowPalette(Settings settings, TimeSpan fade)
     {
+        if (demo) return;
         Palette next = album is not null && UsesAlbumColors(settings) ? album : manual;
         if (ReferenceEquals(next, palette)) return;
         palette = next;
         blender.SetTarget(next, fade);
         paletteChanged = true;
+    }
+
+    // Enters demo mode from its first downbeat, or leaves it with an album-change crossfade back to the album or manual
+    // colors.
+    private void SwitchDemo(bool on, Settings settings)
+    {
+        demo = on;
+        if (on)
+        {
+            demoBeat.Restart();
+            demoPalette = -1; // the first demo frame sets the first palette
+        }
+        else
+        {
+            ShowPalette(settings, AlbumFade);
+        }
+    }
+
+    // The demo's palettes take turns every 6 s (DemoBeat.PaletteSeconds) and crossfade like album changes. They are
+    // preallocated, so this allocates nothing.
+    private void ShowDemoPalette(int index)
+    {
+        if (index == demoPalette) return;
+        demoPalette = index;
+        palette = DemoBeat.Palettes[index];
+        blender.SetTarget(palette, DemoBeat.PaletteFade);
+        paletteChanged = true;
+    }
+
+    // The settings the engine sees in demo mode: the user's shape and pauses, with the glow on and in music sync. Made
+    // once per settings change (never saved), so the per-frame path allocates nothing.
+    private Settings DemoSettings(Settings settings)
+    {
+        if (!ReferenceEquals(settings, demoSource))
+        {
+            demoSource = settings;
+            demoSettings = settings.Enabled && settings.Animation == AnimationMode.MusicSync
+                ? settings
+                : settings with { Enabled = true, Animation = AnimationMode.MusicSync };
+        }
+        return demoSettings!;
     }
 
     /// <summary>Whether the glow shows the album colors (when there are any) rather than the manual ones.</summary>

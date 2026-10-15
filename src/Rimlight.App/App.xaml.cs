@@ -17,12 +17,12 @@ public partial class App : Application
     {
         base.OnStartup(e);
         AppLog.CatchUnhandled(this);
-        bool background = e.Args.Contains(StartupRegistration.BackgroundArgument, StringComparer.OrdinalIgnoreCase);
+        StartupOptions options = StartupOptions.Parse(e.Args);
 
         // One copy per user session (doc 06 §4), decided before any tray icon exists: a second copy would otherwise
         // replace the first one's icon (H.NotifyIcon derives the icon's ID from the exe path). A start by hand asks the
-        // running copy to show Settings; a start at sign-in just leaves.
-        instance = SingleInstance.Claim(AppInfo.Name, background ? null : SingleInstance.ShowSettingsCommand);
+        // running copy to show Settings (or the visualizer, or the demo, when asked for); a start at sign-in just leaves.
+        instance = SingleInstance.Claim(AppInfo.Name, options.HandOverCommand);
         if (instance is null)
         {
             Shutdown();
@@ -36,7 +36,7 @@ public partial class App : Application
             return;
         }
 
-        controller = new AppController(() => Shutdown(), instance, background);
+        controller = new AppController(() => Shutdown(), instance, options);
         try
         {
             controller.Start();

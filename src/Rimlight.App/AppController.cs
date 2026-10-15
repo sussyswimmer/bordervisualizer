@@ -6,6 +6,7 @@ using Rimlight.App.Logging;
 using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
 using Rimlight.App.Updates;
+using Rimlight.App.Visualizer;
 using Rimlight.Core;
 using Rimlight.Platform.Audio;
 using Rimlight.Platform.Media;
@@ -17,16 +18,17 @@ namespace Rimlight.App;
 /// <summary>
 /// The composition root: owns the settings, the global shortcut, the tray icon, the media session reader, the system
 /// watchers, loopback capture, the glow overlay, the settings window and the update checks, wires them together and
-/// tears them down in order. Created and used on the UI thread. A later task plugs in the visualizer (K8).
+/// tears them down in order. Created and used on the UI thread. Also opens the debug visualizer and runs demo mode (K8).
 /// </summary>
 internal sealed class AppController : IDisposable
 {
     private readonly Action shutdown;
     private readonly SingleInstance? instance;
-    private readonly bool background;
+    private readonly StartupOptions options;
     private readonly Dispatcher dispatcher = Dispatcher.CurrentDispatcher; // the UI thread's
     private readonly SettingsWindowLauncher settingsWindow;
     private readonly UpdateService updates;
+    private readonly VisualizerLauncher visualizer;
     private SettingsService? settings;
     private GlobalHotkey? hotkey;
     private TrayIconHost? tray;
@@ -45,13 +47,15 @@ internal sealed class AppController : IDisposable
     /// <summary>Creates the controller; <see cref="Start"/> starts everything.</summary>
     /// <param name="shutdown">Ends the app (the tray's Quit).</param>
     /// <param name="instance">This process's single-instance claim, whose commands it handles; null for none.</param>
-    /// <param name="background">Started with <c>--background</c> (at sign-in): don't open Settings.</param>
-    public AppController(Action shutdown, SingleInstance? instance, bool background)
+    /// <param name="options">The command line: <c>--background</c> (at sign-in) opens nothing; <c>--debug-visualizer</c>
+    /// and <c>--demo</c> open the visualizer or start the demo instead of Settings.</param>
+    public AppController(Action shutdown, SingleInstance? instance, StartupOptions options)
     {
         this.shutdown = shutdown;
         this.instance = instance;
-        this.background = background;
+        this.options = options;
         settingsWindow = new SettingsWindowLauncher(this);
+        visualizer = new VisualizerLauncher(this, settingsWindow);
         SettingsWindow = settingsWindow;
         updates = new UpdateService(this);
         Updates = updates;
@@ -88,6 +92,9 @@ internal sealed class AppController : IDisposable
 
     /// <summary>True once the app is quitting or Windows is ending the session: windows close instead of hiding.</summary>
     public bool IsExiting { get; private set; }
+
+    /// <summary>True while demo mode runs (<c>--demo</c>, doc 04 §5); the tray shows it as a checked item.</summary>
+    public bool IsDemoActive { get; private set; }
 
     /// <summary>Opens Settings (the settings window, created on first use).</summary>
     public IShowSettings SettingsWindow { get; set; }
@@ -167,7 +174,8 @@ internal sealed class AppController : IDisposable
         // on, and only in an installed copy.
         updates.Start(settings);
 
-        // A later start of the app hands over its request ("show-settings") instead of running twice.
+        // A later start of the app hands over its request ("show-settings", "show-visualizer", "demo") instead of running
+        // twice.
         if (instance is not null)
         {
             instance.CommandReceived += OnCommand;
@@ -181,14 +189,31 @@ internal sealed class AppController : IDisposable
             ShowWelcome(offerSettings: true);
             settings.Update(s => s with { FirstRunComplete = true });
         }
-        else if (!background)
+        else if (!options.Background && !options.ShowsSomething)
         {
             ShowSettings(); // started by hand: show something (doc 06 §4)
         }
+
+        // --demo and --debug-visualizer (doc 04 §5, doc 03 §4).
+        if (options.Demo) SetDemo(true);
+        if (options.ShowVisualizer) ShowVisualizer();
     }
 
-    /// <summary>Turns the glow on or off ("Glow on", a click on the icon, the shortcut).</summary>
-    public void ToggleGlow() => settings?.Update(s => s with { Enabled = !s.Enabled });
+    /// <summary>
+    /// Turns the glow on or off ("Glow on", a click on the icon, the shortcut). The demo shows the glow whatever the
+    /// setting says, so during it this turns off what is on screen: it ends the demo and leaves the glow off.
+    /// </summary>
+    public void ToggleGlow()
+    {
+        if (IsDemoActive)
+        {
+            // Flipping the setting alone would change nothing on screen until the demo ended (doc 04 §5).
+            SetDemo(false);
+            settings?.Update(s => s with { Enabled = false });
+            return;
+        }
+        settings?.Update(s => s with { Enabled = !s.Enabled });
+    }
 
     /// <summary>Opens Settings (the tray, a second start, the welcome window).</summary>
     public void ShowSettings()
@@ -202,6 +227,60 @@ internal sealed class AppController : IDisposable
         {
             Trace.WriteLine($"[App] Opening Settings failed: {exception}");
         }
+    }
+
+    /// <summary>
+    /// Opens the debug visualizer (doc 03 §4), or brings it to the front: <c>--debug-visualizer</c>, a later start with
+    /// it, and the Debug build's tray menu.
+    /// </summary>
+    public void ShowVisualizer()
+    {
+        if (disposed) return;
+        try
+        {
+            visualizer.Show();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[App] Opening the visualizer failed: {exception}");
+        }
+    }
+
+    /// <summary>
+    /// Starts or ends demo mode (doc 04 §5): the glow plays a synthetic 120 BPM beat through four palettes, for
+    /// recordings, without saving anything. <c>--demo</c>, a later start with it, and the tray's "Demo mode".
+    /// </summary>
+    /// <param name="on">True to start it.</param>
+    public void SetDemo(bool on)
+    {
+        if (disposed || on == IsDemoActive) return;
+        if (glow is null)
+        {
+            Trace.WriteLine("[App] Demo mode needs the glow, which didn't start.");
+            return;
+        }
+        IsDemoActive = on;
+        glow.SetDemo(on);
+        overlays?.RequestFrame(); // a glow that draws nothing wakes for it
+        if (settings is not null) tray?.ApplySettings(settings.Current); // the icon isn't dimmed while the demo glows
+        Trace.WriteLine(on ? "[App] Demo mode on." : "[App] Demo mode off.");
+    }
+
+    /// <summary>
+    /// Lets the debug visualizer watch and tune the overlay's analyzer through <paramref name="feed"/> (doc 03 §4): the
+    /// overlay thread then publishes snapshots and calls the analyzer at the full rate, and the capture stays open, in
+    /// every mode. Dispose the result when the visualizer closes or hides; everything then returns to how it idles.
+    /// UI thread.
+    /// </summary>
+    /// <param name="feed">The visualizer's feed.</param>
+    /// <returns>The attachment, or null when the glow didn't start (nothing to watch).</returns>
+    public IDisposable? ObserveAnalyzer(VisualizerFeed feed)
+    {
+        if (disposed || glow is not { } source) return null;
+        IDisposable audio = RequestAudio();
+        source.SetVisualizer(feed);
+        overlays?.RequestFrame();
+        return new AnalyzerObservation(this, source, audio);
     }
 
     /// <summary>"Check for updates" in the tray.</summary>
@@ -295,6 +374,7 @@ internal sealed class AppController : IDisposable
         IsExiting = true;
         if (instance is not null) instance.CommandReceived -= OnCommand; // the app disposes the claim itself
         settingsWindow.Close(); // first: stops its timers and its audio request, and lets go of every event
+        visualizer.Close();     // the same for the visualizer
         welcome?.Close();
         welcome = null;
         hotkey?.Dispose();
@@ -379,11 +459,28 @@ internal sealed class AppController : IDisposable
         HotkeyChanged?.Invoke();
     }
 
-    // Thread pool: a later start's request. Only known commands do anything.
-    private void OnCommand(string command)
+    // Thread pool: a later start's request, one or more commands separated by spaces (StartupOptions.HandOverCommand).
+    // Only known commands do anything.
+    private void OnCommand(string line)
     {
-        if (command == SingleInstance.ShowSettingsCommand) dispatcher.InvokeAsync(ShowSettings);
-        else Trace.WriteLine("[App] Ignored an unknown command from another start.");
+        foreach (string command in line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            switch (command)
+            {
+                case SingleInstance.ShowSettingsCommand:
+                    dispatcher.InvokeAsync(ShowSettings);
+                    break;
+                case SingleInstance.ShowVisualizerCommand:
+                    dispatcher.InvokeAsync(ShowVisualizer);
+                    break;
+                case SingleInstance.DemoCommand:
+                    dispatcher.InvokeAsync(() => SetDemo(true));
+                    break;
+                default:
+                    Trace.WriteLine("[App] Ignored an unknown command from another start.");
+                    break;
+            }
+        }
     }
 
     /// <summary>A short message: a notification from the tray icon, or a message box if the tray can't show one. UI thread.</summary>
@@ -437,4 +534,20 @@ internal sealed class AppController : IDisposable
             if (--app.audioRequests == 0) app.SetAudioWanted(false);
         }
     }
+
+    // Detaches the visualizer: the overlay thread stops publishing snapshots and goes back to its usual pace.
+    private sealed class AnalyzerObservation(AppController app, MusicGlowSource source, IDisposable audio) : IDisposable
+    {
+        private bool released;
+
+        public void Dispose()
+        {
+            if (released) return;
+            released = true;
+            source.SetVisualizer(null);
+            audio.Dispose(); // the capture closes again unless Settings still shows the audio
+            app.overlays?.RequestFrame(); // a frame at once, so the overlay picks its idle pace again
+        }
+    }
+
 }
