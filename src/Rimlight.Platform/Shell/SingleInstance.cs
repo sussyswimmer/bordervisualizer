@@ -53,16 +53,17 @@ public sealed class SingleInstance : IDisposable
     /// The exe of the running instance when it is another copy of the app (another build or folder): the command is
     /// not sent, and the caller should say where the app runs instead of exiting without a word. Otherwise null.
     /// </param>
-    /// <param name="runningElevated">
-    /// True when the running instance runs as administrator and this one doesn't: Windows keeps this process away from
-    /// its mutex and its pipe, so the command can't be handed over, and the caller should say so instead of exiting
-    /// without a word. False otherwise, and always for a start without a command, which just leaves.
+    /// <param name="runningAtOtherElevation">
+    /// True when the running instance runs at the other elevation: one of the two was started as administrator. The
+    /// mutex still keeps this process out, but the pipe turns its command away (only the token owner that created a
+    /// pipe may use it: Administrators for an elevated process, the user otherwise), so the caller should say so instead
+    /// of exiting without a word. False otherwise, and always for a start without a command, which just leaves.
     /// </param>
     /// <returns>The claim for this process (dispose it on exit), or null when another instance runs and this one should exit.</returns>
-    public static SingleInstance? Claim(string appName, string? command, out string? runningElsewhere, out bool runningElevated)
+    public static SingleInstance? Claim(string appName, string? command, out string? runningElsewhere, out bool runningAtOtherElevation)
     {
         runningElsewhere = null;
-        runningElevated = false;
+        runningAtOtherElevation = false;
         string user = CurrentUserSid();
         // Local\ is per session, the pipe namespace is not: the session ID keeps two sessions of one user apart.
         string pipeName = $"{appName}-{user}-{SessionId()}";
@@ -73,12 +74,13 @@ public sealed class SingleInstance : IDisposable
         }
         catch (UnauthorizedAccessException)
         {
-            // The mutex exists but this process may not use it: a copy started as administrator holds it, and Windows
-            // keeps a normal start away from that copy's objects (its pipe too). Running anyway would draw the glow
-            // twice and take that copy's tray icon (H.NotifyIcon derives the icon's ID from the exe path), leaving it
-            // without a way to quit.
-            Trace.WriteLine("[SingleInstance] A copy running as administrator holds the mutex; exiting.");
-            runningElevated = command is not null;
+            // A fallback. Across elevations the mutex normally opens (a copy started as administrator still lets the
+            // user's logon session wait on it, which is all this open asks for) and it is the pipe that turns a start
+            // away (Send). Should Windows refuse the mutex itself, a copy at the other elevation holds it: running
+            // anyway would draw the glow twice and take that copy's tray icon (H.NotifyIcon derives the icon's ID from
+            // the exe path), leaving it without a way to quit.
+            Trace.WriteLine("[SingleInstance] The mutex exists but may not be opened (a copy at the other elevation holds it); exiting.");
+            runningAtOtherElevation = command is not null;
             return null;
         }
         catch (Exception exception)
@@ -89,7 +91,7 @@ public sealed class SingleInstance : IDisposable
         }
 
         if (TryOwn(mutex, TimeSpan.Zero)) return new SingleInstance(mutex, pipeName);
-        if (command is not null && Send(pipeName, command, out runningElsewhere))
+        if (command is not null && Send(pipeName, command, out runningElsewhere, out runningAtOtherElevation))
         {
             mutex.Dispose();
             return null;
@@ -159,10 +161,13 @@ public sealed class SingleInstance : IDisposable
     }
 
     // A later start: hands the command over and lets the running instance bring its window to the front. True when
-    // it was delivered, or when the running instance is another copy (runningElsewhere, nothing sent).
-    private static bool Send(string pipeName, string command, out string? runningElsewhere)
+    // it was delivered, when the running instance is another copy (runningElsewhere, nothing sent), or when its pipe
+    // turned this process away (otherElevation, nothing sent): waiting for that copy to exit would only delay the
+    // message.
+    private static bool Send(string pipeName, string command, out string? runningElsewhere, out bool otherElevation)
     {
         runningElsewhere = null;
+        otherElevation = false;
         using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.CurrentUserOnly);
         try
         {
@@ -182,7 +187,17 @@ public sealed class SingleInstance : IDisposable
             }
             client.Write(Encoding.UTF8.GetBytes(command + "\n"));
         }
-        catch (Exception exception) when (exception is TimeoutException or IOException or UnauthorizedAccessException)
+        catch (UnauthorizedAccessException exception)
+        {
+            // The running copy is at the other elevation. Its pipe admits only the token owner that created it: from an
+            // elevated copy that is Administrators, which a normal start holds for deny only, so Windows refuses the
+            // connection; from a normal copy it is the user, which an elevated start (owner Administrators) won't
+            // accept as its own. A message is the answer, not a pipe open to the other side.
+            Trace.WriteLine($"[SingleInstance] The running instance runs at the other elevation: {exception.Message}");
+            otherElevation = true;
+            return true;
+        }
+        catch (Exception exception) when (exception is TimeoutException or IOException)
         {
             Trace.WriteLine($"[SingleInstance] Could not reach the running instance: {exception.Message}");
             return false;
