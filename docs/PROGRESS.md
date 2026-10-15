@@ -1503,6 +1503,14 @@ Integration pass: Lane B's test project, a pacing check with the real Core, seam
   - **OverlayLoopModel** still mirrors OverlayHost's control flow by hand: Loop, ApplyPendingInputs and RenderFrame's per-overlay logic. Keep the two in step, as with Bench's copies (H-019).
   - **At the v1.0.0 tag:** rename CHANGELOG's `[0.1.0]` heading (RELEASE-GUIDE §5).
   - **Waiting for Maxwell:** H-005 (tuning defaults), H-018 (Lane B owns `Rimlight.Platform.Tests`; CLAUDE.md and AGENTS.md lane lists), H-023 (C13's XML-only CONTRACT CHANGE) and H-024 (keep Ctrl+Alt+L, which AltGr layouts can't use, or change the default). H-018 also waits for Codex's acknowledgement.
+- **Stack merge (`wip/stack-merge`, effort: M):** K10 started from the K7 tip at 1f00f02, which lacked the review fixes on the K3–K6 tips and the second review round cascaded since. `claude/k7-settings-window` at faa4f2f is now merged. That brings in the render-scale gate, stalled surfaces, the input-frame cap, the media read retry, sticky fullscreen exits, AltGr-safe shortcuts, private logs, checkable tray choices, and K7's idle-cost, preview, recorder and high-contrast fixes. Where the two sides disagreed:
+  - **No overlay:** K10's rule stays. The source keeps getting frames, so the capture closes as for any pause, and Settings' meter and the visualizer keep working. K3/K7's `SuspendSource` and `IOverlayFrameSource.FramesStopped` are dropped; their `TakeGradient` helper stays.
+  - **Notification clicks:** K9's rule stays. An action lasts until the next notification and runs after the window procedure returns. K6's clearing on close is dropped, because a toast in the notification list must stay clickable.
+  - **Both kept:** `FramePacer` has C13's fade rule and K8's Observed, then K3's `Stalled` rule. `OverlayHost` has K10's shared rules and no GPU device without an overlay, plus K3's loop fixes. Start-up listens early (K6) for K8's commands. `Claim(…, out runningElsewhere)` takes K8's `HandOverCommand`. The tray has both sides' items.
+  - **Tests:** Platform.Tests went from 260 to 313. Expectations changed only where the merge changed behaviour on purpose: an input at the full rate now waits, and D3D pauses only a window that covers its monitor. Three signatures changed too: `GlowConstants.Create`, `RollingFileLog` and `Claim`. New tests cover the stall rule, `CoreFade`, the drag cap, the hidden scale switch, sticky exits and D3D, log redaction, the tooltip, `RefreshScheduler`, the recorder's refusals and the AltGr shapes. The refusals moved out of BehaviorPage into `ShortcutChoice` so they can be tested.
+  - **Mirrors:** `OverlayLoopModel` has the cap and the scale gate. `PaceModel` needs no rule change, because a simulation has no stalls. `SoakRun` holds inputs the way the app does; a 2-hour run moves 8 of 290,509 frames, so PERF.md stands.
+  - **HANDOFF:** the K6 branch's H-019 is now H-024. The K10 checklist gained rows for the merged fixes (sticky exits, refused shortcuts, AltGr, another copy, the menu, redacted logs).
+  - **Verified here (Linux):** Release and Debug build with 0 warnings and 0 errors. `dotnet test` passes: Rimlight.Tests 741, Rimlight.Platform.Tests 313, Rimlight.IconGen.Tests 89.
 
 ### K10 Windows checklist
 
@@ -1538,10 +1546,12 @@ Integration pass: Lane B's test project, a pacing check with the real Core, seam
    - Expect:
      - A click turns the glow on or off; the icon dims to half opacity while off, and "Glow on" is unchecked.
      - Mode > Off fades the glow out.
-     - "Open logs folder" opens `%APPDATA%\Rimlight\logs`, which holds `rimlight.log`.
+     - "Open logs folder" opens `%APPDATA%\Rimlight\logs`, which holds `rimlight.log`. Its paths show `%USERPROFILE%`, not your user name.
+     - A right-click opens the menu at the pointer, and it stays there. After a preset, Colors > From album art brings the album colors back.
 7. **Fullscreen, lock and battery.**
    - Expect:
      - A fullscreen video on one monitor fades only that monitor out within about 0.3 s, and it comes back when the video leaves fullscreen. A maximized window doesn't count.
+     - With the video fullscreen on one monitor, click the other monitor: it stays paused. Then click File Explorer or Settings on its monitor and the glow comes back there. A click on the desktop or the taskbar keeps it paused.
      - Win+L stops the glow; it fades back in after you unlock.
      - On a laptop, unplugging keeps the glow at 30 fps. Behavior > On battery > "Pause the glow" stops it while unplugged.
 8. **A 120 Hz or faster monitor, if you have one.**
@@ -1559,12 +1569,15 @@ Integration pass: Lane B's test project, a pacing check with the real Core, seam
     - Expect:
       - Ctrl+Alt+L toggles the glow from any app.
       - Record Ctrl+Shift+F9 in Behavior and it works; Alt+Tab is refused.
+      - Record Ctrl+C or Alt+F: refused with "Apps use that for typing and editing…", and the old shortcut still works.
       - A shortcut another app already holds shows the inline warning.
+      - If you can add a Polish (Programmers) keyboard layout: restart Rimlight. The welcome or Behavior page says Ctrl+Alt+L "types a character", AltGr+L still types ł in Notepad, and recording Ctrl+Alt+L is refused. Remove the layout afterwards (H-024).
 11. **Second start, sign-in, and quit then start.**
     - Expect:
       - Starting Rimlight again while it runs brings its Settings to the front, with no second tray icon.
       - Sign out and back in: Rimlight starts in the tray with no window.
       - Choose Quit Rimlight in the tray and, within a second, start Rimlight from the Start menu: within about 8 s Rimlight runs again, the tray icon is back and Settings opens.
+      - With the installed copy running, start a dev build (`dotnet run --project src/Rimlight.App`): a message says Rimlight is already running from another folder and names the installed exe.
     - Bug: no tray icon 10 s after that quick restart (the old behavior: the start was swallowed and no Rimlight ran).
 12. **Visualizer.**
     - Do: run `& "$env:LOCALAPPDATA\Rimlight\current\Rimlight.exe" --debug-visualizer` while it runs.
