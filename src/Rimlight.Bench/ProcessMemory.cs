@@ -7,13 +7,13 @@ namespace Rimlight.Bench;
 // Machine and process facts for the reports. WorkingSetBytes is read hundreds of times during a soak, so it must not
 // allocate: the harness's own garbage would grow the working set it is measuring. Environment.WorkingSet is fine on
 // Windows (GetProcessMemoryInfo into a struct), but on Linux it parses /proc/self/status into strings, so there
-// /proc/self/statm is read with pread into a buffer kept open for the process.
+// /proc/self/statm is read with pread: from a handle kept open for the process, into a stack buffer per call (so
+// concurrent readers, e.g. tests running in parallel, can't tear each other's reads).
 internal static class ProcessMemory
 {
     private static readonly SafeFileHandle? Statm = OpenStatm();
-    private static readonly byte[] StatmBuffer = new byte[256];
 
-    /// <summary>The process's working set (resident set) in bytes, without allocating.</summary>
+    /// <summary>The process's working set (resident set) in bytes, without allocating. Safe on any thread.</summary>
     /// <returns>The working set, or 0 if it can't be read.</returns>
     public static long WorkingSetBytes()
     {
@@ -21,11 +21,12 @@ internal static class ProcessMemory
         try
         {
             // statm: "size resident shared text lib data dt", in pages. pread at offset 0 regenerates the file.
-            int length = RandomAccess.Read(Statm, StatmBuffer, 0);
+            Span<byte> statm = stackalloc byte[256];
+            int length = RandomAccess.Read(Statm, statm, 0);
             int i = 0;
-            while (i < length && StatmBuffer[i] != ' ') i++;
+            while (i < length && statm[i] != ' ') i++;
             long pages = 0;
-            for (i++; i < length && StatmBuffer[i] is >= (byte)'0' and <= (byte)'9'; i++) pages = pages * 10 + (StatmBuffer[i] - '0');
+            for (i++; i < length && statm[i] is >= (byte)'0' and <= (byte)'9'; i++) pages = pages * 10 + (statm[i] - '0');
             return pages * Environment.SystemPageSize;
         }
         catch (IOException)
