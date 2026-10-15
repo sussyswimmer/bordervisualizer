@@ -16,7 +16,7 @@
 - [x] C10 `tools/icon-gen`: SVG → multi-size `.ico` + PNGs (consumes `assets/icon.svg` from Lane B) — PR #15 — effort: M
 - [x] C11 Community health files + issue/PR templates + CHANGELOG — PR [#17](https://github.com/sussyswimmer/bordervisualizer/pull/17) — effort: S (made by Claude Code on Maxwell's instruction; notes below)
 - [x] C12 Perf + soak harness in Bench: run analyzer + light engine for 8 simulated hours of synthetic audio, and report allocations, p99 frame cost, and memory — PR [#25](https://github.com/sussyswimmer/bordervisualizer/pull/25) — effort: L (made by Claude Code on Maxwell's instruction; notes below)
-- [ ] C13 Delete `Fakes/` and make `CoreFactory` return the real implementations. Final Core API docs (`docs/CORE-API.md`).
+- [x] C13 Delete `Fakes/` and make `CoreFactory` return the real implementations. Final Core API docs (`docs/CORE-API.md`). — PR [#27](https://github.com/sussyswimmer/bordervisualizer/pull/27) — effort: M (made by Claude Code on Maxwell's instruction; also fixes H-016 and C4's known limit 2; notes below)
 
 ### C1 completion log
 
@@ -417,7 +417,7 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
   - Doc 05 step 7's sRGB hex stays with Lane B's own helper, because `Palette` is linear only.
 - **Known limits, following doc 05 as written (for the tuning round):**
   - A very wide gradient can still split into clusters more than 0.05 apart, each scored on its own share. The merge covers texture and shading up to an L span of about 0.15 (tested), but a ramp twice as wide, cut 4 ways, leaves steps of about 0.075. Option: a larger merge distance, traded against merging distinct shades.
-  - A dark cover with one bright logo gets a soft-grey Secondary (the near-black cluster, glow-ified to neutral L 0.55; the fixture gives `#F32799` / `#707179`). Option: prefer the derived Secondary when Primary is colorful and the best candidate is neutral.
+  - A dark cover with one bright logo gets a soft-grey Secondary (the near-black cluster, glow-ified to neutral L 0.55; the fixture gives `#F32799` / `#707179`). Option: prefer the derived Secondary when Primary is colorful and the best candidate is neutral. **Resolved in C13 (#27):** `#F32799` / `#FF7465`.
 - **Tests:** 132 new (16 of them from the review fixes), 296 in the suite. All images are procedural.
   - Six album-art-like 64×64 fixtures are committed as PNGs in `src/Rimlight.Tests/fixtures/`. A test-side PNG codec writes them, and a test fails if they drift from their generators (`RIMLIGHT_WRITE_FIXTURES=1` rewrites them).
   - Every doc 05 §4 case is covered, plus 1×1, transparent and partial alpha, gradients, saturated extremes, validation, determinism across 8 threads, and grid sampling (a 2× upscale gives the identical palette).
@@ -519,6 +519,50 @@ Done by Claude Code on Maxwell's instruction (Codex is not working Lane A this r
     - GCs started by other threads: a scratch probe saw 0 B in 7,441 checked loops over 809 GCs.
     - Tiered compilation, OSR and the tiering worker restarting: another probe saw nothing.
     - Instrumented copies passed 20 full runs, so the cause is still open. It is not in C12's code, which runs after the parallel tests.
+
+### C13 notes
+
+- **Fakes.** `src/Rimlight.Core/Fakes/` was already empty: C2, C4, C5, C6 and C7 each deleted their fake when the real implementation landed. The last mention was `CoreFactory`'s summary, which now says every method returns the real implementation.
+  - `CoreFactoryTests` now checks three things:
+    - every factory method returns the real type;
+    - Core has no `Fake*` type and no `Fakes` namespace;
+    - the factory's public methods and Core's exported types match `docs/CORE-API.md`. Adding a public method fails the test until the page is updated.
+  - **Not edited:**
+    - `CLAUDE.md` line 28 and `AGENTS.md` lines 17 and 41 are agent instruction files and still describe fakes. Maxwell can drop those lines.
+    - `START-HERE.md` (the K0 prompt) and doc 09 describe the plan, so their mentions stay.
+    - Two comments on the K8 branch say "the fake light engine" (H-020).
+- **`docs/CORE-API.md`** is the Core API as Lane B uses it, taken from the code and the `CoreFactory` remarks. Where a frozen contract summary is out of date, its §9 says so: `ISettingsStore`, `Settings`, `AudioTuning.MinFlux`, `AudioTuning.Sensitivity` and `LightState.Intensity`.
+- **H-016, tempo (spec clarification of doc 03 §4):** `EstimatedBpm` is the mean of the stored intervals (at most 16, each at most 2 s) within ±25 % of their median. Before, it was the median alone.
+  - **Why:** a beat is only seen on a frame, so at a steady frame rate the intervals are whole frames and the median picked one of two values.
+  - **Results.** Steady 60 fps, no jitter, every estimate once the history is full:
+
+    | True tempo | Before | After |
+    |---|---|---|
+    | 126 BPM | 124.14 | 125.76–126.04 |
+    | 128 BPM | 128.57 | 128.00 |
+    | 140 BPM | 138.46 | 139.81–140.15 |
+    | 174 BPM | 171.43 | 173.49–174.02 |
+
+    90 and 120 BPM read exactly. 44.1 kHz gives the same.
+  - **Repro.** `wav-analyze` on generated tracks now reads 126.0 / 128.0 / 139.8 / 174.0. The C2 test with the worst estimate moves from 122.0 to 123.8 for 124 BPM. In `selftest`, the analyzer reads 120.1 / 127.9 / 119.9 / 173.9; C3's table had 120.2 / 127.7 / 119.8 / 175.1.
+  - **Fallback:** when no interval lies within the window (two equal clusters), the median itself is used.
+- **C4 known limit 2 (spec clarification of doc 05 §2 step 5):** a colorful Primary (chroma ≥ 0.03) never takes a neutral Secondary group (< 0.03). When the best group at least 0.12 from Primary is neutral, Secondary is the derived color (+35° hue, L + 0.08) instead.
+  - A neutral Primary keeps a neutral Secondary, so grayscale art still glows soft white. The no-art rule is unchanged.
+  - The next colorful group is deliberately not used instead. On the dark-cover fixture it is the logo's anti-aliased edge (H 346.6° against 353.4°), which would make a one-hue glow.
+  - The fixture now gives `#F32799` / `#FF7465`.
+  - `PopulationIsWeightedWithDiminishingReturns` (75 % grey, 25 % blue) now expects the derived Secondary instead of the grey.
+- **Verification:**
+  - `dotnet build Rimlight.sln -c Release`: 0 warnings.
+  - `dotnet test Rimlight.sln -c Release`: 695 + 73 passed (669 + 73 before).
+  - **New tests (26):**
+    - Tempo (17): the steady-60-fps theory (8), missed and extra kicks (2), and the interval rule (7).
+    - Palette (7): candidate chroma on both sides of 0.03 (4), Primary chroma on both sides (3). The dark-cover fixture test now also checks its Secondary.
+    - Factory: 3 new tests replace the old `AllFactoryMethodsReturnObjects`.
+  - **Mutants, all killed (15):**
+    - Tempo (6): a plain median, a plain mean, no fallback, windows of 0.35/0.28/0.22/0.15, and the lower median for even counts. The first edge test was symmetric, so the 0.35 window survived until it was split into one-sided cases.
+    - Palette (7): no rule, no Primary condition, candidate thresholds of 0.05/0.02, Primary thresholds of 0.05/0.02, and the next colorful group instead of the derived color.
+    - Factory guards (2): a leftover `Fakes` type, and a wrapped engine.
+  - Nothing new runs per frame: the tempo change reuses the sorted 16-float buffer, and C12's soak allocation checks pass.
 
 ## Lane B — Claude Code
 

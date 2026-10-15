@@ -1,5 +1,15 @@
 # Handoff
 
+## [OPEN] H-020 · from: claude-code (Lane A, C13) · to: claude-code (K10), maxwell · blocking: none
+**Need:** Clean-up now that Core has no fakes (C13, PR [#27](https://github.com/sussyswimmer/bordervisualizer/pull/27)).
+1. **K10.** On `claude/k8-debug-visualizer`, `src/Rimlight.App/Overlay/DemoShow.cs` line 15 and `Overlay/MusicGlowSource.cs` line 245 still say "the fake light engine never turns the gradient".
+   - `TurnDemoGradient` turns the gradient itself whenever the engine's phase stands still.
+   - The real engine drifts in Music Sync (0.015 cycles/s plus beat kicks), and `--demo` forces Music Sync. So the turn now applies only while the engine is hidden or static.
+   - Drop it and `DemoShow.DriftCyclesPerSecond`, or keep it deliberately and reword the comments. If the README GIF should loop seamlessly in 24 s, that would be a reason to keep a demo-owned phase.
+2. **Maxwell.** `CLAUDE.md` line 28 ("Until Codex lands the real implementations, `CoreFactory` returns fakes") and `AGENTS.md` lines 17 and 41 still describe the fakes. Those are agent instruction files, so C13 left them alone.
+**Repro:** `git grep -n -i fake origin/claude/k8-debug-visualizer -- src/Rimlight.App`.
+**Proposed:** K10 handles item 1 during the integration pass. Maxwell edits or drops the instruction lines in item 2 when convenient. If another branch also claims H-020, renumber this entry at integration.
+---
 ## [OPEN] H-018 · from: claude-code (Lane A, C12) · to: maxwell, claude-code (K11) · blocking: none (release candidate, doc 09 sync point 4)
 **Need:** Two measurements the Linux soak can't make.
 1. **The Core soak on Windows (Maxwell, about 5 minutes).** `docs/PERF.md` has numbers from a shared Linux VM only. From the repository root in PowerShell:
@@ -13,7 +23,7 @@
 **Repro:** n/a (measurements).
 **Proposed:** Maxwell runs item 1 when convenient. K11 does item 2 once K8's `--demo` is in, and puts the results in PROGRESS.md (doc 07 Phase 7). Mark DONE when both are recorded.
 ---
-## [OPEN] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
+## [DONE] H-016 · from: claude-code (Lane A, C3) · to: codex · blocking: none (sync point 2)
 **Need:** `AnalyzerDiagnostics.EstimatedBpm` (the median of the last 16 beat intervals) is biased when the render loop is steady. Beats are only seen at frame times, so the intervals are whole frames and the median picks one of the two neighbouring values.
 **Repro:**
 - Run `wav-analyze generate t.wav --bpm 174 --seconds 30`, then `wav-analyze t.wav --no-plot` (60 fps, no jitter).
@@ -29,6 +39,7 @@
 - With `--jitter 0.2`, which is what the C2 tests use, the error dithers away (126.1, 127.9, 140.2, 173.5). A waitable swap chain is much steadier than ±20 %, so the K8 visualizer will show the bias.
 - The tool's own tempo (median, then the mean of the intervals within ±25 % of it) reads 126.0, 128.0, 140.0 and 174.0.
 **Proposed:** In `BeatDetector`, after the median, average the stored intervals within ±25 % of it. The buffer is already sorted, so this needs no allocation. Then add a no-jitter tempo test at 126 and 174 BPM. Display-only today: no light behavior depends on `EstimatedBpm`.
+**Resolved (C13, PR [#27](https://github.com/sussyswimmer/bordervisualizer/pull/27)):** done as proposed. `EstimatedBpm` is the mean of the stored intervals within ±25 % of their median, or the median itself when none lies that close. At a steady 60 fps, the no-jitter tests read 90.00, 120.00, 125.76–126.04, 128.00, 139.81–140.15 and 173.49–174.02 at 90–174 BPM, and the repro above reads 126.0, 128.0, 139.8 and 174.0. Every C2 test still passes.
 ---
 ## [OPEN] H-015 · from: claude-code (Lane A, C3) · to: claude-code (K8) · blocking: K8
 **Need:** K8's "Copy params as JSON" should produce what `wav-analyze --tuning` reads, so a tuned feel can be replayed offline and handed back for the default re-tune (sync point 2).
