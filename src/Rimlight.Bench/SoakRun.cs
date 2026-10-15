@@ -24,25 +24,34 @@ internal sealed record SoakOptions
     public Func<ILightEngine, ILightEngine>? WrapLightEngine { get; init; }
 
     public double Seconds => Hours * 3600;
+
+    /// <summary>The most progress lines a run may print. Their records are kept for the report, in a list sized before
+    /// the start memory sample (see SoakRun.Run).</summary>
+    public const int MaxProgressLines = 10_000;
+
+    /// <summary>How many progress lines the run prints at most: one per ReportEveryMinutes and one at the end.</summary>
+    public double ProgressLines => ReportEveryMinutes > 0 ? Math.Ceiling(Seconds / (ReportEveryMinutes * 60)) : 16;
 }
 
 /// <summary>A per-frame cost distribution, in nanoseconds.</summary>
-internal sealed record CostSummary(double MeanNs, double P50Ns, double P99Ns, double P999Ns, long MaxNs)
+internal readonly record struct CostSummary(double MeanNs, double P50Ns, double P99Ns, double P999Ns, long MaxNs)
 {
     public static CostSummary From(LatencyHistogram h) =>
         new(h.Mean, h.Percentile(0.5), h.Percentile(0.99), h.Percentile(0.999), h.Count == 0 ? 0 : h.Max);
 }
 
 /// <summary>Process memory at one moment. LiveManagedBytes is measured after a full, compacting collection.</summary>
-internal sealed record MemorySample(long LiveManagedBytes, long WorkingSetBytes, int Handles);
+internal readonly record struct MemorySample(long LiveManagedBytes, long WorkingSetBytes, int Handles);
 
-/// <summary>A progress line: costs over the interval since the previous one, everything else since measuring began.</summary>
-internal sealed record SoakSnapshot(double SimulatedSeconds, long Frames, CostSummary Interval, long AllocatedBytes,
+/// <summary>A progress line: costs over the interval since the previous one, everything else since measuring began. A
+/// struct, so keeping one in the run's pre-sized list allocates nothing.</summary>
+internal readonly record struct SoakSnapshot(double SimulatedSeconds, long Frames, CostSummary Interval, long AllocatedBytes,
     long AllocatingFrames, long HeapBytes, long WorkingSetBytes, int Gen0, int Gen1, int Gen2, long Beats);
 
 internal sealed record SoakResult
 {
-    /// <summary>Live managed memory may grow this much over a run (the progress lines are kept for the report).</summary>
+    /// <summary>Live managed memory may grow this much over a run. The progress lines kept for the report don't count:
+    /// their list is allocated before the start sample.</summary>
     public const long MaxManagedGrowthBytes = 256 * 1024;
 
     public required SoakOptions Options { get; init; }
@@ -120,6 +129,8 @@ internal static class SoakRun
     public static SoakResult Run(SoakOptions options, Action<SoakSnapshot>? progress = null, Action<SoakProgram>? programReady = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (options.ProgressLines > SoakOptions.MaxProgressLines)
+            throw new ArgumentOutOfRangeException(nameof(options), $"{options.ProgressLines:0} progress lines; at most {SoakOptions.MaxProgressLines} are allowed.");
         SoakProgram program = SoakProgram.Generate(options.Seconds, options.SampleRate, options.Seed, options.Shape);
         SoakProgram tour = SoakProgram.Tour(options.SampleRate, options.Seed);
         programReady?.Invoke(program);
@@ -142,14 +153,17 @@ internal static class SoakRun
         _ = Format(Snapshot(0)); // the progress line's code runs (and is compiled) before the start sample, not after
         simulator.ClearMeasurements();
 
+        // Everything the run keeps until the end sample is allocated before the start sample, so a clean run's heap
+        // growth doesn't depend on how many progress lines it prints: the snapshots are structs in a list sized for all
+        // of them (with a margin for rounding in the report times).
+        double reportEvery = options.ReportEveryMinutes > 0 ? options.ReportEveryMinutes * 60 : program.Seconds / 16;
+        var snapshots = new List<SoakSnapshot>((int)options.ProgressLines + 2);
         MemorySample start = Memory();
-        var snapshots = new List<SoakSnapshot>(64);
         (gen0, gen1, gen2) = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
         long reportingBytes = 0;
         long processStart = GC.GetTotalAllocatedBytes(precise: true);
         long runStart = Stopwatch.GetTimestamp();
 
-        double reportEvery = options.ReportEveryMinutes > 0 ? options.ReportEveryMinutes * 60 : program.Seconds / 16;
         simulator.Play(program, reportEvery, time =>
         {
             long before = GC.GetTotalAllocatedBytes(precise: true);

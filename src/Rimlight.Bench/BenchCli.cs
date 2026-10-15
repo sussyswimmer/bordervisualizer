@@ -25,14 +25,15 @@ internal static class BenchCli
             --hours <h>          Simulated hours (default 8)
             --minutes <m>        Simulated minutes instead, for shorter runs
             --fps <n>            Render frames per second (default 60)
-            --json <file>        Also write the full report as JSON
+            --json <file>        Also write the full report as JSON (the file is created before the run starts)
             --shape <name>       day: the listening day (default); compressed: the same structure at about a
                                  minute per session, so two minutes visit every path (what the test suite runs)
             --rate <Hz> (48000)  --jitter <f> (0.2)  --packet-ms <ms> (10)  --seed <n> (1)
             --warmup-seconds <s> Real seconds of warm-up on a short tour of every path before measuring (default 2)
-            --report-every <min> Simulated minutes between progress lines (default: 16 lines)
+            --report-every <min> Simulated minutes between progress lines (default: 16 lines; at most 10,000 lines)
 
-        Exit codes: 0 success, 1 allocations on the measured path (or, for soak, managed memory growth), 2 bad command line.
+        Exit codes: 0 success, 1 allocations on the measured path (or, for soak, managed memory growth), 2 bad command line
+        (or, for soak, a --json file that can't be created).
 
         """;
 
@@ -101,6 +102,34 @@ internal static class BenchCli
 
     private static int Soak(string[] args, TextWriter output)
     {
+        (SoakOptions options, string? json) = ParseSoak(args);
+        // Created before the run, so a path that can't be written fails now (exit code 2), not after hours of soak.
+        using FileStream? report = json is null ? null : CreateReport(json);
+        SoakProgramShape shape = options.Shape;
+        output.WriteLine(string.Create(C, $"Soak: {SoakRun.Clock(options.Seconds)} simulated{(shape == SoakProgramShape.Default ? "" : $" ({shape.Name} program)")} at {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.SampleRate} Hz in {options.PacketSeconds * 1000:0.#} ms packets; analyzer + light engine + palette blender (gradient filled every frame)"));
+        output.WriteLine(MachineInfo.Describe());
+        SoakResult result = SoakRun.Run(options, s => output.WriteLine(SoakRun.Format(s)), program =>
+        {
+            output.WriteLine(SoakRun.Describe(program.Summary, options));
+            output.WriteLine();
+        });
+        output.WriteLine();
+        output.Write(SoakRun.Summarize(result));
+        if (report is not null)
+        {
+            SoakReport.Write(result, report);
+            output.WriteLine($"JSON report: {report.Name}");
+        }
+        return ExitCode(result);
+    }
+
+    /// <summary>The soak's exit code: 0 when it passed, 1 when a frame allocated or managed memory grew.</summary>
+    internal static int ExitCode(SoakResult result) => result.Passed ? 0 : 1;
+
+    /// <summary>The soak command's options and its --json path (null without one).</summary>
+    /// <exception cref="UsageException">The command line is wrong.</exception>
+    internal static (SoakOptions Options, string? Json) ParseSoak(string[] args)
+    {
         var a = new CommandLine(args, ["hours", "minutes", "rate", "fps", "jitter", "packet-ms", "seed", "warmup-seconds", "report-every", "json", "shape"], []);
         if (a.Positional.Count != 0) throw new UsageException($"Unexpected argument \"{a.Positional[0]}\".");
         if (a.Has("hours") && a.Has("minutes")) throw new UsageException("Give --hours or --minutes, not both.");
@@ -124,20 +153,20 @@ internal static class BenchCli
             ReportEveryMinutes = a.Number("report-every", 0, 0, 48 * 60),
             Shape = shape,
         };
-        output.WriteLine(string.Create(C, $"Soak: {SoakRun.Clock(options.Seconds)} simulated{(shape == SoakProgramShape.Default ? "" : $" ({shape.Name} program)")} at {options.Fps:0.##} fps ±{options.Jitter * 100:0.#} %, {options.SampleRate} Hz in {options.PacketSeconds * 1000:0.#} ms packets; analyzer + light engine + palette blender (gradient filled every frame)"));
-        output.WriteLine(MachineInfo.Describe());
-        SoakResult result = SoakRun.Run(options, s => output.WriteLine(SoakRun.Format(s)), program =>
+        if (options.ProgressLines > SoakOptions.MaxProgressLines)
+            throw new UsageException(string.Create(C, $"--report-every {options.ReportEveryMinutes} would print {options.ProgressLines:N0} progress lines; the most is {SoakOptions.MaxProgressLines:N0}."));
+        return (options, json);
+    }
+
+    private static FileStream CreateReport(string path)
+    {
+        try
         {
-            output.WriteLine(SoakRun.Describe(program.Summary, options));
-            output.WriteLine();
-        });
-        output.WriteLine();
-        output.Write(SoakRun.Summarize(result));
-        if (json is not null)
-        {
-            SoakReport.Write(result, json);
-            output.WriteLine($"JSON report: {Path.GetFullPath(json)}");
+            return SoakReport.Create(path);
         }
-        return result.Passed ? 0 : 1;
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            throw new UsageException($"Cannot write the JSON report to {path}: {e.Message}");
+        }
     }
 }

@@ -9,12 +9,12 @@ internal static class SoakReport
 {
     public const int FormatVersion = 1;
 
-    public static void Write(SoakResult r, string path)
+    /// <summary>Creates (or empties) the report file and its directory, before the run, so a bad path fails early.</summary>
+    public static FileStream Create(string path)
     {
         string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-        using FileStream stream = File.Create(path);
-        Write(r, stream);
+        return File.Create(path);
     }
 
     public static void Write(SoakResult r, Stream stream)

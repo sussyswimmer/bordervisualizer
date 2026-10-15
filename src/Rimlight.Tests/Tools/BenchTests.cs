@@ -1,3 +1,4 @@
+using Rimlight.AudioTools;
 using Rimlight.Bench;
 using Xunit;
 
@@ -62,5 +63,47 @@ public sealed class BenchTests
         Assert.Equal(2, BenchCli.Run(["soak", "--minutes", "1", "extra"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(2, BenchCli.Run(["soak", "--shape", "week"], TextWriter.Null, TextWriter.Null));
         Assert.Equal(0, BenchCli.Run(["--help"], TextWriter.Null, TextWriter.Null));
+    }
+
+    [Fact]
+    public void SoakDefaultsToTheEightHourRunAndLimitsItsProgressLines()
+    {
+        (SoakOptions options, string? json) = BenchCli.ParseSoak([]);
+        Assert.Equal(8, options.Hours);
+        Assert.Equal(60, options.Fps);
+        Assert.Equal(48000, options.SampleRate);
+        Assert.Equal(0.2, options.Jitter);
+        Assert.Equal(0.01, options.PacketSeconds);
+        Assert.Equal(1UL, options.Seed);
+        Assert.Equal(2, options.WarmupSeconds);
+        Assert.Same(SoakProgramShape.Default, options.Shape);
+        Assert.Equal(16, options.ProgressLines);
+        Assert.Null(options.WrapLightEngine);
+        Assert.Null(json);
+
+        // The run keeps a record per progress line, so their number is capped.
+        Assert.Equal(SoakOptions.MaxProgressLines, BenchCli.ParseSoak(["--minutes", "100", "--report-every", "0.01"]).Options.ProgressLines);
+        Assert.Throws<UsageException>(() => BenchCli.ParseSoak(["--minutes", "100", "--report-every", "0.0099"]));
+        Assert.Throws<UsageException>(() => BenchCli.ParseSoak(["--report-every", "0.04"])); // 12,000 lines in 8 hours
+        Assert.Throws<ArgumentOutOfRangeException>(() => SoakRun.Run(new SoakOptions { Hours = 0.01, ReportEveryMinutes = 0.00005, WarmupSeconds = 0 })); // 12,000
+    }
+
+    [Fact]
+    public void ASoakReportThatCantBeWrittenFailsBeforeTheRun()
+    {
+        // A directory where the JSON file should go: refused at once with exit code 2, not after the run.
+        string directory = Directory.CreateTempSubdirectory("rimlight-soak-").FullName;
+        try
+        {
+            var output = new StringWriter();
+            var error = new StringWriter();
+            Assert.Equal(2, BenchCli.Run(["soak", "--minutes", "0.05", "--warmup-seconds", "0", "--json", directory], output, error));
+            Assert.Equal("", output.ToString());
+            Assert.Contains($"Cannot write the JSON report to {directory}: ", error.ToString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 }

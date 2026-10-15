@@ -83,6 +83,19 @@ public sealed class SoakTests
         Assert.Equal(r.Frames, r.Snapshots[^1].Frames);
         Assert.All(r.Snapshots, s => Assert.Equal(0, s.AllocatedBytes));
         Assert.All(r.Snapshots, s => Assert.InRange(s.Interval.MeanNs, 1, 1e8));
+
+        // Each line's costs are its interval's alone: the frames since the previous line, which together are the run.
+        double intervalNs = 0;
+        long previousFrames = 0, intervalMax = 0;
+        foreach (SoakSnapshot s in r.Snapshots)
+        {
+            Assert.True(s.Frames > previousFrames);
+            intervalNs += s.Interval.MeanNs * (s.Frames - previousFrames);
+            intervalMax = Math.Max(intervalMax, s.Interval.MaxNs);
+            previousFrames = s.Frames;
+        }
+        Assert.Equal(1, intervalNs / (r.Frame.MeanNs * r.Frames), 9);
+        Assert.Equal(r.Frame.MaxNs, intervalMax);
     }
 
     [Fact]
@@ -115,6 +128,7 @@ public sealed class SoakTests
         Assert.True(clean.Passed);
         Assert.Contains("Verdict:** PASS", SoakRun.Summarize(clean));
         Assert.Equal("pass", Verdict(clean));
+        Assert.Equal(0, BenchCli.ExitCode(clean));
 
         SoakResult atLimit = clean with { End = clean.Start with { LiveManagedBytes = clean.Start.LiveManagedBytes + SoakResult.MaxManagedGrowthBytes } };
         Assert.True(atLimit.Passed);
@@ -126,11 +140,13 @@ public sealed class SoakTests
         Assert.False(grown.Passed);
         Assert.Contains("Verdict:** FAIL: 0 B allocated per frame in steady state; managed memory grew more than 256 KB.", SoakRun.Summarize(grown));
         Assert.Equal("fail", Verdict(grown));
+        Assert.Equal(1, BenchCli.ExitCode(grown));
 
         SoakResult allocating = clean with { AllocatedBytes = 24, AllocatingFrames = 1, FirstAllocationSeconds = 1.5 };
         Assert.False(allocating.Passed);
         Assert.Contains("Verdict:** FAIL: frames allocated; managed memory flat.", SoakRun.Summarize(allocating));
         Assert.Equal("fail", Verdict(allocating));
+        Assert.Equal(1, BenchCli.ExitCode(allocating));
 
         static string Verdict(SoakResult result)
         {
@@ -163,12 +179,14 @@ public sealed class SoakTests
     public void SoakInItsOwnProcessPassesAndWritesTheJsonReport()
     {
         // The quick soak through the real command line, in a process of its own: the verdict (0 B allocated per frame,
-        // live managed heap flat), the printed summary and the JSON report.
+        // live managed heap flat), the printed summary and the JSON report. With a progress line every 0.048 simulated
+        // seconds, 2,500 in all: the records the run keeps for them must not count as growth (they once added 166 B
+        // each, and 2,500 of them are over the 256 KB allowed).
         string directory = Path.Combine(Path.GetTempPath(), "rimlight-soak-" + Guid.NewGuid().ToString("N"));
         string json = Path.Combine(directory, "report.json");
         try
         {
-            (int exit, string output) = RunBench("soak", "--minutes", "2", "--shape", "compressed", "--warmup-seconds", "1", "--report-every", "0.25", "--json", json);
+            (int exit, string output) = RunBench("soak", "--minutes", "2", "--shape", "compressed", "--warmup-seconds", "1", "--report-every", "0.0008", "--json", json);
             Assert.True(exit == 0, output);
             Assert.Contains("Soak: 0:02:00 simulated (compressed program) at 60 fps", output);
             Assert.Contains("| **whole frame** |", output);
@@ -190,7 +208,7 @@ public sealed class SoakTests
             Assert.True(memory.GetProperty("end").GetProperty("workingSetBytes").GetInt64() > 0);
             Assert.True(root.GetProperty("light").GetProperty("hiddenFrames").GetInt64() > 0);
             Assert.True(root.GetProperty("costNs").GetProperty("frame").GetProperty("p99").GetDouble() > 0);
-            Assert.Equal(8, root.GetProperty("snapshots").GetArrayLength());
+            Assert.InRange(root.GetProperty("snapshots").GetArrayLength(), 2500, 2501);
         }
         finally
         {
@@ -233,8 +251,36 @@ public sealed class SoakTests
         }
     }
 
-    // Runs Rimlight.Bench (copied next to the tests with its runtimeconfig) with the dotnet host the tests run on.
+    [Fact]
+    public async Task ABenchRunPastItsTimeoutIsKilled()
+    {
+        // RunBench's own timeout: a 48-hour soak (about half an hour of real time) is stopped after 5 s, and what it
+        // printed by then comes back. If RunBench missed the timeout, the test kills the child itself.
+        System.Diagnostics.Process? child = null;
+        Task<(int? Exit, string Output)> run = Task.Run(() => RunBenchWithin(TimeSpan.FromSeconds(5), p => child = p, "soak", "--hours", "48", "--warmup-seconds", "0"));
+        if (await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(60))) != run)
+        {
+            child?.Kill(entireProcessTree: true);
+            Assert.Fail("RunBench did not return at its 5-second timeout.");
+        }
+        (int? exit, string output) = await run;
+        Assert.Null(exit);
+        Assert.Contains("Soak: 48:00:00 simulated", output);
+        Assert.DoesNotContain("Verdict", output);
+    }
+
+    // Runs Rimlight.Bench (copied next to the tests with its runtimeconfig) with the dotnet host the tests run on, and
+    // fails the test if it takes more than 5 minutes.
     private static (int Exit, string Output) RunBench(params string[] args)
+    {
+        (int? exit, string output) = RunBenchWithin(TimeSpan.FromMinutes(5), null, args);
+        Assert.True(exit.HasValue, "The soak did not finish within 5 minutes.\n" + output);
+        return (exit.Value, output);
+    }
+
+    // The same with any timeout. Past it, the process is killed and the exit code is null. Both streams are read
+    // asynchronously, so a process that never ends can't block the wait.
+    private static (int? Exit, string Output) RunBenchWithin(TimeSpan timeout, Action<System.Diagnostics.Process>? started, params string[] args)
     {
         string bench = typeof(SoakRun).Assembly.Location;
         var start = new System.Diagnostics.ProcessStartInfo(DotnetHost())
@@ -246,14 +292,20 @@ public sealed class SoakTests
         start.ArgumentList.Add(bench);
         foreach (string arg in args) start.ArgumentList.Add(arg);
         using var process = System.Diagnostics.Process.Start(start)!;
+        started?.Invoke(process);
+        Task<string> output = process.StandardOutput.ReadToEndAsync();
         Task<string> error = process.StandardError.ReadToEndAsync();
-        string output = process.StandardOutput.ReadToEnd();
-        if (!process.WaitForExit(TimeSpan.FromMinutes(5)))
+        int? exit = null;
+        if (process.WaitForExit(timeout))
+        {
+            exit = process.ExitCode;
+        }
+        else
         {
             process.Kill(entireProcessTree: true);
-            Assert.Fail("The soak did not finish within 5 minutes.\n" + output);
+            process.WaitForExit();
         }
-        return (process.ExitCode, output + error.Result);
+        return (exit, output.Result + error.Result);
     }
 
     // The dotnet host: the one `dotnet test` names, else the one that owns the running runtime
