@@ -193,8 +193,21 @@ internal sealed class AppController : IDisposable
         if (options.ShowVisualizer) ShowVisualizer();
     }
 
-    /// <summary>Turns the glow on or off ("Glow on", a click on the icon, the shortcut).</summary>
-    public void ToggleGlow() => settings?.Update(s => s with { Enabled = !s.Enabled });
+    /// <summary>
+    /// Turns the glow on or off ("Glow on", a click on the icon, the shortcut). The demo shows the glow whatever the
+    /// setting says, so during it this turns off what is on screen: it ends the demo and leaves the glow off.
+    /// </summary>
+    public void ToggleGlow()
+    {
+        if (IsDemoActive)
+        {
+            // Flipping the setting alone would change nothing on screen until the demo ended (doc 04 §5).
+            SetDemo(false);
+            settings?.Update(s => s with { Enabled = false });
+            return;
+        }
+        settings?.Update(s => s with { Enabled = !s.Enabled });
+    }
 
     /// <summary>Opens Settings (the tray, a second start, the welcome window).</summary>
     public void ShowSettings()
@@ -243,6 +256,7 @@ internal sealed class AppController : IDisposable
         IsDemoActive = on;
         glow.SetDemo(on);
         overlays?.RequestFrame(); // a glow that draws nothing wakes for it
+        if (settings is not null) tray?.ApplySettings(settings.Current); // the icon isn't dimmed while the demo glows
         Trace.WriteLine(on ? "[App] Demo mode on." : "[App] Demo mode off.");
     }
 

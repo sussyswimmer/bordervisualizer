@@ -159,12 +159,16 @@ internal sealed class TrayIconHost : IDisposable
         ApplyToolTip();
     }
 
-    /// <summary>Follows a settings change: the icon dims while the glow is off.</summary>
-    /// <param name="settings">The new settings.</param>
+    /// <summary>
+    /// Follows a settings change, or the demo starting or ending: the icon dims while the glow is off, which it never
+    /// is during the demo.
+    /// </summary>
+    /// <param name="settings">The current settings.</param>
     public void ApplySettings(Settings settings)
     {
-        if (disposed || dimmed == !settings.Enabled) return;
-        dimmed = !settings.Enabled;
+        bool dim = !settings.Enabled && !app.IsDemoActive;
+        if (disposed || dimmed == dim) return;
+        dimmed = dim;
         ApplyIcon();
     }
 
@@ -294,7 +298,7 @@ internal sealed class TrayIconHost : IDisposable
     private void Refresh()
     {
         Settings current = app.SettingsService.Current;
-        glowOn.IsChecked = current.Enabled;
+        glowOn.IsChecked = current.Enabled || app.IsDemoActive; // unchecking it during the demo ends it (ToggleGlow)
         HotkeyStatus hotkey = app.Hotkey;
         glowOn.InputGestureText = hotkey.State == HotkeyState.Registered ? hotkey.Gesture?.ToString() ?? "" : "";
         demoMode.IsChecked = app.IsDemoActive;
