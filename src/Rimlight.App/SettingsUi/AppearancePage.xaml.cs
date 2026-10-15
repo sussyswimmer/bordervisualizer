@@ -20,7 +20,6 @@ internal partial class AppearancePage : UserControl, ISettingsPage
 {
     private static readonly TimeSpan DisplayChangeDelay = TimeSpan.FromMilliseconds(500); // Windows sends several
 
-    private readonly AppController app;
     private readonly PageEdits edits;
     private readonly GlowPreview preview;
     private readonly DispatcherTimer displayChange;
@@ -30,7 +29,6 @@ internal partial class AppearancePage : UserControl, ISettingsPage
 
     public AppearancePage(AppController app)
     {
-        this.app = app;
         edits = new PageEdits(app);
         InitializeComponent();
         preview = new GlowPreview(app, PreviewImage);

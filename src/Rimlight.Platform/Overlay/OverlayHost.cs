@@ -59,7 +59,9 @@ public sealed class OverlayHost : IDisposable
     private int paused;
     private int onBattery;
     private string[] pausedMonitors = [];
+#if DEBUG
     private int deviceLossRequested;
+#endif
     private int recheckRequested;
     private int sourceChanged;
 
@@ -209,15 +211,17 @@ public sealed class OverlayHost : IDisposable
         Wake();
     }
 
+#if DEBUG
     /// <summary>
-    /// Debug aid for the device-loss path (doc 07 Phase 1): the overlay thread releases every GPU object and rebuilds
-    /// them exactly as it does after <c>DXGI_ERROR_DEVICE_REMOVED</c>. Safe to call from any thread.
+    /// Debug aid for the device-loss path (doc 07 Phase 1), in Debug builds only: the overlay thread releases every GPU
+    /// object and rebuilds them exactly as it does after <c>DXGI_ERROR_DEVICE_REMOVED</c>. Safe to call from any thread.
     /// </summary>
     public void SimulateDeviceLoss()
     {
         Interlocked.Exchange(ref deviceLossRequested, 1);
         Wake();
     }
+#endif
 
     /// <summary>Stops the overlay thread, which removes the overlays and releases every GPU object.</summary>
     public void Dispose()
@@ -486,11 +490,13 @@ public sealed class OverlayHost : IDisposable
             changed = true;
         }
 
+#if DEBUG
         if (Interlocked.Exchange(ref deviceLossRequested, 0) != 0)
         {
             ReleaseGpu("simulated from the tray (debug)");
             changed = true;
         }
+#endif
 
         if (Interlocked.Exchange(ref recheckRequested, 0) != 0)
         {

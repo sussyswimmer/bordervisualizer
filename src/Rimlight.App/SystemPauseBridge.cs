@@ -9,7 +9,8 @@ namespace Rimlight.App;
 /// <summary>
 /// Feeds the overlay what the system watcher reports (doc 02 "Lifetime events", doc 04 §4, PRD §5): a locked or
 /// disconnected session, sleep, the display turning off and fullscreen apps pause the glow; battery power applies
-/// "On battery"; a wake re-checks the GPU and the monitors. The Debug menu can add simulated states on top.
+/// "On battery"; a wake re-checks the GPU and the monitors. In Debug builds the tray's debug menu can add simulated
+/// states on top.
 /// </summary>
 internal sealed class SystemPauseBridge : IDisposable
 {
@@ -18,7 +19,9 @@ internal sealed class SystemPauseBridge : IDisposable
     private readonly SystemState fallback; // without a watcher: the power source at start, nothing paused
     private OverlayHost? overlays;
     private string[] appliedMonitors = [];
+#if DEBUG
     private SimulatedSystem simulated;
+#endif
 
     /// <summary>Starts watching (on its own thread) and waits briefly for the first state.</summary>
     /// <param name="settings">The settings at start ("Pause in fullscreen apps").</param>
@@ -51,6 +54,7 @@ internal sealed class SystemPauseBridge : IDisposable
     /// <summary>Raised on the watcher thread after <see cref="State"/> changed. Handlers must be quick and must not block.</summary>
     public event Action? StateChanged;
 
+#if DEBUG
     /// <summary>Debug stand-ins combined with the real state: battery, a pause everywhere, a paused monitor.</summary>
     public SimulatedSystem Simulated
     {
@@ -64,6 +68,7 @@ internal sealed class SystemPauseBridge : IDisposable
             Apply();
         }
     }
+#endif
 
     /// <summary>Starts feeding this overlay (before its <see cref="OverlayHost.Start"/>, so its first frame knows); null stops.</summary>
     public void Attach(OverlayHost? host)
@@ -93,11 +98,17 @@ internal sealed class SystemPauseBridge : IDisposable
         {
             if (overlays is not { } host) return;
             SystemState state = State;
-            host.SetOnBattery(state.OnBattery || simulated.OnBattery);
-            host.SetPaused(state.PausesEverywhere || simulated.PausedEverywhere);
-
+            bool onBattery = state.OnBattery;
+            bool pausedEverywhere = state.PausesEverywhere;
             string[] monitors = [.. state.FullscreenMonitors];
+#if DEBUG
+            onBattery |= simulated.OnBattery;
+            pausedEverywhere |= simulated.PausedEverywhere;
             if (simulated.PausedMonitor is { } extra && !monitors.Contains(extra, StringComparer.OrdinalIgnoreCase)) monitors = [.. monitors, extra];
+#endif
+            host.SetOnBattery(onBattery);
+            host.SetPaused(pausedEverywhere);
+
             // Only a real change reaches the overlay: each new set wakes it and starts per-monitor fades.
             if (!monitors.AsSpan().SequenceEqual(appliedMonitors))
             {
@@ -114,8 +125,10 @@ internal sealed class SystemPauseBridge : IDisposable
     }
 }
 
-/// <summary>Simulated system states for the Debug menu's render tests.</summary>
+#if DEBUG
+/// <summary>Simulated system states for the Debug menu's render tests (Debug builds only).</summary>
 /// <param name="OnBattery">Act as if on battery power.</param>
 /// <param name="PausedEverywhere">Pause everywhere, like a locked session.</param>
 /// <param name="PausedMonitor">Pause this monitor (GDI device name), like a fullscreen video; null for none.</param>
 internal readonly record struct SimulatedSystem(bool OnBattery, bool PausedEverywhere, string? PausedMonitor);
+#endif
