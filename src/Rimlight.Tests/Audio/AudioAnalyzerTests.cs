@@ -26,6 +26,65 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         Assert.InRange(beats.Count(t => t >= 2), expected - 1, expected + 1);
     }
 
+    [Theory]
+    [InlineData(126f, 60f)]
+    [InlineData(174f, 60f)]
+    [InlineData(126f, 30f)]
+    [InlineData(174f, 144f)]
+    public void SteadyFrameRateTempoIsNotBiasedByFrameQuantization(float bpm, float fps)
+    {
+        // H-016: beats are seen only at analysis steps (one per frame, at most 1/60 s), so at a steady frame rate every
+        // beat interval is a whole number of steps. At 60 fps a 126 BPM interval is 28 or 29 steps and a 174 BPM one
+        // 20 or 21, and a plain median of the intervals picks one of the two: 124.1 and 171.4 BPM, the second outside
+        // doc 03's ±2. A waitable swap chain paces the render loop this steadily (K3), so no jitter here. From 10 s on
+        // all 16 intervals are in, and every reading must be within 1 BPM, tighter than doc 03's ±2: a mean over 16
+        // intervals is off by at most one step in 16 (about 0.5 BPM at 174 BPM, 60 fps).
+        var analyzer = new AudioAnalyzer();
+        float min = float.MaxValue, max = 0;
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(48000, 20, bpm, 0.8f, 0.2f), 48000, fps, afterFrame: time =>
+        {
+            if (time < 10) return;
+            min = MathF.Min(min, analyzer.Diagnostics.EstimatedBpm);
+            max = MathF.Max(max, analyzer.Diagnostics.EstimatedBpm);
+        });
+        output.WriteLine($"{bpm} BPM at a steady {fps} fps: {beats.Count} beats, estimate {min:F2}..{max:F2} from 10 s");
+        Assert.InRange(min, bpm - 1, bpm + 1);
+        Assert.InRange(max, bpm - 1, bpm + 1);
+    }
+
+    [Fact]
+    public void MissedBeatsDropOutOfTheTempo()
+    {
+        // Every fourth kick is missing (noise only), so the beat intervals run 0.5, 0.5, 1.0 s. The median finds the
+        // typical interval and the double ones are not tempo (H-016); a mean of every interval would read about 91 BPM.
+        float[] track = SyntheticAudio.KickTrack(48000, 20, 120, 0.8f, 0.2f);
+        float[] noise = SyntheticAudio.KickTrack(48000, 20, 120, 0f, 0.2f);
+        for (int i = 0; i < track.Length; i++)
+            if (i / 24000 % 4 == 3) track[i] = noise[i];
+        var analyzer = new AudioAnalyzer();
+        var beats = SyntheticAudio.Run(analyzer, track, 48000);
+        output.WriteLine($"{beats.Count} beats, estimate {analyzer.Diagnostics.EstimatedBpm:F2}");
+        Assert.InRange(beats.Count(t => t >= 2), 26, 28);   // 3 of every 4 kicks from 2 s to 20 s
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 119, 121);
+    }
+
+    [Fact]
+    public void AlternateMissedBeatsKeepTheMedianTempo()
+    {
+        // Every third kick is missing, so the beat intervals alternate 0.5 and 1.0 s. With all 16 in, the median is
+        // their midpoint, 0.75 s, and no interval lies within ±25 % of it: the estimate falls back to the median (80 BPM)
+        // instead of averaging nothing (H-016). The steps before the 16th interval have an odd count and a real median.
+        float[] track = SyntheticAudio.KickTrack(48000, 20, 120, 0.8f, 0.2f);
+        float[] noise = SyntheticAudio.KickTrack(48000, 20, 120, 0f, 0.2f);
+        for (int i = 0; i < track.Length; i++)
+            if (i / 24000 % 3 == 2) track[i] = noise[i];
+        var analyzer = new AudioAnalyzer();
+        var beats = SyntheticAudio.Run(analyzer, track, 48000);
+        output.WriteLine($"{beats.Count} beats, estimate {analyzer.Diagnostics.EstimatedBpm:F2}");
+        Assert.InRange(beats.Count(t => t >= 2), 23, 25);   // 2 of every 3 kicks from 2 s to 20 s
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 79, 81);
+    }
+
     [Fact]
     public void MusicLikeMixTracksTheKick()
     {

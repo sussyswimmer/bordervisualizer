@@ -24,8 +24,9 @@ internal sealed class BeatDetector
     private const float WarmUpFraction = 0.25f;
 
     private const int MaxHistory = 1024;         // per-step flux values; ≥ 4.2 s, as steps are ≥ 1/240 s (AudioAnalyzer)
-    private const int IntervalCount = 16;        // beat intervals kept for the BPM median
+    private const int IntervalCount = 16;        // beat intervals kept for the tempo estimate
     private const float MaxIntervalSeconds = 2f; // longer gaps (< 30 BPM) are not tempo
+    private const float InlierTolerance = 0.25f; // intervals this far from the median (a share of it) are not tempo
     private const float StaleBpmSeconds = 4f;    // no beat for this long: the tempo is unknown again
 
     private readonly float[] previous;
@@ -192,7 +193,12 @@ internal sealed class BeatDetector
 
     private static float MedianOfThree(float a, float b, float c) => MathF.Max(MathF.Min(a, b), MathF.Min(MathF.Max(a, b), c));
 
-    // Tempo from the median of recent beat intervals (doc 03 §4), without allocating.
+    // Tempo from recent beat intervals (doc 03 §4), without allocating. The median finds the typical interval, so
+    // missed beats (double intervals) and extra ones (short intervals) drop out; the tempo is then the mean of the
+    // intervals within InlierTolerance of it. Spec clarification (H-016): beats are only seen at analysis steps, so at
+    // a steady frame rate every interval is a whole number of steps (28 or 29 at 60 fps for 126 BPM), and a median
+    // alone picks one of the two neighbours (124.1 BPM; 171.4 for 174 BPM, outside doc 03 §5's ±2). The mean over 16
+    // intervals is off by at most one step in 16.
     private void AddInterval(float seconds)
     {
         intervals[intervalHead] = seconds;
@@ -212,6 +218,16 @@ internal sealed class BeatDetector
         float median = intervalCount % 2 == 1
             ? sorted[intervalCount / 2]
             : 0.5f * (sorted[intervalCount / 2 - 1] + sorted[intervalCount / 2]);
-        EstimatedBpm = median > 0 ? 60f / median : 0;
+        float sum = 0;
+        int inliers = 0;
+        foreach (float value in sorted)
+        {
+            if (MathF.Abs(value - median) > InlierTolerance * median) continue;
+            sum += value;
+            inliers++;
+        }
+        // An even count split far apart (alternate beats missed) can leave no interval near the median: keep the median.
+        float tempoInterval = inliers > 0 ? sum / inliers : median;
+        EstimatedBpm = tempoInterval > 0 ? 60f / tempoInterval : 0;
     }
 }

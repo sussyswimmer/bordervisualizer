@@ -5,7 +5,9 @@ using Rimlight.Core.SettingsStorage;
 
 namespace Rimlight.Core;
 
-/// <summary>The sole construction seam for Platform and App; fakes remain until their Lane A tasks land.</summary>
+/// <summary>The sole construction seam for Platform and App: every method returns Core's real implementation behind its
+/// contract, a new instance on each call that shares no mutable state with the others (H-017). docs/CORE-API.md is the
+/// reference for consumers.</summary>
 public static class CoreFactory
 {
     /// <summary>Creates the real audio analyzer: FFT, auto-gain, spectral-flux beats and silence detection (doc 03).</summary>
@@ -27,9 +29,12 @@ public static class CoreFactory
     /// <see cref="AnalyzerDiagnostics.FluxHistory"/> and <see cref="AnalyzerDiagnostics.ThresholdHistory"/> hold 240
     /// entries, exactly one per <c>Process</c> call (empty spans included), oldest first and zero until filled; a time
     /// axis must use the actual call cadence, not an assumed 60 Hz. Each flux entry is the largest flux of that call,
-    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is the median of
-    /// recent beat intervals and returns to 0 after 4 s without a beat. <see cref="IAudioAnalyzer.Reset"/> clears
-    /// everything except the current <see cref="AudioFeatures.IsSilent"/> state.</para>
+    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is
+    /// 60 over the mean of the last 16 beat intervals (each up to 2 s) that lie within ±25 % of their median, or over
+    /// the median when none does (every other beat missed), so missed or extra beats drop out and a steady frame rate
+    /// doesn't bias it (H-016). It is 0 until three intervals are in, and returns to 0 after 4 s without a beat.
+    /// <see cref="IAudioAnalyzer.Reset"/> clears everything except the current <see cref="AudioFeatures.IsSilent"/>
+    /// state.</para>
     /// </remarks>
     public static IAudioAnalyzer CreateAnalyzer(AudioTuning? tuning = null) => new AudioAnalyzer(tuning);
     /// <summary>The rate the analyzer's spectrum is computed at for a capture rate: capture rates of 75 kHz and above
@@ -106,11 +111,12 @@ public static class CoreFactory
     /// <remarks>
     /// <para>Call each instance from one thread only: the render thread, which may own one per monitor (see below); a
     /// Settings preview may own another. <see cref="ILightEngine.Update"/> never allocates, reads no clock and is
-    /// deterministic. A negative or non-finite dtSeconds counts as 0, a step over 0.1 s counts as 0.1 s, and the first
-    /// step that moves time, on a new engine or after a static frame, counts at most 1/60 s, so neither a stall, a slow
-    /// start nor a renderer waking from idle makes the light jump. Non-finite or out-of-range audio, colors and settings
-    /// are clamped, or replaced by 0 or the <see cref="Settings"/> default; every output is finite and in range. A null
-    /// palette or settings throws.</para>
+    /// deterministic. A negative or non-finite dtSeconds counts as 0 and a step over 0.1 s counts as 0.1 s. On a new
+    /// engine or after a static frame, each step counts at most 1/60 s until the steps since then add up to 1/60 s, so
+    /// neither a stall, a slow start nor a renderer waking from idle makes the light jump, even when a very short first
+    /// frame comes before a long one. Non-finite or out-of-range audio, colors and settings are clamped, or replaced by
+    /// 0 or the <see cref="Settings"/> default; every output is finite and in range. A null palette or settings
+    /// throws.</para>
     /// <para><b>Intensity and Visibility (H-008 item 2, binding).</b> <see cref="LightState.Intensity"/> excludes
     /// <see cref="LightState.Visibility"/>; the renderer multiplies alpha by both. Intensity is
     /// Brightness × (0.35 + 0.65 × Level) in Music Sync and Brightness × 0.9 × (1 + 0.1 × sin(2π t / 6 s)) in
@@ -141,10 +147,12 @@ public static class CoreFactory
     /// Update at a low rate, or the return of sound goes unnoticed. In Off, disabled or paused, only a settings or pause
     /// change can wake it. Idle Glow (Animation = IdleGlow, or Music Sync with WhenSilent = IdleGlow from 1.5 s after
     /// IsSilent) changes only through the 6 s breathing, so 10 fps is enough there.</para>
-    /// <para><b>Per-monitor pause (doc 04 §4).</b> <c>paused</c> is one flag per engine, so give each overlay its own
-    /// engine, all updated on the render thread with the same audio, palette and settings and that monitor's flag. An
-    /// Update costs well under a microsecond and allocates nothing. Stop rendering only while every engine reports
-    /// IsStatic. A new engine fades in over 300 ms, which also suits a monitor plugged in later.</para>
+    /// <para><b>Per-monitor pause (doc 04 §4).</b> <c>paused</c> is one flag per engine. A renderer can fade each
+    /// overlay itself on top of one engine (Platform does, at the full rate while such a fade runs), or give each
+    /// overlay its own engine, all updated on the render thread with the same audio, palette and settings and that
+    /// monitor's flag: an Update costs well under a microsecond and allocates nothing, and rendering may stop only
+    /// while every engine reports IsStatic. A new engine fades in over 300 ms, which also suits a monitor plugged in
+    /// later.</para>
     /// </remarks>
     public static ILightEngine CreateLightEngine() => new LightEngine();
     /// <summary>Creates the JSON settings store for <c>settings.json</c> in <paramref name="directory"/> (doc 02 "Settings

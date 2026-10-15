@@ -1,6 +1,6 @@
 namespace Rimlight.Core.Audio;
 
-// The real IAudioAnalyzer (doc 03 §2): C1's front end for Level/Bass, spectral-flux beats, silence detection
+// The real IAudioAnalyzer (doc 03 §2): AudioFrontEnd for Level/Bass, spectral-flux beats, silence detection
 // and diagnostics. One instance belongs to the render thread; Process never allocates after construction.
 internal sealed class AudioAnalyzer : IAudioAnalyzer
 {

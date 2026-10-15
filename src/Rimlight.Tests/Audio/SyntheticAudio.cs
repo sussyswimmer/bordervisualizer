@@ -55,7 +55,8 @@ internal static class SyntheticAudio
     // Feeds a buffer through an analyzer like the render loop does and returns beat times (seconds, frame end).
     // Frame times jitter by ±jitter. Audio arrives continuously, or in whole packets of packetSeconds (WASAPI
     // delivers 10–20 ms packets; Bluetooth and some drivers deliver larger ones), so frames can be empty.
-    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0)
+    // afterFrame, if given, runs after each frame with the frame's end time, e.g. to sample the diagnostics.
+    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0, Action<double>? afterFrame = null)
     {
         var random = new Random(seed);
         var beats = new List<float>();
@@ -73,6 +74,7 @@ internal static class SyntheticAudio
             position += count;
             if (features.Beat >= 0.999f && previousBeat < 0.999f) beats.Add((float)time);
             previousBeat = features.Beat;
+            afterFrame?.Invoke(time);
         }
         return beats;
     }
