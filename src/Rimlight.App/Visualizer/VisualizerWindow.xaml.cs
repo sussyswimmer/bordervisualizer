@@ -78,6 +78,7 @@ internal partial class VisualizerWindow : FluentWindow
         Title = $"{AppInfo.Name} audio visualizer";
         WindowTitleBar.Title = Title;
         if (AboutPage.LoadIcon(32) is { } icon) WindowTitleBar.Icon = new ImageIcon { Source = icon, Width = 16, Height = 16 };
+        FitToWorkArea();
 
         spectrumSurface = new PlotSurface(SpectrumImage, SpectrumHost);
         featureSurface = new PlotSurface(FeatureImage, FeatureHost);
@@ -105,6 +106,25 @@ internal partial class VisualizerWindow : FluentWindow
         Activate();
     }
 
+    // WPF's CenterScreen doesn't keep a window inside the work area: one taller than it (a 1080p laptop at 150 % leaves
+    // about 670 DIPs) would open with its title bar above the screen. So the size is capped like the settings window's,
+    // and the window sits at the work area's right edge instead of in the middle, where it would hide a Settings window
+    // opened meanwhile (centered, and never above an always-on-top window). Like the settings window, this uses
+    // SystemParameters.WorkArea: the primary display's.
+    private void FitToWorkArea()
+    {
+        const double Gap = 12;
+        Rect area = SystemParameters.WorkArea;
+        if (!(area.Width > 0 && area.Height > 0)) return; // Windows picks the place
+        double width = Math.Min(Width, area.Width * 0.95), height = Math.Min(Height, area.Height * 0.95);
+        MinWidth = Math.Min(MinWidth, width); // WPF would grow it back to the minimum
+        MinHeight = Math.Min(MinHeight, height);
+        Width = width;
+        Height = height;
+        Left = area.Right - width - Math.Min(Gap, (area.Width - width) / 2);
+        Top = area.Top + (area.Height - height) / 2;
+    }
+
     /// <inheritdoc />
     protected override void OnSourceInitialized(EventArgs e)
     {
@@ -123,9 +143,7 @@ internal partial class VisualizerWindow : FluentWindow
     {
         ApplicationThemeManager.Changed -= OnThemeChanged; // a static event: it would keep the window alive
         Subscribe(false);
-        timer.Stop();
-        observation?.Dispose();
-        observation = null;
+        StopObserving();
     }
 
     // Esc closes the window (nothing in it uses the key).
@@ -157,19 +175,31 @@ internal partial class VisualizerWindow : FluentWindow
         }
         else if (!shown && observation is not null)
         {
-            timer.Stop();
-            clock.Stop();
-            observation.Dispose();
-            observation = null;
+            StopObserving();
         }
+    }
+
+    // Detaches from the overlay thread: no more snapshots, and the analyzer and the capture go back to how they idle.
+    private void StopObserving()
+    {
+        timer.Stop();
+        clock.Stop();
+        observation?.Dispose();
+        observation = null;
     }
 
     private void Subscribe(bool on)
     {
         if (on == subscribed) return;
         subscribed = on;
-        if (on) app.SettingsService.Changed += OnSettingsChanged;
-        else app.SettingsService.Changed -= OnSettingsChanged;
+        if (!on)
+        {
+            app.SettingsService.Changed -= OnSettingsChanged;
+            return;
+        }
+        app.SettingsService.Changed += OnSettingsChanged;
+        // A change made while the window was minimized went unseen; the Sensitivity row catches up with it.
+        OnSettingsChanged(app.SettingsService.Current);
     }
 
     // Sensitivity is a setting (H-007): its slider follows the setting, wherever it was changed.
@@ -203,9 +233,11 @@ internal partial class VisualizerWindow : FluentWindow
         }
         catch (Exception exception)
         {
-            // A plot must never take the window down; the log has the details.
+            // A plot must never take the window down; the log has the details. A window that no longer draws mustn't
+            // keep the analyzer at the full rate and the capture open either: it detaches until it is shown again
+            // (restored or reopened), which tries again.
             Trace.WriteLine($"[Visualizer] Drawing failed and stopped: {exception}");
-            timer.Stop();
+            StopObserving();
             ShowStatus("The visualizer stopped after an error. Open logs folder in the tray menu shows why.");
         }
     }
@@ -238,7 +270,7 @@ internal partial class VisualizerWindow : FluentWindow
         CultureInfo culture = CultureInfo.CurrentCulture;
         AudioFeatures features = snapshot.Features;
         SetText(BeatCountText, snapshot.BeatCount.ToString(culture));
-        SetText(TempoText, snapshot.EstimatedBpm > 0 ? string.Create(culture, $"{snapshot.EstimatedBpm:0.0} BPM") : "–");
+        SetText(TempoText, snapshot.EstimatedBpm > 0 ? snapshot.EstimatedBpm.ToString("0.0", culture) : "–"); // the caption says BPM
         SetText(LevelText, features.Level.ToString("0.00", culture));
         SetText(BassText, features.Bass.ToString("0.00", culture));
         SetText(BeatText, features.Beat.ToString("0.00", culture));
@@ -290,7 +322,9 @@ internal partial class VisualizerWindow : FluentWindow
         {
             hasDraft = true;
             TuningPanel.IsEnabled = ResetButton.IsEnabled = CopyButton.IsEnabled = PasteButton.IsEnabled = true;
-            draft = snapshot.Tuning;
+            // Sensitivity from the setting (H-007): a change made just before this snapshot reaches the analyzer a
+            // frame later.
+            draft = snapshot.Tuning with { Sensitivity = app.SettingsService.Current.Sensitivity };
             RefreshRows(onlySensitivity: false);
             return;
         }
@@ -354,14 +388,25 @@ internal partial class VisualizerWindow : FluentWindow
             return;
         }
         // Sensitivity is the setting's (H-007): JSON that names it changes the setting, within the setting's range.
+        if (namesSensitivity && !(pasted.Sensitivity >= 0.25f && pasted.Sensitivity <= 2f))
+        {
+            SetMessage(TuningMessage, "Not applied: Sensitivity must be from 0.25 to 2.");
+            return;
+        }
+        // The whole tuning must pass before anything changes, the Sensitivity setting included. The analyzer checks a
+        // tuning the same way when it is built, so a throwaway one tells (a one-off allocation, on a click).
+        try
+        {
+            CoreFactory.CreateAnalyzer(pasted);
+        }
+        catch (ArgumentException exception)
+        {
+            SetMessage(TuningMessage, $"Not applied: {exception.Message} Nothing was changed.");
+            return;
+        }
         float sensitivity = app.SettingsService.Current.Sensitivity;
         if (namesSensitivity)
         {
-            if (!(pasted.Sensitivity >= 0.25f && pasted.Sensitivity <= 2f))
-            {
-                SetMessage(TuningMessage, "Not applied: Sensitivity must be from 0.25 to 2.");
-                return;
-            }
             sensitivity = pasted.Sensitivity;
             app.SettingsService.Update(s => s with { Sensitivity = sensitivity });
         }
