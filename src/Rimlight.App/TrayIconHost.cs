@@ -32,6 +32,8 @@ internal sealed class TrayIconHost : IDisposable
     private readonly DispatcherTimer createRetry;
     private readonly string toolTipSuffix;
     private readonly MenuItem glowOn;
+    private readonly MenuItem stopDemo;
+    private readonly Separator demoSeparator;
     private readonly (MenuItem Item, AnimationMode Mode)[] modes;
     private readonly MenuItem albumColors;
     private readonly MenuItem manualColors;
@@ -57,6 +59,12 @@ internal sealed class TrayIconHost : IDisposable
         images = TrayIconImages.Load();
 
         var menu = new ContextMenu();
+        // Shown only while demo mode plays (--demo, doc 04 §5): its way out short of Quit.
+        stopDemo = new MenuItem { Header = "Stop _demo", Visibility = Visibility.Collapsed };
+        stopDemo.Click += (_, _) => app.StopDemo();
+        menu.Items.Add(stopDemo);
+        demoSeparator = new Separator { Visibility = Visibility.Collapsed };
+        menu.Items.Add(demoSeparator);
         glowOn = new MenuItem { Header = "_Glow on", IsCheckable = true };
         glowOn.Click += (_, _) => app.ToggleGlow();
         menu.Items.Add(glowOn);
@@ -326,6 +334,9 @@ internal sealed class TrayIconHost : IDisposable
     private void Refresh()
     {
         Settings current = app.SettingsService.Current;
+        Visibility demo = app.IsDemoRunning ? Visibility.Visible : Visibility.Collapsed;
+        stopDemo.Visibility = demo;
+        demoSeparator.Visibility = demo;
         glowOn.IsChecked = current.Enabled;
         HotkeyStatus hotkey = app.Hotkey;
         glowOn.InputGestureText = hotkey.State == HotkeyState.Registered ? hotkey.Gesture?.ToString() ?? "" : "";
@@ -372,6 +383,7 @@ internal sealed class TrayIconHost : IDisposable
         private readonly MenuItem onBattery = new() { Header = "Simulate running on battery" };
         private readonly MenuItem pauseAll = new() { Header = "Pause everywhere (like a locked session)" };
         private readonly MenuItem pausePrimary = new() { Header = "Pause the primary monitor (like a fullscreen video)" };
+        private readonly MenuItem demo = new() { Header = "Demo mode (--demo)" };
 
         public DebugMenu(AppController app, Action<Func<Settings, Settings>> update)
         {
@@ -422,6 +434,18 @@ internal sealed class TrayIconHost : IDisposable
             var deviceLoss = new MenuItem { Header = "Simulate GPU device loss" };
             deviceLoss.Click += (_, _) => app.Overlays?.SimulateDeviceLoss();
             Root.Items.Add(deviceLoss);
+            Root.Items.Add(new Separator());
+
+            // The same as the command-line switches (K8), for a copy started without them.
+            var visualizer = new MenuItem { Header = "Debug visualizer (--debug-visualizer)…" };
+            visualizer.Click += (_, _) => app.ShowVisualizer();
+            Root.Items.Add(visualizer);
+            demo.Click += (_, _) =>
+            {
+                if (app.IsDemoRunning) app.StopDemo();
+                else app.StartDemo();
+            };
+            Root.Items.Add(demo);
         }
 
         public MenuItem Root { get; }
@@ -440,6 +464,7 @@ internal sealed class TrayIconHost : IDisposable
             onBattery.IsChecked = simulated.OnBattery;
             pauseAll.IsChecked = simulated.PausedEverywhere;
             pausePrimary.IsChecked = simulated.PausedMonitor is not null;
+            demo.IsChecked = app.IsDemoRunning;
         }
 
         private void Simulate(Func<SimulatedSystem, SimulatedSystem> change)

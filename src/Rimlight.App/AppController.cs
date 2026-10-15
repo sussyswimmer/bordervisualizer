@@ -5,6 +5,7 @@ using System.Windows.Threading;
 using Rimlight.App.Logging;
 using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
+using Rimlight.App.Visualizer;
 using Rimlight.Core;
 using Rimlight.Platform.Audio;
 using Rimlight.Platform.Media;
@@ -15,15 +16,30 @@ namespace Rimlight.App;
 
 /// <summary>
 /// The composition root: owns the settings, the global shortcut, the tray icon, the media session reader, the system
-/// watchers, loopback capture, the glow overlay and the settings window, wires them together and tears them down in
-/// order. Created and used on the UI thread. Later tasks plug in the visualizer (K8) and updates (K9,
-/// <see cref="Updates"/>).
+/// watchers, loopback capture, the glow overlay, the settings window, the debug visualizer and demo mode, wires them
+/// together and tears them down in order. It also reads the command line (<see cref="ParseArguments"/>). Created and
+/// used on the UI thread. K9 plugs in updates (<see cref="Updates"/>).
 /// </summary>
 internal sealed class AppController : IDisposable
 {
+    /// <summary>Starts in the background (sign-in): no window opens (doc 06 §4).</summary>
+    public const string BackgroundArgument = StartupRegistration.BackgroundArgument;
+
+    /// <summary>Plays the demo (doc 04 §5): a synthetic 120 BPM beat and four palettes, without audio capture.</summary>
+    public const string DemoArgument = "--demo";
+
+    /// <summary>Opens the debug visualizer (doc 03 §4).</summary>
+    public const string DebugVisualizerArgument = "--debug-visualizer";
+
+    // What a later start asks of the running copy, besides SingleInstance.ShowSettingsCommand. A start with both
+    // switches sends both, separated by a space.
+    private const string DemoCommand = "demo";
+    private const string DebugVisualizerCommand = "debug-visualizer";
+    private const int MaxLoggedArgumentLength = 64;
+
     private readonly Action shutdown;
     private readonly SingleInstance? instance;
-    private readonly bool background;
+    private readonly LaunchOptions options;
     private readonly Dispatcher dispatcher = Dispatcher.CurrentDispatcher; // the UI thread's
     private readonly SettingsWindowLauncher settingsWindow;
     private SettingsService? settings;
@@ -35,6 +51,7 @@ internal sealed class AppController : IDisposable
     private MusicGlowSource? glow;
     private OverlayHost? overlays;
     private WelcomeWindow? welcome;
+    private DebugVisualizerWindow? visualizer;
     private int toolTipQueued;
     private int audioRequests;
     private bool hotkeySuspended;
@@ -44,12 +61,12 @@ internal sealed class AppController : IDisposable
     /// <summary>Creates the controller; <see cref="Start"/> starts everything.</summary>
     /// <param name="shutdown">Ends the app (the tray's Quit).</param>
     /// <param name="instance">This process's single-instance claim, whose commands it handles; null for none.</param>
-    /// <param name="background">Started with <c>--background</c> (at sign-in): don't open Settings.</param>
-    public AppController(Action shutdown, SingleInstance? instance, bool background)
+    /// <param name="options">The command line (<see cref="ParseArguments"/>).</param>
+    public AppController(Action shutdown, SingleInstance? instance, LaunchOptions options)
     {
         this.shutdown = shutdown;
         this.instance = instance;
-        this.background = background;
+        this.options = options;
         settingsWindow = new SettingsWindowLauncher(this);
         SettingsWindow = settingsWindow;
         Updates = new NoUpdateCheck(this);
@@ -93,8 +110,37 @@ internal sealed class AppController : IDisposable
     /// <summary>"Check for updates". K9 replaces the stand-in with the Velopack check.</summary>
     public IUpdateCheck Updates { get; set; }
 
+    /// <summary>Whether demo mode plays.</summary>
+    public bool IsDemoRunning => glow?.IsDemo == true;
+
+    /// <summary>
+    /// Reads the command line, the only place that does: <c>--background</c>, <c>--demo</c> and
+    /// <c>--debug-visualizer</c>, in any order and case. Anything else is ignored, and logged once the app starts.
+    /// </summary>
+    /// <param name="arguments">The arguments, without the program name.</param>
+    /// <returns>The options.</returns>
+    public static LaunchOptions ParseArguments(IReadOnlyList<string> arguments)
+    {
+        bool background = false, demo = false, debugVisualizer = false;
+        List<string> unknown = [];
+        foreach (string argument in arguments)
+        {
+            if (string.Equals(argument, BackgroundArgument, StringComparison.OrdinalIgnoreCase)) background = true;
+            else if (string.Equals(argument, DemoArgument, StringComparison.OrdinalIgnoreCase)) demo = true;
+            else if (string.Equals(argument, DebugVisualizerArgument, StringComparison.OrdinalIgnoreCase)) debugVisualizer = true;
+            else unknown.Add(argument);
+        }
+        return new LaunchOptions(background, demo, debugVisualizer, unknown);
+    }
+
     public void Start()
     {
+        foreach (string argument in options.Unknown)
+        {
+            string shown = argument.Length > MaxLoggedArgumentLength ? argument[..MaxLoggedArgumentLength] + "…" : argument;
+            Trace.WriteLine($"[App] Ignored an unknown argument \"{shown}\".");
+        }
+
         // %APPDATA%\Rimlight (doc 02 "Settings storage"). The store is in memory until C7.
         string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), AppInfo.Name);
         settings = new SettingsService(CoreFactory.CreateSettingsStore(directory));
@@ -170,6 +216,11 @@ internal sealed class AppController : IDisposable
         // registers it. Checked at every start, which also repairs a stale path.
         ApplyStartup(initial.LaunchAtStartup);
 
+        // --demo and --debug-visualizer show what they were asked for and nothing else (a demo is being recorded); the
+        // welcome then waits for the next ordinary start.
+        if (options.Demo) StartDemo();
+        if (options.DebugVisualizer) ShowVisualizer();
+        if (options.Demo || options.DebugVisualizer) return;
         if (!initial.FirstRunComplete)
         {
             // First run: say where the app went and how to use it, once.
@@ -177,7 +228,7 @@ internal sealed class AppController : IDisposable
             ShowWelcome(offerSettings: true);
             settings.Update(s => s with { FirstRunComplete = true });
         }
-        else if (!background)
+        else if (!options.Background)
         {
             ShowSettings(); // started by hand: show something (doc 06 §4)
         }
@@ -198,6 +249,68 @@ internal sealed class AppController : IDisposable
         {
             Trace.WriteLine($"[App] Opening Settings failed: {exception}");
         }
+    }
+
+    /// <summary>Opens the debug visualizer (<c>--debug-visualizer</c>, doc 03 §4), or brings it to the front.</summary>
+    public void ShowVisualizer()
+    {
+        if (disposed) return;
+        try
+        {
+            if (visualizer is null)
+            {
+                visualizer = new DebugVisualizerWindow(this);
+                visualizer.Closed += (_, _) => visualizer = null;
+                // WPF makes the first window the main window, which WPF-UI restyles on a theme change: keep that the
+                // settings window's role (or nobody's).
+                settingsWindow.ClaimMainWindow();
+            }
+            visualizer.Present();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[App] Opening the debug visualizer failed: {exception}");
+            visualizer = null;
+        }
+    }
+
+    /// <summary>
+    /// Plays the demo (<c>--demo</c>, doc 04 §5): a synthetic 120 BPM beat and four palettes, 6 s each, instead of the
+    /// captured audio and the album colors, until <see cref="StopDemo"/> or Quit. It turns the glow on if it is off.
+    /// Nothing of it is saved.
+    /// </summary>
+    public void StartDemo()
+    {
+        if (disposed || settings is null) return;
+        if (glow is null)
+        {
+            Trace.WriteLine("[App] Demo mode needs the overlay, which isn't running.");
+            Tell("The demo can't play because the glow didn't start. Open logs folder in the tray menu shows why.");
+            return;
+        }
+        if (!settings.Current.Enabled) settings.Update(s => s with { Enabled = true });
+        glow.SetDemo(true);
+        overlays?.RequestFrame();
+        Trace.WriteLine("[App] Demo mode on.");
+    }
+
+    /// <summary>Ends demo mode: the glow follows the music and the album or manual colors again.</summary>
+    public void StopDemo()
+    {
+        if (glow is null || !glow.IsDemo) return;
+        glow.SetDemo(false);
+        overlays?.RequestFrame();
+        Trace.WriteLine("[App] Demo mode off.");
+    }
+
+    /// <summary>
+    /// Connects the debug visualizer's probe to the overlay's analyzer (null disconnects it); the overlay thread picks
+    /// it up on its next frame. UI thread.
+    /// </summary>
+    internal void AttachVisualizer(AnalyzerProbe? probe)
+    {
+        glow?.AttachProbe(probe);
+        overlays?.RequestFrame();
     }
 
     /// <summary>"Check for updates" in the tray.</summary>
@@ -277,6 +390,7 @@ internal sealed class AppController : IDisposable
         IsExiting = true;
         if (instance is not null) instance.CommandReceived -= OnCommand; // the app disposes the claim itself
         settingsWindow.Close(); // first: stops its timers and its audio request, and lets go of every event
+        CloseVisualizer();      // likewise, and disconnects its probe
         welcome?.Close();
         welcome = null;
         hotkey?.Dispose();
@@ -365,11 +479,41 @@ internal sealed class AppController : IDisposable
         ? HotkeyStatus.None with { Text = text ?? "" }
         : new HotkeyStatus(text, HotkeyState.Failed, null);
 
-    // Thread pool: a later start's request. Only known commands do anything.
+    private void CloseVisualizer()
+    {
+        DebugVisualizerWindow? closing = visualizer;
+        visualizer = null;
+        try
+        {
+            closing?.Close();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[App] Closing the debug visualizer failed: {exception.Message}");
+        }
+    }
+
+    // Thread pool: a later start's request (LaunchOptions.Command). Only known commands do anything.
     private void OnCommand(string command)
     {
-        if (command == SingleInstance.ShowSettingsCommand) dispatcher.InvokeAsync(ShowSettings);
-        else Trace.WriteLine("[App] Ignored an unknown command from another start.");
+        foreach (string part in command.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            switch (part)
+            {
+                case SingleInstance.ShowSettingsCommand:
+                    dispatcher.InvokeAsync(ShowSettings);
+                    break;
+                case DemoCommand:
+                    dispatcher.InvokeAsync(StartDemo);
+                    break;
+                case DebugVisualizerCommand:
+                    dispatcher.InvokeAsync(ShowVisualizer);
+                    break;
+                default:
+                    Trace.WriteLine("[App] Ignored an unknown command from another start.");
+                    break;
+            }
+        }
     }
 
     // A short message: a notification from the tray icon, or a message box if the tray can't show one.
@@ -421,6 +565,22 @@ internal sealed class AppController : IDisposable
             released = true;
             if (--app.audioRequests == 0) app.SetAudioWanted(false);
         }
+    }
+
+    /// <summary>What the command line asked for (<see cref="ParseArguments"/>).</summary>
+    /// <param name="Background">Started at sign-in (<c>--background</c>): open no window.</param>
+    /// <param name="Demo">Play the demo (<c>--demo</c>).</param>
+    /// <param name="DebugVisualizer">Open the debug visualizer (<c>--debug-visualizer</c>).</param>
+    /// <param name="Unknown">Arguments that mean nothing here; they are logged and ignored.</param>
+    public sealed record LaunchOptions(bool Background, bool Demo, bool DebugVisualizer, IReadOnlyList<string> Unknown)
+    {
+        /// <summary>
+        /// What to ask of a copy that already runs: the demo and the visualizer, else Settings; nothing for a start at
+        /// sign-in.
+        /// </summary>
+        public string? Command => Demo || DebugVisualizer
+            ? string.Join(' ', new[] { Demo ? DemoCommand : null, DebugVisualizer ? DebugVisualizerCommand : null }.OfType<string>())
+            : Background ? null : SingleInstance.ShowSettingsCommand;
     }
 
     // Until K9: says which version runs.
