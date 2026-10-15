@@ -4,9 +4,9 @@ using System.Windows;
 namespace Rimlight.App.SettingsUi;
 
 /// <summary>
-/// Opens the settings window for the tray (double-click, "Settings…"), a second start of the app, a normal start and
-/// the welcome window. The window is created on first use, so a start at sign-in builds no UI, and is then kept
-/// (closing only hides it). UI thread only.
+/// Opens the settings window for the first run, the tray (double-click, "Settings…"), a second start of the app and a
+/// normal start, or the welcome window when it can't be built. The window is created on first use, so a start at
+/// sign-in builds no UI, and is then kept (closing only hides it). UI thread only.
 /// </summary>
 internal sealed class SettingsWindowLauncher(AppController app) : IShowSettings
 {
@@ -19,7 +19,7 @@ internal sealed class SettingsWindowLauncher(AppController app) : IShowSettings
         {
             // Without WPF-UI's styles the window would have no templates; the log says why they are missing.
             Trace.WriteLine("[Settings] The settings window can't open without its styles.");
-            app.ShowWelcome(offerSettings: false);
+            app.ShowWelcome();
             return;
         }
         if (window is null)
@@ -32,7 +32,7 @@ internal sealed class SettingsWindowLauncher(AppController app) : IShowSettings
             {
                 // Something is still shown, and the log says what went wrong.
                 Trace.WriteLine($"[Settings] Creating the settings window failed: {exception}");
-                app.ShowWelcome(offerSettings: false);
+                app.ShowWelcome();
                 return;
             }
             window.Closed += (_, _) => window = null;

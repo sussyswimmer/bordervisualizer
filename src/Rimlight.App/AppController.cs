@@ -105,7 +105,10 @@ internal sealed class AppController : IDisposable
     /// <summary>Whether the "Launch at startup" registry entry matches the setting (false: the registry refused).</summary>
     public bool StartupRegistered { get; private set; } = true;
 
-    /// <summary>True when this run is the first one (the welcome was shown): Settings shows its one-time tray toast then.</summary>
+    /// <summary>
+    /// True when this run is the first one: Settings opens with its welcome banner (PRD §7), and its first close shows the
+    /// one-time tray toast.
+    /// </summary>
     public bool IsFirstRunSession { get; private set; }
 
     /// <summary>True once the app is quitting or Windows is ending the session: windows close instead of hiding.</summary>
@@ -229,15 +232,16 @@ internal sealed class AppController : IDisposable
         ApplyStartup(initial.LaunchAtStartup);
 
         // --demo and --debug-visualizer show what they were asked for and nothing else (a demo is being recorded); the
-        // welcome then waits for the next ordinary start.
+        // first run's welcome then waits for the next ordinary start.
         if (options.Demo) StartDemo();
         if (options.DebugVisualizer) ShowVisualizer();
         if (options.Demo || options.DebugVisualizer) return;
         if (!initial.FirstRunComplete)
         {
-            // First run: say where the app went and how to use it, once.
+            // First run (PRD §7): Settings on its live preview, with a banner that says to play some music and where the
+            // app went. Once.
             IsFirstRunSession = true;
-            ShowWelcome(offerSettings: true);
+            ShowSettings();
             settings.Update(s => s with { FirstRunComplete = true });
         }
         else if (!options.Background)
@@ -249,7 +253,7 @@ internal sealed class AppController : IDisposable
     /// <summary>Turns the glow on or off ("Glow on", a click on the icon, the shortcut).</summary>
     public void ToggleGlow() => settings?.Update(s => s with { Enabled = !s.Enabled });
 
-    /// <summary>Opens Settings (the tray, a second start, the welcome window).</summary>
+    /// <summary>Opens Settings (the first run, a start by hand, the tray, a second start).</summary>
     public void ShowSettings()
     {
         if (disposed) return;
@@ -444,9 +448,8 @@ internal sealed class AppController : IDisposable
         settings = null;
     }
 
-    /// <summary>Shows the welcome window, or brings it to the front.</summary>
-    /// <param name="offerSettings">Whether it offers to open Settings (not while it stands in for them).</param>
-    internal void ShowWelcome(bool offerSettings)
+    /// <summary>Shows the welcome window, which stands in for Settings when they can't open, or brings it to the front.</summary>
+    internal void ShowWelcome()
     {
         if (disposed) return;
         try
@@ -454,7 +457,7 @@ internal sealed class AppController : IDisposable
             if (welcome is null)
             {
                 bool startsWithWindows = StartupRegistered && SettingsService.Current.LaunchAtStartup;
-                welcome = new WelcomeWindow(Hotkey, startsWithWindows, offerSettings ? ShowSettings : null);
+                welcome = new WelcomeWindow(Hotkey, startsWithWindows);
                 welcome.Closed += (_, _) => welcome = null;
                 // WPF makes the first window the app's main window, which WPF-UI restyles on a theme change. That
                 // must be the settings window (or none), never the welcome.

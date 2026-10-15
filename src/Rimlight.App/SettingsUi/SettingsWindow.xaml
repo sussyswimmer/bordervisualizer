@@ -13,17 +13,32 @@
                  WindowBackdropType="Mica"
                  WindowCornerPreference="Round"
                  UseLayoutRounding="True">
+    <ui:FluentWindow.Resources>
+        <BooleanToVisibilityConverter x:Key="VisibleWhenTrue" />
+    </ui:FluentWindow.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
         <ui:TitleBar x:Name="WindowTitleBar" Grid.Row="0" CloseWindowByDoubleClickOnIcon="False" />
 
+        <!-- The first session's welcome (PRD §7), filled in by the window. Collapsed with its margin once closed. -->
+        <ui:InfoBar x:Name="WelcomeBanner"
+                    Grid.Row="1"
+                    Margin="12,0,12,8"
+                    Severity="Informational"
+                    IsClosable="True"
+                    IsOpen="False"
+                    AutomationProperties.Name="Welcome"
+                    Visibility="{Binding IsOpen, RelativeSource={RelativeSource Self}, Converter={StaticResource VisibleWhenTrue}}" />
+
         <!-- One page per area of doc 06 §3. The pages are created once and handed to the view by the window. -->
         <ui:NavigationView x:Name="Navigation"
-                           Grid.Row="1"
+                           Grid.Row="2"
                            PaneDisplayMode="Left"
                            IsBackButtonVisible="Collapsed"
                            IsPaneToggleVisible="False"

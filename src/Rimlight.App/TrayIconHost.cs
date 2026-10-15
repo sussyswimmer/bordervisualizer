@@ -1,18 +1,20 @@
 using System.Diagnostics;
-using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using H.NotifyIcon;
 using H.NotifyIcon.Core;
-using Rimlight.App.Overlay;
 using Rimlight.App.SettingsUi;
 using Rimlight.App.Updates;
 using Rimlight.Core;
 using Rimlight.Platform;
-using Rimlight.Platform.Media;
 using Rimlight.Platform.Overlay;
 using Rimlight.Platform.Shell;
+#if DEBUG
+using System.Globalization;
+using Rimlight.App.Overlay;
+using Rimlight.Platform.Media;
+#endif
 
 namespace Rimlight.App;
 

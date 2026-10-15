@@ -119,6 +119,45 @@ Describe 'Get-VpkArgumentList' {
     }
 }
 
+Describe 'Get-MissingLicenseFile' {
+    BeforeEach {
+        $publish = Join-Path $TestDrive ([guid]::NewGuid())
+        $null = New-Item -ItemType Directory -Path (Join-Path $publish 'licenses/system.text.json/9.0.1')
+        Set-Content -LiteralPath (Join-Path $publish 'LICENSE.txt') -Value 'MIT'
+        Set-Content -LiteralPath (Join-Path $publish 'THIRD-PARTY-NOTICES.txt') -Value 'notices'
+        Set-Content -LiteralPath (Join-Path $publish 'licenses/system.text.json/9.0.1/LICENSE.TXT') -Value 'MIT'
+    }
+
+    It 'finds nothing missing in a complete build' {
+        @(Get-MissingLicenseFile -PublishDir $publish).Count | Should -Be 0
+    }
+
+    It 'names a missing <Name>' -ForEach @(
+        @{ Name = 'LICENSE.txt' }
+        @{ Name = 'THIRD-PARTY-NOTICES.txt' }
+    ) {
+        Remove-Item -LiteralPath (Join-Path $publish $Name)
+        Get-MissingLicenseFile -PublishDir $publish | Should -Be $Name
+        # A folder of that name is no file either.
+        $null = New-Item -ItemType Directory -Path (Join-Path $publish $Name)
+        Get-MissingLicenseFile -PublishDir $publish | Should -Be $Name
+    }
+
+    It 'names the licenses folder when it is missing or has no files' {
+        # pack.ps1 runs with Stop, so looking into a missing folder must not be an error.
+        $ErrorActionPreference = 'Stop'
+        Remove-Item -LiteralPath (Join-Path $publish 'licenses/system.text.json/9.0.1/LICENSE.TXT')
+        Get-MissingLicenseFile -PublishDir $publish | Should -Be 'licenses'
+        Remove-Item -LiteralPath (Join-Path $publish 'licenses') -Recurse
+        Get-MissingLicenseFile -PublishDir $publish | Should -Be 'licenses'
+    }
+
+    It 'names everything for an empty folder' {
+        $empty = New-Item -ItemType Directory -Path (Join-Path $TestDrive ([guid]::NewGuid()))
+        (Get-MissingLicenseFile -PublishDir $empty) -join '|' | Should -Be 'LICENSE.txt|THIRD-PARTY-NOTICES.txt|licenses'
+    }
+}
+
 Describe 'pack.ps1 -Stage' {
     # The checks that run before the script deletes, restores or builds anything.
     BeforeAll {

@@ -30,8 +30,12 @@ internal readonly record struct CaptureFormat(SampleEncoding Encoding, int Chann
     };
 }
 
-// Interleaved little-endian frames to mono floats by averaging the channels (doc 03 §1). Runs on the audio thread:
-// no allocation, no locks, no logging.
+// Interleaved little-endian frames to mono floats (doc 03 §1): the channel sum divided by min(channels, 2), not by the
+// channel count. Windows plays stereo on a 5.1 or 7.1 mix format through FL/FR only, so averaging every channel would
+// put stereo music 9.5 dB (6 ch) or 12 dB (8 ch) lower than on a stereo endpoint, and the fixed dBFS silence
+// thresholds would then call quiet music silence. Content on more channels comes out up to 12 dB above a plain average
+// instead, which auto-gain absorbs (8 full-scale channels give 4, inside the analyzer's ±16 sample limit). Runs on the
+// audio thread: no allocation, no locks, no logging.
 internal static class MonoConverter
 {
     // Converts whole frames from data into destination and returns the number of frames written, which is limited by
@@ -42,7 +46,7 @@ internal static class MonoConverter
         int frames = Math.Min(data.Length / format.BytesPerFrame, destination.Length);
         if (frames <= 0 || channels <= 0) return 0;
         data = data[..(frames * format.BytesPerFrame)];
-        float average = 1f / channels;
+        float gain = 1f / Math.Min(channels, 2);
 
         switch (format.Encoding)
         {
@@ -53,14 +57,14 @@ internal static class MonoConverter
                 {
                     float sum = 0;
                     for (int c = 0; c < channels; c++) sum += samples[s++];
-                    destination[frame] = sum * average;
+                    destination[frame] = sum * gain;
                 }
                 break;
             }
             case SampleEncoding.Int16:
             {
                 ReadOnlySpan<short> samples = MemoryMarshal.Cast<byte, short>(data);
-                float scale = average / 32768f;
+                float scale = gain / 32768f;
                 for (int frame = 0, s = 0; frame < frames; frame++)
                 {
                     int sum = 0;
@@ -71,7 +75,7 @@ internal static class MonoConverter
             }
             case SampleEncoding.Int24:
             {
-                float scale = average / 8388608f;
+                float scale = gain / 8388608f;
                 for (int frame = 0, b = 0; frame < frames; frame++)
                 {
                     int sum = 0;
@@ -84,7 +88,7 @@ internal static class MonoConverter
             case SampleEncoding.Int32:
             {
                 ReadOnlySpan<int> samples = MemoryMarshal.Cast<byte, int>(data);
-                double scale = average / 2147483648.0;
+                double scale = gain / 2147483648.0;
                 for (int frame = 0, s = 0; frame < frames; frame++)
                 {
                     long sum = 0;

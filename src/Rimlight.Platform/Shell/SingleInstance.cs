@@ -53,10 +53,16 @@ public sealed class SingleInstance : IDisposable
     /// The exe of the running instance when it is another copy of the app (another build or folder): the command is
     /// not sent, and the caller should say where the app runs instead of exiting without a word. Otherwise null.
     /// </param>
+    /// <param name="runningElevated">
+    /// True when the running instance runs as administrator and this one doesn't: Windows keeps this process away from
+    /// its mutex and its pipe, so the command can't be handed over, and the caller should say so instead of exiting
+    /// without a word. False otherwise, and always for a start without a command, which just leaves.
+    /// </param>
     /// <returns>The claim for this process (dispose it on exit), or null when another instance runs and this one should exit.</returns>
-    public static SingleInstance? Claim(string appName, string? command, out string? runningElsewhere)
+    public static SingleInstance? Claim(string appName, string? command, out string? runningElsewhere, out bool runningElevated)
     {
         runningElsewhere = null;
+        runningElevated = false;
         string user = CurrentUserSid();
         // Local\ is per session, the pipe namespace is not: the session ID keeps two sessions of one user apart.
         string pipeName = $"{appName}-{user}-{SessionId()}";
@@ -64,6 +70,16 @@ public sealed class SingleInstance : IDisposable
         try
         {
             mutex = new Mutex(false, $@"Local\{appName}-{user}");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The mutex exists but this process may not use it: a copy started as administrator holds it, and Windows
+            // keeps a normal start away from that copy's objects (its pipe too). Running anyway would draw the glow
+            // twice and take that copy's tray icon (H.NotifyIcon derives the icon's ID from the exe path), leaving it
+            // without a way to quit.
+            Trace.WriteLine("[SingleInstance] A copy running as administrator holds the mutex; exiting.");
+            runningElevated = command is not null;
+            return null;
         }
         catch (Exception exception)
         {
@@ -213,6 +229,7 @@ public sealed class SingleInstance : IDisposable
     {
         byte[] buffer = new byte[MaxCommandBytes];
         NamedPipeServerStream? server = null;
+        bool unavailable = false; // the pipe couldn't be created, which was logged once
         try
         {
             while (!token.IsCancellationRequested)
@@ -227,9 +244,20 @@ public sealed class SingleInstance : IDisposable
                     }
                     catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                     {
-                        Trace.WriteLine($"[SingleInstance] The pipe is not available ({exception.Message}); retrying in 5 s.");
+                        // Another process holds the name for as long as it runs (a copy running without the mutex, say).
+                        // Logged once, not on every retry, so the log keeps its history.
+                        if (!unavailable)
+                        {
+                            unavailable = true;
+                            Trace.WriteLine($"[SingleInstance] The pipe is not available ({exception.Message}); retrying every 5 s.");
+                        }
                         if (!await Delay(PipeRetryDelay, token).ConfigureAwait(false)) return;
                         continue;
+                    }
+                    if (unavailable)
+                    {
+                        unavailable = false;
+                        Trace.WriteLine("[SingleInstance] The pipe is available again.");
                     }
                 }
 

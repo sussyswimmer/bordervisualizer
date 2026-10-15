@@ -19,6 +19,20 @@ internal static class MonitorChoice
     };
 
     /// <summary>
+    /// How many attached monitors show the glow, and how many monitors a custom choice keeps that aren't attached right
+    /// now (what <see cref="DisplayNotes"/> says).
+    /// </summary>
+    public static (int Lit, int Unplugged) Count(Settings settings, IReadOnlyList<MonitorInfo> attached)
+    {
+        int lit = attached.Count(monitor => IsLit(settings, monitor));
+        int unplugged = settings.Monitors == MonitorSelection.Custom
+            ? Valid(settings.CustomMonitorIds).Distinct(StringComparer.Ordinal)
+                .Count(id => !attached.Any(m => string.Equals(m.StableId, id, StringComparison.Ordinal)))
+            : 0;
+        return (lit, unplugged);
+    }
+
+    /// <summary>
     /// "Choose displays": restores the previous custom choice if it lights any attached monitor; otherwise starts from
     /// the monitors lit now, so nothing changes on screen. Remembered unplugged monitors stay in the list either way.
     /// </summary>

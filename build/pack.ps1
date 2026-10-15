@@ -147,6 +147,19 @@ function Get-VpkArgumentList {
     $list + $Arguments
 }
 
+function Get-MissingLicenseFile {
+    # What a published build lacks of the license files every package must carry (MIT asks for the
+    # notices in every copy): LICENSE.txt, THIRD-PARTY-NOTICES.txt, and a licenses folder with at
+    # least one file. Rimlight.App.csproj adds all three to the publish.
+    param([Parameter(Mandatory)] [string] $PublishDir)
+    foreach ($name in 'LICENSE.txt', 'THIRD-PARTY-NOTICES.txt') {
+        if (-not (Test-Path -LiteralPath (Join-Path $PublishDir $name) -PathType Leaf)) { $name }
+    }
+    $licenses = Join-Path $PublishDir 'licenses'
+    if (-not (Test-Path -LiteralPath $licenses -PathType Container) -or
+        -not (Get-ChildItem -LiteralPath $licenses -File -Recurse | Select-Object -First 1)) { 'licenses' }
+}
+
 function Invoke-Native {
     # Runs a command after echoing it, and throws if it fails. PowerShell before 7.3 doesn't stop
     # on a failing native command by itself.
@@ -230,6 +243,11 @@ try {
         }
 
         if ($runPack) {
+            $missing = @(Get-MissingLicenseFile -PublishDir $publishDir)
+            if ($missing) {
+                throw "The build in $publishDir has no $($missing -join ', '). Publish it from src/Rimlight.App, which adds them."
+            }
+
             Write-Host "`n==> Packing $appName $packVersion for $runtime (Velopack channel '$channel')"
             $packArgs = @(
                 'pack',

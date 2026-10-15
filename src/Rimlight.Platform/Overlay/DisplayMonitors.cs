@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
@@ -17,7 +16,7 @@ internal sealed record DisplayMonitor(string DeviceName, string StableId, RECT B
 
 /// <summary>A monitor as Settings lists it (the Displays page, doc 06 §3).</summary>
 /// <param name="StableId">
-/// The monitor's device interface path (<c>DISPLAY_DEVICE.DeviceID</c>), the ID <see cref="Settings.CustomMonitorIds"/>
+/// The monitor's device interface path (<c>DISPLAY_DEVICE.DeviceID</c>), the ID <see cref="Rimlight.Core.Settings.CustomMonitorIds"/>
 /// stores (H-009). It survives reboots and re-plugging.
 /// </param>
 /// <param name="DeviceName">The GDI device name, e.g. <c>\\.\DISPLAY1</c>; stable within a session only.</param>

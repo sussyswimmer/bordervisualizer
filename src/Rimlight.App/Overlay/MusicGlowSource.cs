@@ -16,6 +16,8 @@ namespace Rimlight.App.Overlay;
 internal sealed class MusicGlowSource : IOverlayFrameSource
 {
     private const int FallbackSampleRate = 48000; // used while no device is captured; only empty spans are passed then
+    // More audio than this in one frame means the overlay stalled and capped the frame's dt (OverlayHost).
+    private const float StallAudioSeconds = (float)OverlayHost.MaxFrameDtSeconds;
     // In music sync, sustained silence fades to Idle Glow over 1.5 s (PRD §2); after that only slow breathing is left.
     private const float IdleSettleSeconds = 1.75f;
     // Doc 05 §3: new album colors, or a switch between album and manual colors, crossfade over 800 ms; a manual color
@@ -148,11 +150,17 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         visualizer?.ApplyPendingTuning(analyzer, ClampSensitivity(settings.Sensitivity));
         int count = audio?.Read(samples) ?? 0;
         int sampleRate = audio?.SampleRate ?? FallbackSampleRate;
-        AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), sampleRate, dtSeconds);
+        // After a stall the overlay passes one ordinary frame's dt (for the fades, H-011 item 4), but the ring holds all
+        // the audio captured meanwhile, and the analyzer spreads its dt over those samples. So a frame with more audio
+        // than an uncapped frame carries (they come at 10 fps or faster) gets the time its audio covers. Only such a
+        // frame: 10 ms packets don't line up with frames, so the larger of the two on every frame would run it fast.
+        float audioSeconds = count / (float)sampleRate;
+        float analyzerDt = audioSeconds > StallAudioSeconds ? audioSeconds : dtSeconds;
+        AudioFeatures features = analyzer.Process(samples.AsSpan(0, count), sampleRate, analyzerDt);
         silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
         audioSequence = AudioReading.Next(audioSequence);
         Volatile.Write(ref latestAudio, AudioReading.Pack(in features, audioSequence));
-        visualizer?.Record(in features, dtSeconds, analyzer, sampleRate, audio, listening, demoActive);
+        visualizer?.Record(in features, analyzerDt, analyzer, sampleRate, audio, listening, demoActive);
 
         AudioFeatures heard;
         Settings engineSettings = settings;

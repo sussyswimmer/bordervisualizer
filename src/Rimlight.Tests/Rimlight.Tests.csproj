@@ -13,4 +13,12 @@
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Platform targets Windows, but its mono conversion has no Windows dependencies: compiled in so it runs here. -->
+    <Compile Include="../Rimlight.Platform/Audio/MonoConverter.cs" Link="Platform/MonoConverter.cs" />
+    <!-- The same for Settings' notes about where the glow shows (App targets Windows and WPF; this file uses neither). -->
+    <Compile Include="../Rimlight.App/SettingsUi/DisplayNotes.cs" Link="App/DisplayNotes.cs" />
+    <!-- And the rule for the update test feed (a local folder only), which uses no Velopack or Windows call. -->
+    <Compile Include="../Rimlight.App/Updates/UpdateFeedOverride.cs" Link="App/UpdateFeedOverride.cs" />
+  </ItemGroup>
 </Project>

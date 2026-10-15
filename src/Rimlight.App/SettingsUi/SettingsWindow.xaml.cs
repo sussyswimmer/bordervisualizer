@@ -1,11 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
 using Rimlight.Core;
+using Rimlight.Platform.Shell;
 using Wpf.Ui.Abstractions;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -15,24 +14,23 @@ namespace Rimlight.App.SettingsUi;
 /// <summary>
 /// The settings window (doc 06 §3): a Fluent window with Mica that follows Windows' light or dark theme, with six pages
 /// in a navigation view. Every change applies live. Closing only hides it (the app keeps running in the tray), and
-/// nothing of it runs while it is hidden or minimized, or nobody can see the screen (locked, switched away from, going
-/// to sleep, display off). Created on first use and kept; use it on the UI thread only.
+/// nothing of it runs while it is hidden, minimized or on another virtual desktop, or nobody can see the screen (locked,
+/// switched away from, going to sleep, display off). In the first session it opens with a welcome banner (PRD §7).
+/// Created on first use and kept; use it on the UI thread only.
 /// </summary>
 internal partial class SettingsWindow : FluentWindow
 {
     private const int WmDisplayChange = 0x007E;
-    private const int WmSettingChange = 0x001A;
-    private const int WmThemeChanged = 0x031A;
-    private const int WmSysColorChange = 0x0015;
 
     private readonly AppController app;
+    private readonly AppearancePage appearance;
     private readonly DisplaysPage displays;
     private readonly BehaviorPage behavior;
     private ISettingsPage? selected;
     private ISettingsPage? active;
     private IDisposable? audio;
+    private CloakWatcher? cloak; // kept with the window: its callback must outlive the hook
     private bool subscribed;
-    private bool themeQueued;
     private int systemQueued; // set by the watcher thread, cleared on this one
     private bool sized;
     private bool toastShown;
@@ -46,10 +44,20 @@ internal partial class SettingsWindow : FluentWindow
         Title = $"{AppInfo.Name} Settings";
         WindowTitleBar.Title = Title;
         WindowTitleBar.Icon = TitleIcon();
+        if (app.IsFirstRunSession)
+        {
+            // PRD §7. Closing it hides it for the rest of the session.
+            WelcomeBanner.Title = $"Welcome to {AppInfo.Name}";
+            WelcomeBanner.Message = $"Play some music, then look at the edges of your screen. {AppInfo.Name} keeps running "
+                + "in the notification area next to the clock (under the ^ arrow if you don't see it): click its icon to "
+                + "turn the glow on or off.";
+            WelcomeBanner.IsOpen = true;
+        }
 
+        appearance = new AppearancePage(app);
         displays = new DisplaysPage(app);
         behavior = new BehaviorPage(app);
-        ISettingsPage[] pages = [new AppearancePage(app), new ColorPage(app), new MotionPage(app), displays, behavior, new AboutPage(app)];
+        ISettingsPage[] pages = [appearance, new ColorPage(app), new MotionPage(app), displays, behavior, new AboutPage(app)];
         Navigation.SetPageProviderService(new PageProvider(pages));
         Navigation.Navigated += (_, e) => OnNavigated(e.Page as ISettingsPage);
         // Windows' "Show animations in Windows" off: no slide between pages.
@@ -78,8 +86,12 @@ internal partial class SettingsWindow : FluentWindow
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
+        nint handle = new WindowInteropHelper(this).Handle;
         // Top-level windows get display and theme broadcasts, also while hidden.
-        HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WindowProcedure);
+        HwndSource.FromHwnd(handle)?.AddHook(WindowProcedure);
+        UiTheme.Follow(this); // WPF-UI restyles this window's backdrop and title bar itself (it is the main window)
+        // A switch to another virtual desktop changes neither IsVisible nor the window state.
+        cloak = new CloakWatcher(handle, () => Dispatcher.InvokeAsync(UpdateActivity));
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -117,7 +129,7 @@ internal partial class SettingsWindow : FluentWindow
     // The selected page runs only while the window is on screen, and outside changes are followed only then.
     private void UpdateActivity()
     {
-        bool shown = IsVisible && WindowState != WindowState.Minimized && !ScreenUnseen();
+        bool shown = IsVisible && WindowState != WindowState.Minimized && cloak?.IsCloaked != true && !ScreenUnseen();
         Subscribe(shown);
         ISettingsPage? next = shown ? selected : null;
         if (!ReferenceEquals(next, active))
@@ -206,6 +218,7 @@ internal partial class SettingsWindow : FluentWindow
     private void OnClosed(object? sender, EventArgs e)
     {
         if (app.SystemPauses is { } system) system.StateChanged -= OnSystemStateChanged;
+        cloak?.Dispose();
         active?.SetActive(false);
         active = null;
         Subscribe(false);
@@ -215,31 +228,13 @@ internal partial class SettingsWindow : FluentWindow
 
     private IntPtr WindowProcedure(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        switch (message)
+        if (message == WmDisplayChange)
         {
-            case WmDisplayChange:
-                displays.OnDisplaysChanged();
-                break;
-            case WmThemeChanged or WmSysColorChange:
-                QueueThemeSync();
-                break;
-            case WmSettingChange when lParam != IntPtr.Zero && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet":
-                QueueThemeSync(); // "Choose your app mode"
-                break;
+            // Both read the attached monitors: the Displays page's list, the Appearance preview's caption.
+            appearance.OnDisplaysChanged();
+            displays.OnDisplaysChanged();
         }
         return IntPtr.Zero;
-    }
-
-    // Outside the window procedure, once per burst of broadcasts.
-    private void QueueThemeSync()
-    {
-        if (themeQueued) return;
-        themeQueued = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-        {
-            themeQueued = false;
-            UiTheme.Sync();
-        });
     }
 
     // Windows' "Text size" (Accessibility > Text size, up to 225%): WPF doesn't follow it by itself, so the content
@@ -248,7 +243,14 @@ internal partial class SettingsWindow : FluentWindow
     private void ApplyTextSize()
     {
         double factor = TextScaleFactor();
-        Navigation.LayoutTransform = factor > 1.01 ? new ScaleTransform(factor, factor) : Transform.Identity;
+        Transform scale = Transform.Identity;
+        if (factor > 1.01)
+        {
+            scale = new ScaleTransform(factor, factor);
+            scale.Freeze(); // shared by the banner and the pages
+        }
+        Navigation.LayoutTransform = scale;
+        WelcomeBanner.LayoutTransform = scale;
         if (sized || IsVisible) return;
         sized = true;
         if (factor <= 1.01) return;

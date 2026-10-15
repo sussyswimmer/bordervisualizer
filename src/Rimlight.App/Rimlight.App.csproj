@@ -32,4 +32,26 @@
     <!-- Install hooks and updates from GitHub Releases (MIT). The same version as vpk, which packs the app (C9). -->
     <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Rimlight's license and the notices of the libraries it ships (MIT asks for them in every copy), next to
+         Rimlight.exe in every build, so also in the installer, the update package and the portable zip (build/pack.ps1
+         checks). THIRD-PARTY-NOTICES.txt lists what the packages don't carry themselves; Rimlight.Tests checks that it
+         names every PackageReference here and in Rimlight.Platform. -->
+    <None Include="..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.txt" Link="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- NuGet copies no license files, so a publish adds the license and notice files of every package and .NET runtime
+       pack it ships files from, as licenses/<package>/<version>/<file>. That covers the self-contained .NET and WPF
+       runtimes, the System.* libraries and WPF-UI at the exact versions shipped. -->
+  <Target Name="PublishPackageLicenses" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <_ShippedPackage Include="@(ResolvedFileToPublish->'%(NuGetPackageId)/%(NuGetPackageVersion)'->ToLowerInvariant()->Distinct())"
+                       Condition="'%(ResolvedFileToPublish.NuGetPackageId)' != ''" />
+      <_ShippedPackageLicense Include="$(NuGetPackageRoot)%(_ShippedPackage.Identity)/LICENSE*;$(NuGetPackageRoot)%(_ShippedPackage.Identity)/*NOTICE*;$(NuGetPackageRoot)%(_ShippedPackage.Identity)/*Notice*"
+                              Package="%(_ShippedPackage.Identity)" />
+      <ResolvedFileToPublish Include="@(_ShippedPackageLicense->Distinct())" CopyToPublishDirectory="PreserveNewest"
+                             RelativePath="licenses/%(_ShippedPackageLicense.Package)/%(_ShippedPackageLicense.Filename)%(_ShippedPackageLicense.Extension)" />
+    </ItemGroup>
+  </Target>
 </Project>

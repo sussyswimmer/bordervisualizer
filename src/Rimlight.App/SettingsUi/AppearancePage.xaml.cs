@@ -5,27 +5,41 @@ using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Rimlight.Core;
+using Rimlight.Platform.Overlay;
 
 namespace Rimlight.App.SettingsUi;
 
 /// <summary>
 /// Appearance (doc 06 §3.1): the live preview, the shape sliders (ranges from doc 06 §1), Cover taskbar, and the
-/// presets as color chips (<see cref="Presets.All"/>; the section is hidden while the catalog is empty).
+/// presets as color chips (<see cref="Presets.All"/>; the section is hidden while the catalog is empty). The attached
+/// monitors, for the caption, are read when the page opens and again after a display change while it is open.
 /// </summary>
 internal partial class AppearancePage : UserControl, ISettingsPage
 {
-    private readonly AppController app;
+    private static readonly TimeSpan DisplayChangeDelay = TimeSpan.FromMilliseconds(500); // Windows sends several
+
     private readonly PageEdits edits;
     private readonly GlowPreview preview;
+    private readonly DispatcherTimer displayChange;
     private readonly List<(Button Chip, Func<Settings, Settings> Apply, Shape Primary, Shape Secondary, string Name)> chips = [];
+    private IReadOnlyList<MonitorInfo> monitors = [];
+    private bool active;
 
     public AppearancePage(AppController app)
     {
-        this.app = app;
         edits = new PageEdits(app);
         InitializeComponent();
         preview = new GlowPreview(app, PreviewImage);
+        displayChange = new DispatcherTimer(DispatcherPriority.Background) { Interval = DisplayChangeDelay };
+        displayChange.Tick += (_, _) =>
+        {
+            displayChange.Stop();
+            if (!active) return;
+            monitors = DisplayMonitors.Describe();
+            Refresh(edits.Current);
+        };
         BuildPresets();
     }
 
@@ -37,14 +51,32 @@ internal partial class AppearancePage : UserControl, ISettingsPage
         PageEdits.Set(CornerSlider, settings.CornerRadiusDip);
         CoverTaskbarSwitch.IsChecked = settings.CoverTaskbar;
         ShowValues(settings);
-        PreviewCaption.Text = Caption(settings);
+        PreviewCaption.Text = Caption(settings, monitors);
         RefreshPresets(settings);
     });
 
     public void SetActive(bool active)
     {
-        if (active) preview.Start();
-        else preview.Stop();
+        this.active = active;
+        if (active)
+        {
+            // Read here, not per refresh: a refresh follows every settings change, each slider step included.
+            monitors = DisplayMonitors.Describe(); // the window shows the settings right after this
+            preview.Start();
+        }
+        else
+        {
+            displayChange.Stop();
+            preview.Stop();
+        }
+    }
+
+    /// <summary>Windows reported a display change (WM_DISPLAYCHANGE): re-read the monitors shortly, if on screen.</summary>
+    public void OnDisplaysChanged()
+    {
+        if (!active) return;
+        displayChange.Stop();
+        displayChange.Start();
     }
 
     private void ShowValues(Settings settings)
@@ -71,13 +103,15 @@ internal partial class AppearancePage : UserControl, ISettingsPage
     private void OnCoverTaskbarChanged(object sender, RoutedEventArgs e) =>
         edits.Update(s => s with { CoverTaskbar = CoverTaskbarSwitch.IsChecked == true });
 
-    // What the preview shows when the glow itself isn't on screen.
-    private static string Caption(Settings settings)
+    // What the preview shows when the glow itself isn't on screen: turned off, motion off, no attached display chosen
+    // (none chosen, or the chosen ones unplugged), or hidden while it's quiet.
+    private static string Caption(Settings settings, IReadOnlyList<MonitorInfo> attached)
     {
         if (!settings.Enabled) return "The glow is turned off. This is how it looks when it's on.";
         if (settings.Animation == AnimationMode.Off) return "Motion is set to Off. This is how the glow looks in Idle Glow.";
-        if (settings.Monitors == MonitorSelection.Custom && (settings.CustomMonitorIds?.Count ?? 0) == 0)
-            return "No display is chosen on the Displays page, so the glow isn't shown anywhere.";
+        (int lit, int unplugged) = MonitorChoice.Count(settings, attached);
+        string displays = DisplayNotes.Preview(settings.Monitors, lit, unplugged);
+        if (displays.Length > 0) return displays;
         return settings.Animation == AnimationMode.MusicSync && settings.WhenSilent == SilentBehavior.Hide
             ? "When it's quiet, the glow hides. This preview breathes instead."
             : "";
