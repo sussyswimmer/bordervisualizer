@@ -103,9 +103,9 @@ internal static class TuningParameters
         new(nameof(AudioTuning.MinimumRangeDb), "Minimum range", "The smallest floor-to-peak range a band is spread over.",
             Gain, 3, 40, 0.5, t => t.MinimumRangeDb, (t, v) => t with { MinimumRangeDb = (float)v }, Decibels),
 
-        new(nameof(AudioTuning.LevelAttackSeconds), "Level attack", "How fast Level rises.",
+        new(nameof(AudioTuning.LevelAttackSeconds), "Level attack", "How fast Level rises while drums play; with no drums 10× slower, so it swells.",
             Envelopes, 1, 200, 1, t => t.LevelAttackSeconds * 1000.0, (t, v) => t with { LevelAttackSeconds = (float)(v / 1000) }, Milliseconds),
-        new(nameof(AudioTuning.LevelReleaseSeconds), "Level release", "How fast Level falls.",
+        new(nameof(AudioTuning.LevelReleaseSeconds), "Level release", "How fast Level falls while drums play; with no drums 5× slower, so it eases off.",
             Envelopes, 20, 1500, 10, t => t.LevelReleaseSeconds * 1000.0, (t, v) => t with { LevelReleaseSeconds = (float)(v / 1000) }, Milliseconds),
         new(nameof(AudioTuning.BassAttackSeconds), "Bass attack", "How fast Bass rises.",
             Envelopes, 1, 200, 1, t => t.BassAttackSeconds * 1000.0, (t, v) => t with { BassAttackSeconds = (float)(v / 1000) }, Milliseconds),
@@ -120,7 +120,7 @@ internal static class TuningParameters
             Mix, 0, 1, 0.01, t => t.LevelHighWeight, (t, v) => t with { LevelHighWeight = (float)v }, Weight),
 
         new(SensitivityName, "Sensitivity",
-            "The Motion setting: scales Level and lowers the beat threshold. Changing it here changes the setting.",
+            "The Motion setting: scales Level and every pulse and lowers the beat threshold. Changing it here changes the setting.",
             Beats, 0.25, 2, 0.05, t => t.Sensitivity, (t, v) => t with { Sensitivity = (float)v },
             v => string.Create(CultureInfo.CurrentCulture, $"{v:0.00}×")),
         new(nameof(AudioTuning.FluxHistorySeconds), "Flux history", "How much recent flux the threshold is computed over.",
@@ -132,7 +132,7 @@ internal static class TuningParameters
             Beats, 0, 1.5, 0.01, t => t.MinFlux, (t, v) => t with { MinFlux = (float)v }, Weight),
         new(nameof(AudioTuning.BeatRefractorySeconds), "Beat spacing", "The shortest time between two beats.",
             Beats, 0, 600, 5, t => t.BeatRefractorySeconds * 1000.0, (t, v) => t with { BeatRefractorySeconds = (float)(v / 1000) }, Milliseconds),
-        new(nameof(AudioTuning.BeatDecaySeconds), "Beat decay", "How fast the Beat pulse fades.",
+        new(nameof(AudioTuning.BeatDecaySeconds), "Beat decay", "How fast each beat's pulse fades.",
             Beats, 10, 600, 5, t => t.BeatDecaySeconds * 1000.0, (t, v) => t with { BeatDecaySeconds = (float)(v / 1000) }, Milliseconds),
 
         new(nameof(AudioTuning.NoPacketTimeoutSeconds), "No-packet timeout", "How long without audio packets counts as digital silence.",

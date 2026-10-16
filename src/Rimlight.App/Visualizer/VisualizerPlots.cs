@@ -220,9 +220,10 @@ internal sealed class HistoryPlot
         for (int i = 1; i < 4; i++) raster.HorizontalLine(Y(i * 0.25f * fluxScale, fluxScale, raster.Height), 0, raster.Width, colors.Grid, 0.08f);
         Line(raster, snapshot.Threshold, count, fluxScale, colors.Threshold, 1.5f);
         Line(raster, snapshot.Flux, count, fluxScale, colors.Flux, 1.5f);
-        // The analyzer sets Beat to exactly 1 on a call that fired a beat.
+        // A tick for every call that fired a beat (BeatCount rose). Beat is the beat's grade, so a fired beat the analyzer
+        // judged not kick-like shows a tick here with little or no Beat in the plot above.
         for (int i = 0; i < count; i++)
-            if (snapshot.Beat[i] >= 0.999f) raster.VerticalLine(xs[i], 0, raster.Height * 0.12f, colors.Beat, 1);
+            if (snapshot.Fired[i] > 0) raster.VerticalLine(xs[i], 0, raster.Height * 0.12f, colors.Beat, 1);
     }
 
     // Places each history entry by its age (the sum of the newer time steps) and draws a line every second. Returns the

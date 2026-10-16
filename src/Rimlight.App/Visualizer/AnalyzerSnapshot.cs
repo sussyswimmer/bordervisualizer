@@ -22,6 +22,7 @@ internal sealed class AnalyzerSnapshot
         Level = new float[historyCapacity];
         Bass = new float[historyCapacity];
         Beat = new float[historyCapacity];
+        Fired = new float[historyCapacity];
         FrameSeconds = new float[historyCapacity];
     }
 
@@ -58,6 +59,13 @@ internal sealed class AnalyzerSnapshot
 
     /// <inheritdoc cref="Flux"/>
     public float[] Beat { get; private set; }
+
+    /// <summary>
+    /// 1 for an analyzer call on which the detector fired a beat (<see cref="AnalyzerDiagnostics.BeatCount"/> rose), 0
+    /// otherwise; in step with the other histories. Beat itself is each beat's grade since Maxwell's feedback round 1, so a
+    /// beat the analyzer judged not kick-like (a sung syllable, a plucked string) fires here with little or no Beat.
+    /// </summary>
+    public float[] Fired { get; private set; }
 
     /// <inheritdoc cref="Flux"/>
     public float[] FrameSeconds { get; private set; }
@@ -115,6 +123,7 @@ internal sealed class AnalyzerSnapshot
         Level = new float[historyLength];
         Bass = new float[historyLength];
         Beat = new float[historyLength];
+        Fired = new float[historyLength];
         FrameSeconds = new float[historyLength];
     }
 }
