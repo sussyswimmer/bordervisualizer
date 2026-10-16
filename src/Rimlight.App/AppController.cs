@@ -61,6 +61,20 @@ internal sealed class AppController : IDisposable
         Updates = updates;
     }
 
+    /// <summary>
+    /// A controller that has its settings and starts nothing else: no single-instance pipe, shortcut, tray icon, media
+    /// session reader, watchers, capture, overlay or update checks. Enough to build the settings, welcome and visualizer
+    /// windows, whose pages handle the missing parts as they do when those fail to start. For the WPF smoke tests
+    /// (Rimlight.App.Tests); the app itself always goes through <see cref="Start"/>.
+    /// </summary>
+    /// <param name="settings">The settings the windows show and edit; disposing the controller disposes them.</param>
+    internal static AppController Unstarted(SettingsService settings)
+    {
+        var controller = new AppController(static () => { }, null, StartupOptions.Parse([]));
+        controller.settings = settings;
+        return controller;
+    }
+
     public SettingsService SettingsService => settings ?? throw new InvalidOperationException("Not started.");
 
     /// <summary>The glow overlay, or null if it could not start.</summary>

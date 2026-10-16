@@ -94,7 +94,9 @@ jobs:
   windows:
     # The full solution, including the WPF app and the Windows-only Platform project, on the
     # newest SDK the runner has (global.json rolls forward), like a current Visual Studio install.
-    # Its test step runs every test project in Rimlight.sln, Rimlight.Platform.Tests included.
+    # Its test step runs every test project in Rimlight.sln, Rimlight.Platform.Tests included, and
+    # Rimlight.App.Tests: WPF smoke tests that build and show the settings, welcome and visualizer
+    # windows with WPF-UI's theme, which only this job can run (it isn't in Rimlight.Core.slnf).
     name: Full solution (Windows)
     runs-on: windows-latest
     timeout-minutes: 30
