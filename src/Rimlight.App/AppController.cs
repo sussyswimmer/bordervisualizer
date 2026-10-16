@@ -190,7 +190,7 @@ internal sealed class AppController : IDisposable
                 // First run: say where the app went and how to use it, once. Saved like any change, so the next
                 // start skips it.
                 IsFirstRunSession = true;
-                ShowWelcome(offerSettings: true);
+                ShowWelcome();
                 settings.Update(s => s with { FirstRunComplete = true });
                 break;
             case StartupWindow.Settings:
@@ -400,9 +400,8 @@ internal sealed class AppController : IDisposable
         settings = null;
     }
 
-    /// <summary>Shows the welcome window, or brings it to the front.</summary>
-    /// <param name="offerSettings">Whether it offers to open Settings (not while it stands in for them).</param>
-    internal void ShowWelcome(bool offerSettings)
+    /// <summary>Shows the welcome window (first run), or brings it to the front.</summary>
+    private void ShowWelcome()
     {
         if (disposed) return;
         try
@@ -410,7 +409,7 @@ internal sealed class AppController : IDisposable
             if (welcome is null)
             {
                 bool startsWithWindows = StartupRegistered && SettingsService.Current.LaunchAtStartup;
-                welcome = new WelcomeWindow(Hotkey, startsWithWindows, offerSettings ? ShowSettings : null);
+                welcome = new WelcomeWindow(Hotkey, startsWithWindows, ShowSettings);
                 welcome.Closed += (_, _) => welcome = null;
                 // WPF makes the first window the app's main window, which WPF-UI restyles on a theme change. That
                 // must be the settings window (or none), never the welcome.
