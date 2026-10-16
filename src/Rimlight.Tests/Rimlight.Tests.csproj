@@ -3,9 +3,16 @@
     <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- No background GC in the test host: while one runs (other test classes allocate large arrays in parallel),
+         GC.GetAllocatedBytesForCurrentThread can report a few KB on a thread that allocated nothing, which makes the
+         zero-allocation tests flaky (found in K10; Rimlight.Platform.Tests does the same). -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
+    <ProjectReference Include="../Rimlight.Bench/Rimlight.Bench.csproj" />
+    <ProjectReference Include="../../tools/audio-tools/Rimlight.AudioTools.csproj" />
+    <ProjectReference Include="../../tools/wav-analyze/Rimlight.WavAnalyze.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />

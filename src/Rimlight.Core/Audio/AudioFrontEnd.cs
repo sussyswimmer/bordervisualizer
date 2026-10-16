@@ -2,7 +2,7 @@ namespace Rimlight.Core.Audio;
 
 internal readonly record struct AmplitudeFeatures(float Level, float Bass);
 
-// C1 building block for Level and Bass. AudioAnalyzer (C2) wraps it with beats, silence and diagnostics.
+// The Level and Bass front end (C1). AudioAnalyzer wraps it with beats, silence and diagnostics.
 // One instance belongs to one render thread. All storage is allocated up front.
 internal sealed class AudioFrontEnd
 {
@@ -78,7 +78,7 @@ internal sealed class AudioFrontEnd
     }
 
     // The hold is for near-silence only: 20 dB below SilenceThresholdDb (-80 dBFS by default). Quiet but real music
-    // between -80 and -60 dBFS keeps adapting as doc 03 describes; doc 03's 2 s IsSilent rule is C2's concern.
+    // between -80 and -60 dBFS keeps adapting as doc 03 describes; doc 03's 2 s IsSilent rule is SilenceDetector's.
     internal static float HoldRms(AudioTuning tuning) => MathF.Pow(10, (tuning.SilenceThresholdDb - 20) / 20);
 
     internal static void Validate(AudioTuning tuning)

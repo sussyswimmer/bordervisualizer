@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Renders the brand SVGs in assets/ to the app's multi-size .ico files and the README PNGs (doc 06 §2,
+       doc 09 C10). A build-time tool only: nothing here ships with Rimlight. build/icons.sh and build/icons.ps1
+       regenerate every icon artifact with it. Runs on Linux, Windows and macOS. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>icon-gen</AssemblyName>
+    <RootNamespace>Rimlight.IconGen</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rimlight.IconGen.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Svg.Skia, SkiaSharp and HarfBuzzSharp are MIT. Svg.Skia's SVG parser (Svg.Custom, from SVG.NET) is
+         MS-PL; it is used at build time only and none of it is redistributed. SkiaSharp brings the Windows and
+         macOS native libraries; Linux needs its own package, and the NoDependencies build needs no system
+         fontconfig. -->
+    <PackageReference Include="Svg.Skia" Version="5.1.1" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="3.119.4" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,58 @@
+<UserControl x:Class="Rimlight.App.SettingsUi.GlowColorEditor"
+             x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
+    <UserControl.Resources>
+        <ResourceDictionary Source="PageStyles.xaml" />
+    </UserControl.Resources>
+
+    <!-- A color: hex input, plus hue and saturation sliders (at the color's own brightness). Standard sliders keep it
+         usable from the keyboard and with a screen reader; the strips under them show what each position gives. -->
+    <Border Style="{StaticResource Row}">
+        <StackPanel>
+            <DockPanel>
+                <Border x:Name="Swatch" DockPanel.Dock="Left" Width="36" Height="36" CornerRadius="18" Margin="0,0,12,0"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" VerticalAlignment="Center" />
+                <ui:TextBox x:Name="HexBox" DockPanel.Dock="Right" Width="120" VerticalAlignment="Center" MaxLength="7"
+                            ClearButtonEnabled="False" TextChanged="OnHexChanged" LostKeyboardFocus="OnHexLostFocus" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="Label" Style="{StaticResource RowLabel}" />
+                    <TextBlock x:Name="Description" Style="{StaticResource RowDescription}" />
+                </StackPanel>
+            </DockPanel>
+            <TextBlock x:Name="HexError" Style="{StaticResource WarningText}" Visibility="Collapsed"
+                       AutomationProperties.LiveSetting="Polite" />
+
+            <DockPanel Margin="0,12,0,0">
+                <TextBlock DockPanel.Dock="Left" Width="80" Style="{StaticResource RowLabel}" Text="Hue" />
+                <StackPanel>
+                    <Slider x:Name="HueSlider" Minimum="0" Maximum="359" SmallChange="1" LargeChange="15" TickFrequency="1"
+                            IsSnapToTickEnabled="True" ValueChanged="OnHueChanged" />
+                    <Border Height="6" CornerRadius="3" Margin="8,2,8,0">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                <GradientStop Offset="0" Color="#FF0000" />
+                                <GradientStop Offset="0.1667" Color="#FFFF00" />
+                                <GradientStop Offset="0.3333" Color="#00FF00" />
+                                <GradientStop Offset="0.5" Color="#00FFFF" />
+                                <GradientStop Offset="0.6667" Color="#0000FF" />
+                                <GradientStop Offset="0.8333" Color="#FF00FF" />
+                                <GradientStop Offset="1" Color="#FF0000" />
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+                </StackPanel>
+            </DockPanel>
+
+            <DockPanel Margin="0,8,0,0">
+                <TextBlock DockPanel.Dock="Left" Width="80" Style="{StaticResource RowLabel}" Text="Saturation" />
+                <StackPanel>
+                    <Slider x:Name="SaturationSlider" Minimum="0" Maximum="100" SmallChange="1" LargeChange="10" TickFrequency="1"
+                            IsSnapToTickEnabled="True" ValueChanged="OnSaturationChanged" />
+                    <Border x:Name="SaturationStrip" Height="6" CornerRadius="3" Margin="8,2,8,0" />
+                </StackPanel>
+            </DockPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

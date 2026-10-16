@@ -1,47 +1,540 @@
+using System.Diagnostics;
+using System.Globalization;
+using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using H.NotifyIcon;
+using H.NotifyIcon.Core;
+using Rimlight.App.Overlay;
+using Rimlight.App.SettingsUi;
 using Rimlight.Core;
 using Rimlight.Platform;
+using Rimlight.Platform.Media;
+using Rimlight.Platform.Overlay;
+using Rimlight.Platform.Shell;
 
 namespace Rimlight.App;
 
 /// <summary>
-/// Owns the notification-area icon. K0: placeholder icon, tooltip and a Quit item.
-/// The full menu (doc 06 §2) arrives in K6.
+/// Owns the notification-area icon (doc 06 §2): the icon, dimmed to half opacity while the glow is off; the
+/// now-playing tooltip; click to turn the glow on or off, double-click for Settings; and the right-click menu, which
+/// the keyboard opens too. Re-creates the icon when it can't be added at sign-in or Explorer restarts, and shows
+/// notifications, each with an optional click action (K7's "still running in the tray", K9's "update ready", whose
+/// click offers the restart into the update). Use it on the UI thread only.
 /// </summary>
 internal sealed class TrayIconHost : IDisposable
 {
-    private readonly TaskbarIcon icon;
+    private static readonly TimeSpan CreateRetryInterval = TimeSpan.FromSeconds(3);
 
-    public TrayIconHost(Action onQuit)
+    private readonly AppController app;
+    private readonly TaskbarIcon icon;
+    private readonly TrayIconImages images;
+    private readonly DispatcherTimer createRetry;
+    private readonly string toolTipSuffix;
+    private readonly MenuItem glowOn;
+    private readonly MenuItem restartToUpdate;
+    private readonly MenuItem demoMode;
+    private readonly (MenuItem Item, AnimationMode Mode)[] modes;
+    private readonly MenuItem albumColors;
+    private readonly MenuItem manualColors;
+    private readonly (MenuItem Item, Func<Settings, Settings> Apply)[] presets;
+#if DEBUG
+    private readonly DebugMenu debug;
+#endif
+    private string toolTip; // what the tooltip should say, also while the shell refuses it
+    private Action? notificationClicked; // the click action of the notification shown last (OnNotificationClicked)
+    private bool dimmed;
+    private bool disposed;
+
+    /// <summary>Adds the icon to the notification area (or keeps trying until the shell takes it).</summary>
+    /// <param name="app">The app, for its settings and actions.</param>
+    /// <param name="settings">The settings at start.</param>
+    public TrayIconHost(AppController app, Settings settings)
     {
-        var quit = new MenuItem { Header = "Quit " + AppInfo.Name };
-        quit.Click += (_, _) => onQuit();
+        this.app = app;
+        // Visible check that the manifest took effect; without Per-Monitor V2 the overlay is misplaced on mixed-DPI setups.
+        toolTipSuffix = DpiAwareness.IsPerMonitorV2() ? "" : " (warning: not Per-Monitor V2 DPI aware)";
+        toolTip = TrayToolTip.Build(null, toolTipSuffix);
+        dimmed = !settings.Enabled;
+        images = TrayIconImages.Load();
+
         var menu = new ContextMenu();
+        glowOn = new MenuItem { Header = "_Glow on", IsCheckable = true };
+        glowOn.Click += (_, _) => app.ToggleGlow();
+        menu.Items.Add(glowOn);
+        // Shown, checked, only while --demo runs (doc 04 §5): unchecking it goes back to the music without quitting.
+        demoMode = new MenuItem { Header = "_Demo mode", IsCheckable = true, Visibility = Visibility.Collapsed };
+        demoMode.Click += (_, _) => app.SetDemo(false);
+        menu.Items.Add(demoMode);
+        menu.Items.Add(new Separator());
+
+        var mode = new MenuItem { Header = "_Mode" };
+        modes = [Choice(mode, "_Music Sync", AnimationMode.MusicSync), Choice(mode, "_Idle Glow", AnimationMode.IdleGlow), Choice(mode, "_Off", AnimationMode.Off)];
+        menu.Items.Add(mode);
+
+        // "From album art" means the glow shows the album colors, so it also turns off Override album color, which every
+        // preset turns on (H-009): that is the way back from a preset. "Manual" is checked whenever the manual or preset
+        // colors show. Choices are checkable like "Glow on" so screen readers announce which one is checked (WPF's
+        // automation peer offers the toggle state only then); Refresh resets the marks a click flips.
+        var colors = new MenuItem { Header = "_Colors" };
+        albumColors = new MenuItem { Header = "From _album art", IsCheckable = true };
+        albumColors.Click += (_, _) => Update(s => s with { ColorMode = ColorMode.AlbumArt, OverrideAlbumColor = false });
+        colors.Items.Add(albumColors);
+        manualColors = new MenuItem { Header = "_Manual", IsCheckable = true };
+        manualColors.Click += (_, _) => Update(s => s with { ColorMode = ColorMode.Manual });
+        colors.Items.Add(manualColors);
+        menu.Items.Add(colors);
+
+        // The built-in looks (doc 06 §1), in Core's order. The item is greyed out only if the catalog is ever empty.
+        var presetMenu = new MenuItem { Header = "_Presets" };
+        presets = [.. Presets.All.Select(preset => PresetItem(presetMenu, preset.Name, preset.Apply))];
+        presetMenu.IsEnabled = presets.Length > 0;
+        menu.Items.Add(presetMenu);
+        menu.Items.Add(new Separator());
+
+        // Bold: what a double-click on the icon does (the Windows convention for a tray menu's default item).
+        var settingsItem = new MenuItem { Header = "_Settings…", FontWeight = FontWeights.Bold };
+        settingsItem.Click += (_, _) => app.ShowSettings();
+        menu.Items.Add(settingsItem);
+        var updates = new MenuItem { Header = "Check for _updates" };
+        updates.Click += (_, _) => app.CheckForUpdates();
+        menu.Items.Add(updates);
+        // Only while a downloaded update waits for a restart (K9): the notification that says so is gone after a few
+        // seconds, or never shows during Do Not Disturb, and this works without it.
+        restartToUpdate = new MenuItem { Visibility = Visibility.Collapsed };
+        restartToUpdate.Click += (_, _) => app.RestartToUpdate();
+        menu.Items.Add(restartToUpdate);
+        var logs = new MenuItem { Header = "Open _logs folder" };
+        logs.Click += (_, _) => app.OpenLogsFolder();
+        menu.Items.Add(logs);
+        menu.Items.Add(new Separator());
+
+#if DEBUG
+        // Debug builds only: switches for the manual render-loop tests (K3) and the device-loss path (doc 07 Phase 1).
+        debug = new DebugMenu(app, Update);
+        menu.Items.Add(debug.Root);
+        menu.Items.Add(new Separator());
+#endif
+
+        var quit = new MenuItem { Header = "_Quit " + AppInfo.Name };
+        quit.Click += (_, _) => app.Quit();
         menu.Items.Add(quit);
+        menu.Opened += (_, _) =>
+        {
+            // The menu follows Windows' light or dark mode, also when it changed while no window watched for it.
+            UiTheme.Sync();
+            Refresh();
+        };
+
+        createRetry = new DispatcherTimer(DispatcherPriority.Background) { Interval = CreateRetryInterval };
+        createRetry.Tick += (_, _) => Create();
 
         icon = new TaskbarIcon
         {
-            // Built here rather than in a static field: the pack: scheme only parses once the WPF Application exists.
-            IconSource = new BitmapImage(new Uri("pack://application:,,,/Assets/Rimlight.ico", UriKind.Absolute)),
-            ToolTipText = BuildToolTip(),
             ContextMenu = menu,
+            // A click runs after the double-click time has passed without a second click, so a double-click opens
+            // Settings without also toggling the glow.
+            LeftClickCommand = new RelayCommand(app.ToggleGlow),
+            DoubleClickCommand = new RelayCommand(app.ShowSettings),
         };
-
-        // The icon lives outside any visual tree, so it must be created explicitly. Keep Efficiency Mode off:
-        // H.NotifyIcon's default puts the whole process on EcoQoS and Idle priority class, which would starve
-        // the render thread and audio capture.
-        icon.ForceCreate(enablesEfficiencyMode: false);
+        // Keyboard access: Shift+F10 or the menu key on the focused icon (Win+B, then the arrow keys), Enter or Space.
+        icon.TrayKeyboardContextMenu += (_, _) => ShowMenuFromKeyboard();
+        icon.TrayKeyboardKeySelect += (_, _) => ShowMenuFromKeyboard();
+        // H.NotifyIcon raises this on this thread from the shell's NIN_BALLOONUSERCLICK. A notification's action stays
+        // set when it times out or closes (no TrayBalloonTipClosed handler): it is still in Windows' notification list.
+        icon.TrayBalloonTipClicked += (_, _) => OnNotificationClicked();
+        // Each (re)creation, including H.NotifyIcon's own after Explorer restarts (TaskbarCreated), gets the current
+        // icon and tooltip: a change the shell refused while Explorer was gone would otherwise be lost.
+        icon.TrayIcon.Created += (_, _) => OnCreated();
+        icon.TrayIcon.Removed += (_, _) =>
+        {
+            if (!disposed) createRetry.Start();
+        };
+        // If that re-creation fails, the retry timer takes over. H.NotifyIcon swallows the failure, and Removed isn't
+        // raised after a real Explorer restart (the new Explorer doesn't know the icon, so its delete fails). This
+        // handler runs after H.NotifyIcon's own, which subscribed in the constructor.
+        icon.TrayIcon.MessageWindow.TaskbarCreated += (_, _) =>
+        {
+            if (disposed) return;
+            RefreshMedia();
+            if (icon.TrayIcon.IsCreated) return;
+            Trace.WriteLine("[Tray] The icon is not back after Explorer restarted; retrying every 3 s.");
+            createRetry.Start();
+        };
+        icon.TrayIcon.UpdateToolTip(toolTip); // kept until the icon exists
+        icon.UpdateIcon(dimmed ? images.Dimmed : images.Normal);
+        Create();
     }
 
-    public void Dispose() => icon.Dispose();
-
-    private static string BuildToolTip()
+    /// <summary>Removes the icon now instead of leaving a ghost in the tray until the mouse passes over it.</summary>
+    public void Dispose()
     {
-        string text = AppInfo.Name + " — Waiting for music";
-
-        // Visible check that the manifest took effect; without Per-Monitor V2 the overlay is misplaced on mixed-DPI setups.
-        return DpiAwareness.IsPerMonitorV2() ? text : text + " (warning: not Per-Monitor V2 DPI aware)";
+        if (disposed) return;
+        disposed = true;
+        notificationClicked = null;
+        createRetry.Stop();
+        icon.Dispose();
+        images.Dispose(); // after the shell has let go of the icon handles
     }
+
+    /// <summary>Shows the playing track in the tooltip ("Rimlight — Title · Artist"); otherwise "Waiting for music".</summary>
+    /// <param name="track">The current track, or null without a media session.</param>
+    public void SetNowPlaying(NowPlaying? track)
+    {
+        string text = TrayToolTip.Build(track, toolTipSuffix);
+        if (text == toolTip) return;
+        toolTip = text;
+        ApplyToolTip();
+    }
+
+    /// <summary>
+    /// Follows a settings change, or the demo starting or ending: the icon dims while the glow is off, which it never
+    /// is during the demo.
+    /// </summary>
+    /// <param name="settings">The current settings.</param>
+    public void ApplySettings(Settings settings)
+    {
+        bool dim = !settings.Enabled && !app.IsDemoActive;
+        if (disposed || dimmed == dim) return;
+        dimmed = dim;
+        ApplyIcon();
+    }
+
+    /// <summary>
+    /// Shows a notification from the tray icon. Windows holds back notifications the user didn't ask for during quiet
+    /// hours and Do Not Disturb.
+    /// </summary>
+    /// <param name="title">The first line.</param>
+    /// <param name="message">The text.</param>
+    /// <param name="userInitiated">True when it answers something the user just did, so it isn't held back.</param>
+    /// <param name="clicked">
+    /// What a click on it does (K9's "Update ready"), or null for nothing. It runs on the UI thread for every click on a
+    /// notification until the next one replaces it. The shell doesn't say which notification was clicked, so a click on
+    /// an older one still in Windows' notification list runs it too: it must be safe to repeat and must ask before doing
+    /// anything the user didn't choose. Offer the action somewhere else too (the tray menu): a notification may never
+    /// show (Do Not Disturb).
+    /// </param>
+    /// <returns>False if the shell refused it (no icon yet, Explorer restarting).</returns>
+    public bool Notify(string title, string message, bool userInitiated = false, Action? clicked = null)
+    {
+        if (disposed) return false;
+        try
+        {
+            icon.ShowNotification(title, message, NotificationIcon.None, respectQuietTime: !userInitiated);
+        }
+        catch (InvalidOperationException exception)
+        {
+            Trace.WriteLine($"[Tray] Showing a notification failed: {exception.Message}");
+            return false;
+        }
+        // Set once the shell took it (a refused one replaces nothing). Its click arrives later through the window
+        // procedure, on this thread.
+        notificationClicked = clicked;
+        return true;
+    }
+
+    private void Create()
+    {
+        if (disposed) return;
+        if (icon.TrayIcon.IsCreated)
+        {
+            createRetry.Stop();
+            return;
+        }
+        try
+        {
+            // Efficiency Mode stays off: H.NotifyIcon's default puts the whole process on EcoQoS and the Idle priority
+            // class, which would starve the render thread and audio capture.
+            icon.ForceCreate(enablesEfficiencyMode: false);
+            createRetry.Stop();
+        }
+        catch (Exception exception)
+        {
+            // At sign-in the notification area may not be ready yet; Explorer's TaskbarCreated or the retry adds it.
+            if (!createRetry.IsEnabled) Trace.WriteLine($"[Tray] Adding the icon failed, retrying every 3 s: {exception.Message}");
+            createRetry.Start();
+        }
+    }
+
+    private void OnCreated()
+    {
+        if (disposed) return;
+        createRetry.Stop();
+        ApplyIcon();
+        ApplyToolTip();
+    }
+
+    private void ApplyIcon()
+    {
+        // False when the shell refuses (Explorer restarting); OnCreated sets it again once the icon is back.
+        if (!icon.UpdateIcon(dimmed ? images.Dimmed : images.Normal)) Trace.WriteLine("[Tray] The shell refused the icon change.");
+    }
+
+    private void ApplyToolTip()
+    {
+        try
+        {
+            icon.TrayIcon.UpdateToolTip(toolTip);
+        }
+        catch (InvalidOperationException exception)
+        {
+            // Shell_NotifyIcon refused (Explorer restarting); OnCreated sets it again once the icon is back.
+            Trace.WriteLine($"[Tray] Updating the tooltip failed: {exception.Message}");
+        }
+    }
+
+    // A click on a notification, on screen or in Windows' notification list, runs the action of the one shown last
+    // (Notify). It doesn't depend on the shell's show and close messages, whose order nobody promises. The click
+    // arrives inside the icon's window procedure, where an exception would not reach the dispatcher's handler (AppLog)
+    // and could end the process; the action runs after it returns, since it may quit the app, which disposes the icon
+    // and its window.
+    private void OnNotificationClicked()
+    {
+        if (disposed) return;
+        if (notificationClicked is not { } clicked)
+        {
+            // Rare (a click on a notification); says why a click on "Update ready" did nothing, if it ever doesn't.
+            Trace.WriteLine("[Tray] A notification was clicked; the one shown last has no action.");
+            return;
+        }
+        icon.Dispatcher.InvokeAsync(() =>
+        {
+            if (disposed) return;
+            try
+            {
+                clicked();
+            }
+            catch (Exception exception)
+            {
+                Trace.WriteLine($"[Tray] A notification's action failed: {exception}");
+            }
+        });
+    }
+
+    // The media session manager may have gone away with Explorer, so it is asked again now instead of at its next
+    // 30 s check. Inside the icon's window procedure, where an exception would end the app.
+    private void RefreshMedia()
+    {
+        try
+        {
+            app.Media?.Refresh();
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[Tray] Refreshing the media sessions failed: {exception}");
+        }
+    }
+
+    // The menu at the notification area, for keyboard users (the mouse opens it at the pointer).
+    private void ShowMenuFromKeyboard()
+    {
+        // The shell also sends WM_CONTEXTMENU after a right-click (NOTIFYICON_VERSION_4), when H.NotifyIcon has already
+        // opened the menu at the pointer; opening it again would move it to the notification area's corner.
+        if (icon.ContextMenu is { IsOpen: true }) return;
+        try
+        {
+            icon.ShowContextMenu(TaskbarIcon.GetPopupTrayPosition());
+        }
+        catch (Exception exception)
+        {
+            Trace.WriteLine($"[Tray] Opening the menu from the keyboard failed: {exception.Message}");
+        }
+    }
+
+    private (MenuItem, AnimationMode) Choice(MenuItem parent, string header, AnimationMode mode)
+    {
+        var item = new MenuItem { Header = header, IsCheckable = true };
+        item.Click += (_, _) => Update(s => s with { Animation = mode });
+        parent.Items.Add(item);
+        return (item, mode);
+    }
+
+    private (MenuItem, Func<Settings, Settings>) PresetItem(MenuItem parent, string name, Func<Settings, Settings> apply)
+    {
+        // "_" would be an access key.
+        var item = new MenuItem { Header = name.Replace("_", "__", StringComparison.Ordinal), IsCheckable = true };
+        item.Click += (_, _) =>
+        {
+            try
+            {
+                Update(apply);
+            }
+            catch (Exception exception)
+            {
+                Trace.WriteLine($"[Tray] Applying the preset {name} failed: {exception}");
+            }
+        };
+        parent.Items.Add(item);
+        return (item, apply);
+    }
+
+    private void Update(Func<Settings, Settings> change) => app.SettingsService.Update(change);
+
+    // Check marks and the shortcut follow the current state each time the menu opens.
+    private void Refresh()
+    {
+        Settings current = app.SettingsService.Current;
+        glowOn.IsChecked = current.Enabled || app.IsDemoActive; // unchecking it during the demo ends it (ToggleGlow)
+        HotkeyStatus hotkey = app.Hotkey;
+        glowOn.InputGestureText = hotkey.State == HotkeyState.Registered ? hotkey.Gesture?.ToString() ?? "" : "";
+        string? update = app.Updates.ReadyVersion;
+        restartToUpdate.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
+        restartToUpdate.Header = update is null ? null : $"_Restart to update (version {update})";
+        demoMode.IsChecked = app.IsDemoActive;
+        demoMode.Visibility = app.IsDemoActive ? Visibility.Visible : Visibility.Collapsed;
+        foreach ((MenuItem item, AnimationMode mode) in modes) item.IsChecked = current.Animation == mode;
+        bool albumColorsShown = current.ColorMode == ColorMode.AlbumArt && !current.OverrideAlbumColor;
+        albumColors.IsChecked = albumColorsShown;
+        manualColors.IsChecked = !albumColorsShown;
+        foreach ((MenuItem item, Func<Settings, Settings> apply) in presets) item.IsChecked = PresetChoice.IsShowing(apply, current);
+#if DEBUG
+        debug.Refresh(current);
+#endif
+    }
+
+#if DEBUG
+    // "Render test (debug)": the render loop's live status, what the media session reader and the system watchers
+    // see, settings without a settings window yet (K7: When silent, Override album color, FPS cap, On battery, Pause in
+    // fullscreen apps), simulated system states on top of the real ones (battery, a global pause and a per-monitor
+    // pause), and the audio visualizer and demo mode (K8).
+    private sealed class DebugMenu
+    {
+        private readonly AppController app;
+        private readonly Action<Func<Settings, Settings>> update;
+        private readonly MenuItem status = new() { IsEnabled = false };
+        private readonly MenuItem media = new() { IsEnabled = false };
+        private readonly MenuItem system = new() { IsEnabled = false };
+        private readonly MenuItem hideWhenSilent = new() { Header = "When silent: Hide" };
+        private readonly MenuItem overrideAlbum = new() { Header = "Override album color" };
+        private readonly (MenuItem Item, int Cap)[] caps;
+        private readonly (MenuItem Item, BatteryBehavior Behavior)[] batteryBehaviors;
+        private readonly MenuItem pauseInFullscreen = new() { Header = "Pause in fullscreen apps" };
+        private readonly MenuItem onBattery = new() { Header = "Simulate running on battery" };
+        private readonly MenuItem pauseAll = new() { Header = "Pause everywhere (like a locked session)" };
+        private readonly MenuItem pausePrimary = new() { Header = "Pause the primary monitor (like a fullscreen video)" };
+        private readonly MenuItem demo = new() { Header = "Demo mode (synthetic 120 BPM beat)" };
+
+        public DebugMenu(AppController app, Action<Func<Settings, Settings>> update)
+        {
+            this.app = app;
+            this.update = update;
+            Root = new MenuItem { Header = "Render test (debug)" };
+            Root.Items.Add(status);
+            Root.Items.Add(media);
+            Root.Items.Add(system);
+            Root.Items.Add(new Separator());
+
+            hideWhenSilent.Click += (_, _) => update(s => s with
+            {
+                WhenSilent = s.WhenSilent == SilentBehavior.Hide ? SilentBehavior.IdleGlow : SilentBehavior.Hide,
+            });
+            Root.Items.Add(hideWhenSilent);
+
+            overrideAlbum.Click += (_, _) => update(s => s with { OverrideAlbumColor = !s.OverrideAlbumColor });
+            Root.Items.Add(overrideAlbum);
+
+            var fps = new MenuItem { Header = "FPS cap" };
+            caps = [Cap(fps, "30", 30), Cap(fps, "60", 60), Cap(fps, "120", 120), Cap(fps, "Native (display refresh)", 0)];
+            Root.Items.Add(fps);
+
+            var battery = new MenuItem { Header = "On battery" };
+            batteryBehaviors = [Battery(battery, "Normal", BatteryBehavior.Normal), Battery(battery, "Reduce (30 fps, half scale)", BatteryBehavior.Reduce),
+                Battery(battery, "Pause", BatteryBehavior.Pause)];
+            Root.Items.Add(battery);
+
+            pauseInFullscreen.Click += (_, _) => update(s => s with { PauseInFullscreen = !s.PauseInFullscreen });
+            Root.Items.Add(pauseInFullscreen);
+            Root.Items.Add(new Separator());
+
+            // Simulated on top of what the system watchers report: the glow pauses if either says so.
+            onBattery.Click += (_, _) => Simulate(s => s with { OnBattery = !s.OnBattery });
+            Root.Items.Add(onBattery);
+
+            pauseAll.Click += (_, _) => Simulate(s => s with { PausedEverywhere = !s.PausedEverywhere });
+            Root.Items.Add(pauseAll);
+
+            pausePrimary.Click += (_, _) => Simulate(s => s with
+            {
+                PausedMonitor = s.PausedMonitor is null ? DisplayMonitors.PrimaryDeviceName() : null,
+            });
+            Root.Items.Add(pausePrimary);
+            Root.Items.Add(new Separator());
+
+            var deviceLoss = new MenuItem { Header = "Simulate GPU device loss" };
+            deviceLoss.Click += (_, _) => app.Overlays?.SimulateDeviceLoss();
+            Root.Items.Add(deviceLoss);
+            Root.Items.Add(new Separator());
+
+            // K8: the same as --debug-visualizer and --demo, which Release builds keep as their only way in (doc 07
+            // Phase 7 keeps the visualizer and drops debug-only menus).
+            var visualizer = new MenuItem { Header = "Audio visualizer…" };
+            visualizer.Click += (_, _) => app.ShowVisualizer();
+            Root.Items.Add(visualizer);
+            demo.Click += (_, _) => app.SetDemo(!app.IsDemoActive);
+            Root.Items.Add(demo);
+        }
+
+        public MenuItem Root { get; }
+
+        public void Refresh(Settings current)
+        {
+            status.Header = app.Overlays is { } overlays ? Describe(overlays.Status) : "The overlay is not running";
+            media.Header = Describe(app.Media);
+            system.Header = app.SystemPauses is { } pauses ? $"System: {pauses.State}" : "System: not watched";
+            hideWhenSilent.IsChecked = current.WhenSilent == SilentBehavior.Hide;
+            overrideAlbum.IsChecked = current.OverrideAlbumColor;
+            foreach ((MenuItem item, int cap) in caps) item.IsChecked = current.FpsCap == cap;
+            foreach ((MenuItem item, BatteryBehavior behavior) in batteryBehaviors) item.IsChecked = current.OnBattery == behavior;
+            pauseInFullscreen.IsChecked = current.PauseInFullscreen;
+            SimulatedSystem simulated = app.SystemPauses?.Simulated ?? default;
+            onBattery.IsChecked = simulated.OnBattery;
+            pauseAll.IsChecked = simulated.PausedEverywhere;
+            pausePrimary.IsChecked = simulated.PausedMonitor is not null;
+            demo.IsChecked = app.IsDemoActive;
+        }
+
+        private void Simulate(Func<SimulatedSystem, SimulatedSystem> change)
+        {
+            if (app.SystemPauses is { } pauses) pauses.Simulated = change(pauses.Simulated);
+        }
+
+        // e.g. "Full rate (vsync): 60 frames/s, 60 presents/s, 1 of 1 overlay shown"
+        private static string Describe(RenderStatus status) => string.Format(CultureInfo.InvariantCulture,
+            "{0}: {1:0} frames/s, {2:0} presents/s, {3} of {4} overlay(s) shown{5}",
+            status.Pace, status.FramesPerSecond, status.PresentsPerSecond, status.VisibleOverlays, status.Overlays,
+            status.HalfScale ? ", half scale" : "");
+
+        // e.g. "Media: Spotify.exe, playing, art 64×64, album colors #E0503C / #3C78E0". The title stays out of it; the
+        // tooltip shows it.
+        private static string Describe(NowPlayingService? media)
+        {
+            if (media is null) return "Media: not running";
+            if (!media.IsAvailable) return "Media: unavailable (manual colors only)";
+            if (media.Current is not { } track) return "Media: no session (manual colors)";
+            string art = media.Art is { } image ? $"art {image.Width}×{image.Height}" : "no art";
+            string colors = media.AlbumPalette is { } palette
+                ? $"album colors {SrgbHex.Format(palette.Primary)} / {SrgbHex.Format(palette.Secondary)}"
+                : "no album colors (manual colors)";
+            // App IDs contain underscores, which a menu header would take as access keys.
+            string app = (track.SourceApp ?? "unknown app").Replace("_", "__", StringComparison.Ordinal);
+            return $"Media: {app}, {(track.IsPlaying ? "playing" : "not playing")}, {art}, {colors}";
+        }
+
+        private (MenuItem, int) Cap(MenuItem parent, string header, int cap)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => update(s => s with { FpsCap = cap });
+            parent.Items.Add(item);
+            return (item, cap);
+        }
+
+        private (MenuItem, BatteryBehavior) Battery(MenuItem parent, string header, BatteryBehavior behavior)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => update(s => s with { OnBattery = behavior });
+            parent.Items.Add(item);
+            return (item, behavior);
+        }
+    }
+#endif
 }

@@ -1,0 +1,88 @@
+<UserControl x:Class="Rimlight.App.SettingsUi.ColorPage"
+             x:ClassModifier="internal"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:local="clr-namespace:Rimlight.App.SettingsUi"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+             FontFamily="{DynamicResource ContentControlThemeFontFamily}"
+             FontSize="14">
+    <UserControl.Resources>
+        <ResourceDictionary Source="PageStyles.xaml" />
+    </UserControl.Resources>
+
+    <ScrollViewer Style="{StaticResource PageScroller}">
+        <StackPanel Style="{StaticResource PageContent}">
+            <TextBlock Style="{StaticResource PageTitle}" Text="Color" />
+
+            <Border Style="{StaticResource Row}">
+                <StackPanel>
+                    <TextBlock x:Name="SourceLabel" Style="{StaticResource RowLabel}" Text="Colors come from" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <RadioButton x:Name="AlbumArtChoice" Style="{StaticResource SegmentRadio}" GroupName="ColorSource"
+                                     Content="_Album art" Margin="0,0,4,0" AutomationProperties.Name="Colors from the album art"
+                                     Checked="OnSourceChanged" />
+                        <RadioButton x:Name="ManualChoice" Style="{StaticResource SegmentRadio}" GroupName="ColorSource"
+                                     Content="_Manual" AutomationProperties.Name="Manual colors" Checked="OnSourceChanged" />
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource RowDescription}" Margin="0,8,0,0"
+                               Text="Album art takes two colors from the cover of whatever is playing, and uses your colors when there is no cover." />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Row}">
+                <DockPanel>
+                    <ui:ToggleSwitch x:Name="OverrideSwitch" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="16,0,0,0"
+                                     AutomationProperties.Name="Override album color"
+                                     AutomationProperties.HelpText="Use your colors even when a song has cover art."
+                                     Checked="OnOverrideChanged" Unchecked="OnOverrideChanged" />
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource RowLabel}" Text="Override album color" />
+                        <TextBlock x:Name="OverrideDescription" Style="{StaticResource RowDescription}"
+                                   Text="Use your colors even when a song has cover art." />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- What's playing, its cover and the two colors taken from it. -->
+            <Border Style="{StaticResource Row}">
+                <DockPanel>
+                    <Border DockPanel.Dock="Left" Width="44" Height="44" CornerRadius="4" Margin="0,0,12,0"
+                            Background="{DynamicResource ControlFillColorSecondaryBrush}" ClipToBounds="True" VerticalAlignment="Center">
+                        <Image x:Name="Thumbnail" Stretch="UniformToFill" RenderOptions.BitmapScalingMode="HighQuality"
+                               AutomationProperties.Name="Album cover" />
+                    </Border>
+                    <StackPanel x:Name="SwatchPanel" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <Ellipse x:Name="AlbumPrimary" Width="22" Height="22" Margin="0,0,6,0"
+                                 Stroke="{DynamicResource ControlStrokeColorDefaultBrush}" StrokeThickness="1" />
+                        <Ellipse x:Name="AlbumSecondary" Width="22" Height="22"
+                                 Stroke="{DynamicResource ControlStrokeColorDefaultBrush}" StrokeThickness="1" />
+                    </StackPanel>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="NowPlayingHeading" Style="{StaticResource RowDescription}" Margin="0" />
+                        <TextBlock x:Name="NowPlayingText" Style="{StaticResource RowLabel}" TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap" />
+                        <TextBlock x:Name="AlbumColorsText" Style="{StaticResource RowDescription}" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <TextBlock Style="{StaticResource SectionHeader}" Text="Your colors" />
+            <local:GlowColorEditor x:Name="PrimaryEditor" />
+            <local:GlowColorEditor x:Name="SecondaryEditor" />
+
+            <Border Style="{StaticResource Row}">
+                <StackPanel>
+                    <DockPanel>
+                        <TextBlock x:Name="RatioValue" DockPanel.Dock="Right" Style="{StaticResource ValueText}" />
+                        <TextBlock Style="{StaticResource RowLabel}" Text="Color balance" />
+                    </DockPanel>
+                    <TextBlock Style="{StaticResource RowDescription}" Text="How much of the edge the first color covers; the second color takes the rest." />
+                    <Slider x:Name="RatioSlider" Margin="0,8,0,0" Minimum="10" Maximum="90" SmallChange="1" LargeChange="10"
+                            TickFrequency="1" IsSnapToTickEnabled="True" AutomationProperties.Name="Share of the first color in percent"
+                            ValueChanged="OnRatioChanged" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

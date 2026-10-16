@@ -1,7 +1,7 @@
 namespace Rimlight.Core.Audio;
 
 // Render-thread-owned rolling window. Empty chunks retain the latest samples;
-// no-packet timeout and silence policy belong to the C2 analyzer.
+// the no-packet timeout and the silence policy belong to AudioAnalyzer.
 internal sealed class SpectrumAnalyzer
 {
     // Driver glitches can deliver NaN, Inf or absurd values. They become 0 or are clamped on the way in,
