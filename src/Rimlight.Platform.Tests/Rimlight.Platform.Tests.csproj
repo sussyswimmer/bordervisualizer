@@ -34,6 +34,7 @@
     <Compile Include="../Rimlight.App/Visualizer/TripleBuffer.cs" Link="App/Visualizer/TripleBuffer.cs" />
     <Compile Include="../Rimlight.App/Visualizer/TuningParameters.cs" Link="App/Visualizer/TuningParameters.cs" />
     <Compile Include="../Rimlight.App/Visualizer/VisualizerFeed.cs" Link="App/Visualizer/VisualizerFeed.cs" />
+    <Compile Include="../Rimlight.App/SettingsUi/GlowRaster.cs" Link="App/SettingsUi/GlowRaster.cs" />
     <Compile Include="../Rimlight.App/SettingsUi/MonitorChoice.cs" Link="App/SettingsUi/MonitorChoice.cs" />
     <Compile Include="../Rimlight.App/SettingsUi/PresetChoice.cs" Link="App/SettingsUi/PresetChoice.cs" />
     <Compile Include="../Rimlight.App/SettingsUi/ShortcutChoice.cs" Link="App/SettingsUi/ShortcutChoice.cs" />
