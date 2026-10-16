@@ -58,14 +58,12 @@ public sealed class AudioReadingTests
     {
         // The overlay thread publishes Level = Bass = Beat = the counter's share; the UI thread must always read a set
         // that belongs together.
-        // The barrier starts both threads together and the do-while reads at least once: without them a fast writer could
-        // finish before the reader's first look, which happened on a Windows CI runner.
         long packed = 0;
-        bool done = false;
-        using var start = new Barrier(2);
+        bool done = false, readerRunning = false;
         var writer = new Thread(() =>
         {
-            start.SignalAndWait();
+            // A fast runner can finish every write before the reader's first read, so start once the reader is reading.
+            while (!Volatile.Read(ref readerRunning)) Thread.SpinWait(1);
             int sequence = 0;
             for (int i = 0; i < 2_000_000; i++)
             {
@@ -77,21 +75,18 @@ public sealed class AudioReadingTests
             Volatile.Write(ref done, true);
         });
         writer.Start();
-        start.SignalAndWait();
         long reads = 0, torn = 0;
-        bool last;
+        Volatile.Write(ref readerRunning, true);
         do
         {
-            last = Volatile.Read(ref done); // read before the value, so the final pass sees the writer's last reading
             AudioReading reading = AudioReading.Unpack(Volatile.Read(ref packed));
-            if (reading.Sequence < 0) continue;
             reads++;
+            if (reading.Sequence < 0) continue;
             float expected = reading.Sequence / 32767f;
             if (MathF.Abs(reading.Features.Level - expected) > 1e-4f || reading.Features.Level != reading.Features.Bass
                 || reading.Features.Bass != reading.Features.Beat || reading.Features.IsSilent != (reading.Sequence % 2 == 0))
                 torn++;
-        }
-        while (!last);
+        } while (!Volatile.Read(ref done));
         writer.Join();
         Assert.Equal(0, torn);
         Assert.True(reads > 0);

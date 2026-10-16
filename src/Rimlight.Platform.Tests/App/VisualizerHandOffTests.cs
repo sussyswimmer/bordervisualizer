@@ -46,7 +46,8 @@ public sealed class VisualizerHandOffTests
         // or a number smaller than before, would be looking at a buffer the writer was filling.
         const int Size = 64;
         var buffer = new TripleBuffer<long[]>(new long[Size], new long[Size], new long[Size]);
-        // The barrier starts both threads together and the do-while takes at least once (see AudioReadingTests).
+        // The barrier starts both threads together and the do-while takes at least once: without them a fast writer could
+        // publish everything before the reader's first look (AudioReadingTests' twin of this test failed that way on CI).
         bool done = false;
         using var start = new Barrier(2);
         var writer = new Thread(() =>
