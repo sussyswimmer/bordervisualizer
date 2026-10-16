@@ -46,9 +46,12 @@ public sealed class VisualizerHandOffTests
         // or a number smaller than before, would be looking at a buffer the writer was filling.
         const int Size = 64;
         var buffer = new TripleBuffer<long[]>(new long[Size], new long[Size], new long[Size]);
+        // The barrier starts both threads together and the do-while takes at least once (see AudioReadingTests).
         bool done = false;
+        using var start = new Barrier(2);
         var writer = new Thread(() =>
         {
+            start.SignalAndWait();
             for (long n = 1; n <= 2_000_000; n++)
             {
                 long[] back = buffer.Back;
@@ -58,9 +61,12 @@ public sealed class VisualizerHandOffTests
             Volatile.Write(ref done, true);
         });
         writer.Start();
+        start.SignalAndWait();
         long last = 0, takes = 0, torn = 0, backwards = 0;
-        while (!Volatile.Read(ref done))
+        bool finished;
+        do
         {
+            finished = Volatile.Read(ref done); // before the take, so the final pass gets the writer's last publish
             if (!buffer.TryTake(out long[] front)) continue;
             takes++;
             long first = front[0];
@@ -69,6 +75,7 @@ public sealed class VisualizerHandOffTests
             if (first <= last) backwards++;
             last = first;
         }
+        while (!finished);
         writer.Join();
         Assert.Equal(0, torn);
         Assert.Equal(0, backwards);

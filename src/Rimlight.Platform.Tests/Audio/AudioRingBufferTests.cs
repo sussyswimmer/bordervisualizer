@@ -112,8 +112,10 @@ public sealed class AudioRingBufferTests
         const int Total = 4_000_000;
         var ring = new AudioRingBuffer(Capacity);
         long written = 0, dropped = 0;
+        using var start = new Barrier(2); // both threads start together, so reads and writes really overlap
         var writer = new Thread(() =>
         {
+            start.SignalAndWait();
             float[] packet = new float[333];
             int value = 0;
             while (value < Total)
@@ -126,6 +128,7 @@ public sealed class AudioRingBufferTests
             }
         });
         writer.Start();
+        start.SignalAndWait();
 
         float[] frame = new float[Capacity];
         long seen = 0, notIncreasing = 0;
