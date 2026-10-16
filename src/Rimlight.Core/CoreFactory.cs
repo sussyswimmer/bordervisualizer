@@ -21,12 +21,13 @@ public static class CoreFactory
     /// volume; below the near-silence level (<see cref="AudioTuning.SilenceThresholdDb"/> − 20 dB) no beat fires.</para>
     /// <para><b>Character and dynamics</b> (Maxwell's feedback, round 1; docs/CORE-API.md §4.2).
     /// <see cref="AudioFeatures.Level"/> is how loud the moment is within the song, against a reference that remembers the
-    /// song's loud parts for about 20 s: a whispered verse after a chorus stays dim. With no drums it moves like a slow
-    /// wave (10× doc 03's attack, 5× its release); as drums take over it blends into doc 03's punchy Level.
-    /// <see cref="AudioFeatures.Beat"/> is each detected beat's grade, 0..1 (how kick-like, how accented, how loud
-    /// within the song), then decays per frame as before: a kick in a loud passage reads exactly 1, a sung syllable or a
-    /// plucked string 0. The same song at any volume gives the same light; a volume change mid-song settles in about
-    /// 25 s.</para>
+    /// song's loud parts for about 20 s (a gap of 1 s of near-silence between songs clears it): a whispered verse after a
+    /// chorus stays dim. With no drums it moves like a slow wave (10× doc 03's attack, 5× its release); as drums take
+    /// over it blends into doc 03's punchy Level.
+    /// <see cref="AudioFeatures.Beat"/> is each detected beat's grade, 0..1 (how kick-like, how drum-driven the music
+    /// has been, how accented, how loud within the song), then decays per frame as before: a kick in a loud groove reads
+    /// exactly 1, soft drums give smaller pulses, and a sung syllable, a plucked string or a bass guitar without drums 0.
+    /// The same song at any volume gives the same light; a volume change mid-song settles in about 25 s.</para>
     /// <para>Sensitivity is applied here once: it scales <see cref="AudioFeatures.Level"/> and each beat's grade, and
     /// lowers the beat threshold. The light engine must not apply it again. Setting <see cref="IAudioAnalyzer.Tuning"/> validates the value
     /// (invalid tuning throws and keeps the previous one); a <see cref="AudioTuning.WindowSize"/> change allocates,
@@ -39,10 +40,11 @@ public static class CoreFactory
     /// axis must use the actual call cadence, not an assumed 60 Hz. Each flux entry is the largest flux of that call,
     /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.BeatCount"/>
     /// counts every detected beat, whatever its grade. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is
-    /// 60 over the mean of the last 16 intervals (each up to 2 s) between accented beats that lie within ±25 % of their
+    /// 60 over the mean of the last 16 intervals (each up to 2 s) between tempo beats that lie within ±25 % of their
     /// median, or over the median when none does (every other beat missed), so missed or extra beats drop out and a
-    /// steady frame rate doesn't bias it (H-016). A beat within 0.3 s of a beat at least 1.4× as strong (an off-beat bass
-    /// note) is not accented. It is 0 until three intervals are in, and returns to 0 after 4 s without a beat.
+    /// steady frame rate doesn't bias it (H-016). Where kicks play, only kick-like beats at least 0.6× as strong as the
+    /// strongest recent kick are tempo beats (not an off-beat bass note); elsewhere every beat is. It is 0 until three
+    /// intervals are in, and returns to 0 after 4 s without a tempo beat.
     /// <see cref="IAudioAnalyzer.Reset"/> clears everything except the current <see cref="AudioFeatures.IsSilent"/>
     /// state.</para>
     /// </remarks>

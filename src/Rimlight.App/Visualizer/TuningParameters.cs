@@ -83,7 +83,7 @@ internal static class TuningParameters
             "Samples per analysis: a power of two from 1024 to 16384. Larger resolves bass better but reacts later.",
             Bands, 10, 14, 1, t => Math.Log2(t.WindowSize), (t, v) => t with { WindowSize = 1 << (int)Math.Round(v) },
             v => (1 << (int)Math.Round(v)).ToString(CultureInfo.CurrentCulture)),
-        new(nameof(AudioTuning.BassMinHz), "Bass from", "The bass band's lower edge (beats and Bass).",
+        new(nameof(AudioTuning.BassMinHz), "Bass from", "The bass band's lower edge (beat detection and Bass). How kick-like a beat is uses its own fixed band.",
             Bands, 0, 60, 1, t => t.BassMinHz, (t, v) => t with { BassMinHz = (float)v }, Hz),
         new(nameof(AudioTuning.BassMaxHz), "Bass to / Mid from", "Where the bass band ends and the mid band starts.",
             Bands, 80, 400, 5, t => t.BassMaxHz, (t, v) => t with { BassMaxHz = (float)v }, Hz),

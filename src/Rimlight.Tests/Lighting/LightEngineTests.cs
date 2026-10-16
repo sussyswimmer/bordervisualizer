@@ -860,14 +860,18 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     {
         // 10 s of 120 BPM kicks, 8 s without packets (WASAPI sends none while nothing plays), then 4 s of kicks.
         // Hide: visible while the music plays, gone 1.5 s after IsSilent, back within 150 ms of IsSilent clearing.
-        // Each analyzer beat pushes the phase by exactly 0.01 cycles on top of the drift.
+        // Each analyzer beat pushes the phase by 0.01 cycles × the height its pulse rises to (CORE-API §6.1), on top of
+        // the drift. Since Maxwell's feedback round 1 the analyzer grades each beat, and a groove has to establish itself
+        // (the first second only listens, the drive needs two kicks): the kicks up to 2 s pulse less or not at all, and
+        // every one after them is a full pulse.
         const int rate = 48000, step = rate / 60;
         float[] kicks = SyntheticAudio.KickTrack(rate, 10, 120, 0.8f, 0.2f);
         var analyzer = new AudioAnalyzer();
         var engine = new LightEngine();
-        float phase = 0;
-        double advance = 0;
-        int frames = 22 * 60, silentFrom = -1, silentUntil = -1, beats = 0;
+        float phase = 0, lastBeat = 0;
+        double advance = 0, heights = 0;
+        bool armed = true;
+        int frames = 22 * 60, silentFrom = -1, silentUntil = -1, beats = 0, full = 0;
         var visibility = new float[frames];
         for (int i = 0; i < frames; i++)
         {
@@ -877,15 +881,26 @@ public sealed class LightEngineTests(ITestOutputHelper output)
             AudioFeatures audio = analyzer.Process(samples, rate, Dt);
             LightState state = engine.Update(Dt, audio, Palette.Default, Hide, false);
             visibility[i] = state.Visibility;
-            if (i < 700) advance += Advance(phase, state.Phase);  // to 11.7 s: the last push has finished, IsSilent not yet
+            if (i < 700)
+            {
+                advance += Advance(phase, state.Phase);  // to 11.7 s: the last push has finished, IsSilent not yet
+                // The pushes the engine owes, by its documented rule: a rise of more than 0.1 from a fallen pulse is a
+                // beat, and a rise that goes on over the next frames adds its share.
+                if (armed && audio.Beat > lastBeat + 0.1f) { heights += audio.Beat; armed = false; }
+                else if (!armed && audio.Beat > lastBeat) heights += audio.Beat - lastBeat;
+                else if (audio.Beat < lastBeat) armed = true;
+                if (audio.Beat == 1 && lastBeat < 1) full++;      // a pulse that reaches exactly 1 (the kick fills its window)
+                lastBeat = audio.Beat;
+            }
             phase = state.Phase;
             if (i == 699) beats = analyzer.Diagnostics.BeatCount;
             if (audio.IsSilent && silentFrom < 0) silentFrom = i;
             if (!audio.IsSilent && silentFrom >= 0 && silentUntil < 0) silentUntil = i;
         }
-        output.WriteLine($"{beats} beats, phase +{advance:F5}; IsSilent from frame {silentFrom} until {silentUntil}");
+        output.WriteLine($"{beats} beats, {full} full pulses, phase +{advance:F5}; IsSilent from frame {silentFrom} until {silentUntil}");
         Assert.InRange(beats, 17, 20);
-        Assert.Equal(0.015 * 700 * Dt + 0.01 * beats, advance, 1e-5);
+        Assert.InRange(full, beats - 4, beats);
+        Assert.Equal(0.015 * 700 * Dt + 0.01 * heights, advance, 1e-5);
         Assert.All(visibility[18..silentFrom], v => Assert.Equal(1f, v));
         Assert.InRange(silentFrom, 600 + 115, 600 + 125);       // the analyzer's 2 s silence hold
         Assert.True(visibility[silentFrom + 88] > 0);
