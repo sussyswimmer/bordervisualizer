@@ -1,9 +1,29 @@
 namespace Rimlight.Core.Audio;
 
-// The real IAudioAnalyzer (doc 03 §2): AudioFrontEnd for Level/Bass, spectral-flux beats, silence detection
-// and diagnostics. One instance belongs to the render thread; Process never allocates after construction.
+// The real IAudioAnalyzer (doc 03 §2): AudioFrontEnd for the spectrum, Bass and doc 03's Level target, spectral-flux
+// beats, silence detection and diagnostics, plus the music's character and dynamics (Maxwell's feedback, round 1):
+//   Level  follows how loud this moment is within the song (SongLoudness) and moves like a slow wave when there are no
+//          drums. BeatCharacter's punch blends it toward doc 03's Level (the auto-gain bands with LevelAttackSeconds and
+//          LevelReleaseSeconds) as drums take over, scaled down in passages well under the song's loud parts.
+//   Beat   is each beat's grade (BeatCharacter: kick-like, accented, loud within the song), then decays as before.
+// One instance belongs to the render thread; Process never allocates after construction.
 internal sealed class AudioAnalyzer : IAudioAnalyzer
 {
+    // Level with no drums (punch 0): this many times doc 03's Level time constants, so a 30 ms attack becomes 0.3 s and
+    // a 250 ms release 1.25 s. The light then swells and eases with a phrase (0.5–2 s) instead of following syllables and
+    // plucks. Multiples rather than fixed values, so the debug visualizer's Level sliders still move both ends.
+    internal const float WaveAttackFactor = 10f;
+    internal const float WaveReleaseFactor = 5f;
+
+    // Level's target is the song position (SongLoudness) with doc 03's Level target (the auto-gain bands: the local
+    // contrast within the last few seconds) cutting up to ContrastDepth out of it. With no drums the slow envelope turns
+    // that into swells with the phrases; with drums it falls between hits. With drums the position also counts over
+    // GrooveKnee (full within 4.8 dB of the song's loud parts, half at 14 dB under them), so a groove keeps its full
+    // height. Doc 03's target alone averages about 0.6 against a position of about 0.9 for the same music, so it can't
+    // replace the position: drums coming in would dim the light.
+    internal const float ContrastDepth = 0.6f;
+    internal const float GrooveKnee = 0.8f;
+
     // Doc 03 sets hop = "whatever arrived since the last frame". Flux grows with the hop, so at 30 fps, or with
     // 50 ms packets landing in one frame, kicks stop standing out from the flux history. New samples are therefore
     // analyzed in equal steps of at most one 60 fps frame of audio (800 samples at 48 kHz). The newest samples
@@ -31,18 +51,23 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
     private const float MaxGapSeconds = 3600f;             // keeps the gap clocks finite after absurd dt values
 
     private AudioTuning tuning;
+    private float holdRms, silenceRms;   // the near-silence (auto-gain hold) and IsSilent entry levels, linear RMS
     private AudioFrontEnd frontEnd;
     private BeatDetector beats;
     private float[] analysisBuffer;   // decimated samples, or zeros fed in place of missing packets
     private readonly Decimator decimator = new();
     private readonly SilenceDetector silenceDetector = new();
+    private readonly SongLoudness loudness = new();
+    private readonly BeatCharacter character = new();
+    private readonly Envelope level = new();
     private int inputRate, analysisRate, maxStep, minBeatStep, pendingBeatSamples, zerosFed;
-    private float sinceData, silenceSeconds, beat;
+    private float sinceData, silenceSeconds;
 
     public AudioAnalyzer(AudioTuning? tuning = null)
     {
         this.tuning = tuning ?? new AudioTuning();
         Validate(this.tuning);
+        SetLevels(this.tuning);
         frontEnd = new AudioFrontEnd(this.tuning);
         beats = new BeatDetector(this.tuning.WindowSize / 2 + 1);
         analysisBuffer = new float[AnalysisBufferLength(this.tuning.WindowSize)];
@@ -61,6 +86,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         {
             ArgumentNullException.ThrowIfNull(value);
             Validate(value);
+            SetLevels(value);
             if (value.WindowSize != tuning.WindowSize)
             {
                 frontEnd = new AudioFrontEnd(value);
@@ -143,14 +169,25 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
             float fillDt = secondsPerSample * (skipped + fill);
             amplitude = frontEnd.Process(samples[..fill], analysisRate, fillDt);
             beats.Restart();
-            threshold = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning, frontEnd.WindowRms).Threshold;
+            BeatResult seeded = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning, frontEnd.WindowRms);
+            threshold = seeded.Threshold;
+            Step(seeded, fillDt);
             pendingBeatSamples = 0;
             start = fill;
         }
         if (samples.IsEmpty)
         {
             amplitude = frontEnd.Process(samples, analysisRate, dt);
-            threshold = beats.Update(frontEnd.Spectrum, idleZeros, tuning.WindowSize, analysisRate, dt, tuning, frontEnd.WindowRms).Threshold;
+            BeatResult result = beats.Update(frontEnd.Spectrum, idleZeros, tuning.WindowSize, analysisRate, dt, tuning, frontEnd.WindowRms);
+            threshold = result.Threshold;
+            // Between packets nothing new was heard: the pulse decays and Level eases on. Once missing packets count as
+            // digital silence, the song reference sees the gap too (a gap between songs, SongLoudness).
+            if (sinceData > tuning.NoPacketTimeoutSeconds) Step(result, dt);
+            else
+            {
+                character.Idle(dt, tuning);
+                UpdateLevel(dt);
+            }
         }
         else
         {
@@ -165,6 +202,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
                 bool analyze = pendingBeatSamples >= minBeatStep;
                 if (analyze) pendingBeatSamples = 0;
                 BeatResult result = beats.Update(frontEnd.Spectrum, analyze, tuning.WindowSize, analysisRate, stepDt, tuning, frontEnd.WindowRms);
+                Step(result, stepDt);
                 if (result.IsBeat) beatsFired++;
                 flux = MathF.Max(flux, result.Flux);
                 threshold = result.Threshold;
@@ -172,10 +210,33 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
             }
         }
 
-        beat = beatsFired > 0 ? 1 : beat * MathF.Exp(-dt / tuning.BeatDecaySeconds);
-        float level = Math.Clamp(amplitude.Level * tuning.Sensitivity, 0, 1);
+        character.EndFrame(dt, tuning);
         UpdateDiagnostics(flux, threshold, beatsFired);
-        return new AudioFeatures(level, amplitude.Bass, beat, isSilent);
+        return new AudioFeatures(Math.Clamp(level.Value * tuning.Sensitivity, 0, 1), amplitude.Bass, character.Beat, isSilent);
+    }
+
+    // The music's dynamics and character for one analysis step of the newest spectrum.
+    private void Step(in BeatResult result, float stepDt)
+    {
+        float rms = frontEnd.WindowRms;
+        // An all-zero window (idle, no packets) has no power; skip the sum, as the FFT is skipped then.
+        float power = rms > 0
+            ? BandAnalyzer.WeightedPower(frontEnd.Spectrum, tuning.WindowSize, analysisRate, tuning, SongLoudness.BassWeight, SongLoudness.MidWeight, SongLoudness.HighWeight)
+            : 0;
+        loudness.Update(power, rms > holdRms, rms <= silenceRms, stepDt);
+        character.Update(result.IsBeat, result.Flux, result.MidFlux, MathF.Sqrt(power), loudness.Position, stepDt, tuning);
+        UpdateLevel(stepDt);
+    }
+
+    // Level's target and time constants blend with the punch from a wave (no drums: where the moment sits in the song,
+    // slow) to a groove (drums: doc 03's punchy Level within the song position), the time constants geometrically.
+    private void UpdateLevel(float dt)
+    {
+        float punch = character.Punch, position = loudness.Position;
+        float scale = position + (MathF.Min(1, position / GrooveKnee) - position) * punch;
+        float attack = tuning.LevelAttackSeconds * MathF.Pow(WaveAttackFactor, 1 - punch);
+        float release = tuning.LevelReleaseSeconds * MathF.Pow(WaveReleaseFactor, 1 - punch);
+        level.Update(scale * (1 - ContrastDepth * (1 - frontEnd.LevelTarget)), dt, attack, release);
     }
 
     public void Reset()
@@ -184,8 +245,11 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         beats.Reset();
         decimator.Reset();
         silenceDetector.Reset();
+        loudness.Reset();
+        character.Reset();
+        level.Reset();
         inputRate = zerosFed = pendingBeatSamples = 0;
-        sinceData = silenceSeconds = beat = 0;
+        sinceData = silenceSeconds = 0;
         Array.Clear(Diagnostics.Spectrum);
         Array.Clear(Diagnostics.FluxHistory);
         Array.Clear(Diagnostics.ThresholdHistory);
@@ -194,6 +258,16 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
     }
 
     internal float FluxHistoryStoredSeconds => beats.StoredSeconds;
+
+    // For tests: the stages behind Level and Beat.
+    internal SongLoudness Loudness => loudness;
+    internal BeatCharacter Character => character;
+
+    private void SetLevels(AudioTuning value)
+    {
+        holdRms = AudioFrontEnd.HoldRms(value);
+        silenceRms = MathF.Pow(10, value.SilenceThresholdDb / 20);
+    }
 
     // The rate the spectrum, bands and diagnostics are computed at: the input rate divided by the decimation
     // factor (Decimator.FactorFor). Public as CoreFactory.AnalysisSampleRate for mapping bins to Hz.

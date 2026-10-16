@@ -56,24 +56,27 @@ internal static class SyntheticAudio
     // Frame times jitter by ±jitter. Audio arrives continuously, or in whole packets of packetSeconds (WASAPI
     // delivers 10–20 ms packets; Bluetooth and some drivers deliver larger ones), so frames can be empty.
     // afterFrame, if given, runs after each frame with the frame's end time, e.g. to sample the diagnostics.
+    // A beat is a frame on which Diagnostics.BeatCount rose (the detector fired). Until Maxwell's feedback round 1 this
+    // read Beat jumping to 1; Beat is now each beat's grade (kick-like, accented, loud within the song), so a weak
+    // kick under heavy noise is still a detected beat but no longer a full pulse. Detection itself is unchanged.
     public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0, Action<double>? afterFrame = null)
     {
         var random = new Random(seed);
         var beats = new List<float>();
         int packet = packetSeconds > 0 ? Math.Max(1, (int)MathF.Round(packetSeconds * sampleRate)) : 1;
-        int position = 0;
+        int position = 0, beatCount = analyzer.Diagnostics.BeatCount;
         double time = 0, end = samples.Length / (double)sampleRate;
-        float previousBeat = 0;
         while (time < end)
         {
             float dt = 1 / fps * (1 + jitter * (float)(random.NextDouble() * 2 - 1));
             time += dt;
             long arrived = Math.Min(samples.Length, (long)(time * sampleRate) / packet * packet);
             int count = (int)Math.Max(0, arrived - position);
-            var features = analyzer.Process(samples.AsSpan(position, count), sampleRate, dt);
+            analyzer.Process(samples.AsSpan(position, count), sampleRate, dt);
             position += count;
-            if (features.Beat >= 0.999f && previousBeat < 0.999f) beats.Add((float)time);
-            previousBeat = features.Beat;
+            int fired = analyzer.Diagnostics.BeatCount;
+            if (fired > beatCount) beats.Add((float)time);
+            beatCount = fired;
             afterFrame?.Invoke(time);
         }
         return beats;

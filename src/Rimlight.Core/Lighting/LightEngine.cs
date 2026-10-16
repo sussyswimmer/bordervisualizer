@@ -16,7 +16,7 @@ internal sealed class LightEngine : ILightEngine
 {
     internal const float LevelFloor = 0.35f;              // doc 07 Phase 3: Brightness × (0.35 + 0.65 × Level)
     internal const float DriftCyclesPerSecond = 0.015f;   // doc 07 Phase 3
-    internal const float BeatKickCycles = 0.01f;          // doc 07 Phase 3, per beat
+    internal const float BeatKickCycles = 0.01f;          // doc 07 Phase 3, per full beat (Beat 1)
     // Each kick is delivered as a push that decays with this time constant (the analyzer's Beat decay, doc 03):
     // 63 % lands within 120 ms. At 120 BPM an instant 0.01 step would visibly tick the gradient twice a second.
     internal const float KickSeconds = 0.12f;
@@ -35,7 +35,9 @@ internal sealed class LightEngine : ILightEngine
     // fade-in (H-011).
     internal const float MaxStepSeconds = 0.1f;
     internal const float WakeStepSeconds = 1f / 60;
-    // A beat is a rise of Beat by more than this; it re-arms once Beat falls. The analyzer jumps from ≤ 0.22 to 1.
+    // A beat is a rise of Beat by more than this; it re-arms once Beat falls. Its push is BeatKickCycles × the height
+    // the pulse rises to (Maxwell's feedback, round 1: the analyzer grades each beat 0..1, so a soft beat nudges the
+    // gradient and a kick pushes it the full 0.01 cycles), counting a rise that continues over the next frames.
     private const float OnsetRise = 0.1f;
     private const float Settle = 1e-4f;                   // fades snap to their target this close to it
     private const double KickRest = 1e-7;                 // a push with less than this left to travel is dropped
@@ -113,9 +115,20 @@ internal sealed class LightEngine : ILightEngine
         bool hidden = (gate == 0 && gateTarget == 0) || (shown == 0 && shownTarget == 0);
 
         float beat = Unit(audio.Beat);
-        bool onset = armed && beat > lastBeat + OnsetRise;
-        if (onset) armed = false;
-        else if (beat < lastBeat) armed = true;
+        float rise = 0;                                   // how much of a beat's height arrives on this frame
+        if (armed && beat > lastBeat + OnsetRise)
+        {
+            armed = false;
+            rise = beat;
+        }
+        else if (!armed && beat > lastBeat)
+        {
+            rise = beat - lastBeat;
+        }
+        else if (beat < lastBeat)
+        {
+            armed = true;
+        }
         lastBeat = beat;
 
         float weight = Smooth(music);
@@ -126,7 +139,7 @@ internal sealed class LightEngine : ILightEngine
         }
         else
         {
-            if (onset) kick += BeatKickCycles / KickSeconds * weight;
+            kick += BeatKickCycles / KickSeconds * weight * rise;
             // Exact integration of a push decaying with τ = KickSeconds: the total is BeatKickCycles at any frame rate.
             double decay = Math.Exp(-step / KickSeconds);
             double push = kick * KickSeconds * (1 - decay);

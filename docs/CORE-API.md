@@ -39,8 +39,8 @@ This reference describes Core as of C13. It is derived from the code, its XML do
 | `sampleRate` | Hz, the capture rate. |
 | `dtSeconds`, every `…Seconds` | Seconds. Core reads no clock: time comes only from `dtSeconds`. |
 | `AudioTuning` band edges | Hz. Levels are dBFS, gain rates dB/s, and `SilenceHoldMs` is milliseconds. |
-| `AudioFeatures.Level`, `Bass` | 0..1, normalized by auto-gain, so they don't depend on playback volume. |
-| `AudioFeatures.Beat`, `LightState.Pulse` | 0..1 pulse. |
+| `AudioFeatures.Level`, `Bass` | 0..1. Bass is normalized by auto-gain; Level is judged against the song (§4.2). Neither depends on playback volume. |
+| `AudioFeatures.Beat`, `LightState.Pulse` | 0..1 pulse: each beat's grade, then a decay (§4.2). |
 | `AnalyzerDiagnostics.Spectrum`, flux, thresholds | Amplitude units: \|X[k]\| × 4 / WindowSize, so a full-scale sine centered on a bin reads about 1. |
 | `EstimatedBpm` | Beats per minute, 0 while unknown. |
 | `CoreThicknessDip`, `CornerRadiusDip` | DIPs (1/96 inch). |
@@ -113,18 +113,28 @@ Each call returns a new instance of the real implementation. The K0 fakes were r
 - **High rates.** Capture at 75 kHz or above is decimated, so the bass band keeps about 5 bins (§3).
 - **Stalls.** More new audio than the window plus 16 steps in one call (about 0.3 s at 48 kHz) means the render loop stalled. Only the newest window plus four steps is analyzed. The flux statistics warm up again (0.25 s), and the tempo is kept.
 - **Sample-rate change.** The first call at a new rate resets the analysis, like `Reset`.
-- **Cost** (Linux test machine, informational): about 40 µs for a 60 fps frame at 48 kHz, with 0 bytes allocated.
+- **Cost** (Linux test machine, informational): about 40 µs for a 60 fps frame at 48 kHz, with 0 bytes allocated. The song reference, beat grading and wave (§4.2) add about a thousand multiply-adds a step, 1–2 µs; side by side on the style tracks the difference was within this machine's run-to-run noise (102–202 µs a frame with the light engine, against 114–200 µs before).
 
 ### 4.2 AudioFeatures
 
 | Field | Meaning |
 |---|---|
-| `Level` | 0..1. The weighted, auto-gain-normalized bands (doc 03 §2) through the Level envelope, times `Sensitivity`, clamped. |
+| `Level` | 0..1. How loud this moment is within the song, moving like a slow wave without drums and with the groove with them (below), times `Sensitivity`, clamped. |
 | `Bass` | 0..1. The normalized bass band through the Bass envelope. |
-| `Beat` | 1 on the frame a beat fires, then decays by exp(−dt / `BeatDecaySeconds`) each frame. |
+| `Beat` | The beat's grade, 0..1 (below), on the frame it fires (or on a later frame of its 35 ms onset window, if the grade grows), then decays by exp(−dt / `BeatDecaySeconds`) each frame. A kick in a loud passage reads exactly 1. |
 | `IsSilent` | True once the raw RMS has stayed below `SilenceThresholdDb` for `SilenceHoldMs`. False again as soon as it rises above `SilenceExitThresholdDb`. |
 
-**Beats.** A beat fires when the bass-band spectral flux exceeds the effective threshold. That threshold is the largest of three values over the last `FluxHistorySeconds`:
+**Character and dynamics (Maxwell's feedback, round 1).** Calm songs must move like a slow wave and never bounce on a whisper; rap and EDM keep bouncing on every kick; drums coming in make a song punchier; a chorus is brighter than a quiet verse. Three internal stages do this behind the frozen contract, with internal constants (no `AudioTuning` field or default changed):
+
+- **Song reference** (`SongLoudness`). The momentary loudness (band power weighted 0.5 / 1 / 1.5 for bass / mid / high, smoothed with τ = 0.25 s) goes into a histogram that forgets with τ = 10 s. Its 90th percentile is the song's loud parts. The **position** is 1 there and falls linearly to 0 at 24 dB below; it is 0 while the window is under `SilenceThresholdDb`. A verse 16 dB under the chorus sits at about a third for about 20 s, where doc 03's 4 s auto-gain had stretched it back to the full range within about 6 s. A gap of 1 s under the silence level (between songs) keeps a quarter of the memory. Until the memory fills, a prior says the loud parts are 4 dB above the loudest moment so far (4 s of virtual loudness that fades with the memory), so a quiet opening isn't judged as the top.
+- **Beat grade** (`BeatCharacter`). The product of: *kick-like*, the bass flux over the broadband amplitude of the same window (smoothstep 0.3 → 0.7) times the bass share of the onset's rise, bass / (bass + mid flux) over the onset window (smoothstep 0.25 → 0.35); *accent*, the flux over 0.85 × the strongest recent onset (halving every 1.5 s), capped at 1; *loud*, the position (smoothstep 0.3 → 0.7); and `Sensitivity`, clamped to 1. On the procedural style tracks (`tools/audio-tools/StyleTracks.cs`), every voice or guitar onset of the drumless ballads, and every syllable of a solo baritone, grades 0; 808s, EDM kicks and acoustic kicks grade 1; an EDM off-beat bass note at half a kick's flux about 0.6.
+- **Punch**, 0..1: every graded onset adds 0.5 × its kick-likeness; 1.5 s after the last kick-like onset it fades with τ = 2.5 s.
+
+**Level.** The target is scale × (1 − 0.6 × (1 − doc 03's Level target)), where doc 03's target is the weighted auto-gain bands (the contrast within the last few seconds) and scale is the position, or with drums min(1, position / 0.8). The envelope's time constants are `LevelAttackSeconds` × 10^(1 − punch) and `LevelReleaseSeconds` × 5^(1 − punch): 0.3 s / 1.25 s with no drums, doc 03's 30 / 250 ms in a groove. On the style tracks the drumless ballad's brightness has 0.2–0.7 % of its variance above 3 Hz (doc 03's Level gave 3–5 %, with pulses 7–10 %) and a chorus is 1.7× as bright as the whispered verse after it (1.2×).
+
+**Volume.** The whole chain is scale-invariant: the same song at −20 dB gives the same light from 2 s (doc 03 §5). A volume change in the middle of a song shifts every loudness at once, and the light looks as before once the reference has turned over: within 0.1 of Intensity about 25 s after a 20 dB step down and 6 s after a step up (doc 03's auto-gain took 5 and 15 s). That longer warm-up is the price of judging a verse against the chorus.
+
+**Beats.** Detection is doc 03's and unchanged: a beat fires (`BeatCount` rises) when the bass-band spectral flux exceeds the effective threshold, whatever its grade. That threshold is the largest of three values over the last `FluxHistorySeconds`:
 
 - mean + k·σ, with k = `FluxThresholdMultiplier` / √Sensitivity;
 - the median flux × (1 + 9 / √Sensitivity), a guard against steady noise;
@@ -132,7 +142,7 @@ Each call returns a new instance of the real implementation. The K0 fakes were r
 
 The detector also needs the history to be warm (a quarter of `FluxHistorySeconds` of real time), the window above the near-silence level (`SilenceThresholdDb` − 20 dB, −80 dBFS), and `BeatRefractorySeconds` since the last beat. Volume doesn't change which beats fire.
 
-**Sensitivity is applied once, here (H-007).** It multiplies `Level` and lowers both beat criteria. The light engine never applies it again. Keep `analyzer.Tuning.Sensitivity` equal to `Settings.Sensitivity`: set it at creation and on each settings change.
+**Sensitivity is applied once, here (H-007).** It multiplies `Level` and each beat's grade, and lowers both beat criteria. The light engine never applies it again. Keep `analyzer.Tuning.Sensitivity` equal to `Settings.Sensitivity`: set it at creation and on each settings change.
 
 ### 4.3 AudioTuning
 
@@ -144,10 +154,10 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 | `BassMinHz` / `BassMaxHz` | 30 / 150 Hz | ≥ 0, strictly increasing | Bass band (beats, `Bass`). A band narrower than one bin uses the bin below its center. |
 | `MidMaxHz` / `HighMaxHz` | 2000 / 12000 Hz | Strictly increasing | Mid is [BassMax, MidMax), High is [MidMax, HighMax]. |
 | `MagnitudeEpsilon` | 1e-9 | > 0 | Added before converting to dB. |
-| `PeakHalfLifeSeconds` | 4 s | > 0 | Auto-gain peak half-life. |
+| `PeakHalfLifeSeconds` | 4 s | > 0 | Auto-gain peak half-life. Auto-gain normalizes `Bass` and the local contrast inside `Level`; the song-level reference is internal (§4.2). |
 | `FloorRiseDbPerSecond` | 1 dB/s | ≥ 0 | Auto-gain floor rise. The floor drops at once, and holds through near-silence. |
 | `MinimumRangeDb` | 12 dB | > 0 | Smallest normalization range. |
-| `LevelAttackSeconds` / `LevelReleaseSeconds` | 0.030 / 0.250 s | > 0 | Level envelope. |
+| `LevelAttackSeconds` / `LevelReleaseSeconds` | 0.030 / 0.250 s | > 0 | Level envelope with drums; 10× and 5× these with none (§4.2). |
 | `BassAttackSeconds` / `BassReleaseSeconds` | 0.015 / 0.180 s | > 0 | Bass envelope. |
 | `LevelBassWeight` / `LevelMidWeight` / `LevelHighWeight` | 0.55 / 0.35 / 0.10 | Each 0..1 | Level target = clamp(Σ weight × band, 0, 1). They need not sum to 1. |
 | `FluxHistorySeconds` | 1 s | Above 0, at most 4 s | Window for the flux statistics. |
@@ -155,7 +165,7 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 | `MinFlux` | 0.01 | ≥ 0 | Relative to the level: a beat needs flux > `MinFlux` × the window RMS. |
 | `BeatRefractorySeconds` | 0.180 s | ≥ 0 | Shortest time between beats. |
 | `BeatDecaySeconds` | 0.120 s | > 0 | Time constant of `Beat`'s decay. |
-| `Sensitivity` | 1 | 0.25–2 | See §4.2. |
+| `Sensitivity` | 1 | 0.25–2 | Scales `Level` and each beat's grade, and relaxes the beat threshold (§4.2). |
 | `NoPacketTimeoutSeconds` | 0.100 s | 0.03 s–1 h | Empty frames for this long count as digital silence. |
 | `SilenceThresholdDb` | −60 dBFS | Finite | `IsSilent` entry level. The near-silence gate sits 20 dB below it. |
 | `SilenceExitThresholdDb` | −55 dBFS | ≥ the entry level | `IsSilent` exit level (hysteresis). |
@@ -172,8 +182,8 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 | `Spectrum` | WindowSize / 2 + 1 bins, from DC to Nyquist, in amplitude units. Bin k is at k × `CoreFactory.AnalysisSampleRate(rate)` / WindowSize Hz. |
 | `FluxHistory` | 240 entries, exactly one per `Process` call (empty spans included), oldest first and 0 until filled. Each entry is the largest flux among the steps of that call's new samples, and 0 on a frame without new samples. A time axis must use the real call cadence. |
 | `ThresholdHistory` | 240 entries in step with `FluxHistory`: the effective beat threshold after each call, in flux units. |
-| `EstimatedBpm` | 60 / the mean of the last 16 beat intervals (each up to 2 s) that lie within ±25 % of their median. Missed and extra beats drop out, and a steady frame rate doesn't bias it (H-016: 126 BPM at a steady 60 fps reads 125.8–126.0, not 124.1). If no interval lies that close, which needs an even count split far apart (every other beat missed), it is 60 / the median. It is 0 until three intervals are in, and returns to 0 after 4 s without a beat. |
-| `BeatCount` | Beats since construction, `Reset` or a `WindowSize` change. |
+| `EstimatedBpm` | 60 / the mean of the last 16 intervals (each up to 2 s) between accented beats that lie within ±25 % of their median. A beat is accented unless it comes within 0.3 s of the previous beat with under 70 % of its flux: four-on-the-floor with a bass note on every off-beat reads 128, not 256. Missed and extra beats drop out, and a steady frame rate doesn't bias it (H-016: 126 BPM at a steady 60 fps reads 125.8–126.0, not 124.1). If no interval lies that close, which needs an even count split far apart (every other beat missed), it is 60 / the median. It is 0 until three intervals are in, and returns to 0 after 4 s without a beat. |
+| `BeatCount` | Beats since construction, `Reset` or a `WindowSize` change, every detected beat whatever its grade (a sung syllable the detector fired on counts, with a Beat of 0). |
 
 `EstimatedBpm` and `BeatCount` have public setters only because the contract class is shared. Treat them as read-only.
 
@@ -223,7 +233,7 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 
 ## 6. Lighting: `ILightEngine`
 
-`LightState Update(float dtSeconds, in AudioFeatures audio, Palette palette, Settings settings, bool paused)` is called once per frame, with the palette last passed to `SetTarget`, the current settings snapshot and this engine's pause flag. One update costs about 70 ns and allocates nothing.
+`LightState Update(float dtSeconds, in AudioFeatures audio, Palette palette, Settings settings, bool paused)` is called once per frame, with the palette last passed to `SetTarget`, the current settings snapshot and this engine's pause flag. The music's character reaches it only through `Level` and the graded `Beat` (§4.2). One update costs about 70 ns and allocates nothing.
 
 ### 6.1 LightState
 
@@ -234,8 +244,8 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 | `Intensity` | Music Sync: Brightness × (0.35 + 0.65 × Level). Idle Glow: Brightness × 0.9 × (1 + 0.1 sin(2π t / 6 s)), which breathes between 81 % and 99 % of Brightness. Between the two it crossfades (§6.2). **Excludes Visibility.** |
 | `Spread` | `Glow`, 0..1. The renderer maps it to pixels. |
 | `CoreThicknessDip` | `CoreThicknessDip`, clamped to 0..40. |
-| `Phase` | In [0, 1). It drifts 0.015 cycles/s, and each beat adds 0.01 cycles as a push that decays with τ = 120 ms (the same total at any frame rate). A beat is `Beat` rising by more than 0.1, re-armed once it falls. Both scale with the Music Sync weight, so Idle Glow has no drift. |
-| `Pulse` | `Beat`, unsmoothed, times the Music Sync weight. |
+| `Phase` | In [0, 1). It drifts 0.015 cycles/s, and each beat adds 0.01 cycles × the height `Beat` rises to, as a push that decays with τ = 120 ms (the same total at any frame rate). A beat is `Beat` rising by more than 0.1, re-armed once it falls; a rise that continues over the next frames adds its share. Both scale with the Music Sync weight, so Idle Glow has no drift. |
+| `Pulse` | `Beat` (the graded pulse), unsmoothed, times the Music Sync weight. |
 | `Visibility` | 0..1. Carries every fade (§6.2). |
 
 **Intensity and Visibility (H-008 item 2, binding).** The renderer multiplies alpha by both. Undefined enum values act as the defaults. Non-finite settings use the `Settings` defaults (Brightness 0.8, Glow 0.45, PrimaryRatio 0.6, CoreThicknessDip 6). The engine never reads `Settings.Sensitivity` (H-007).

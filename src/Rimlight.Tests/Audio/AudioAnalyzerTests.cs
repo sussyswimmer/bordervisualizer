@@ -86,6 +86,28 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void OffBeatBassNotesAreBeatsButNotTempo()
+    {
+        // Maxwell's feedback, round 1: four-on-the-floor with a bass note on every off-beat, at under half the kick's
+        // flux. Both are bass onsets and both fire (BeatCount), but only the accented ones count for the tempo, which
+        // would otherwise read the off-beats' 256 BPM (BeatDetector.TempoAccentRatio).
+        const int rate = 48000;
+        const float bpm = 128, interval = 60 / bpm;
+        float[] kicks = SyntheticAudio.KickTrack(rate, 20, bpm, 0.8f, 0.05f);
+        for (int i = 0; i < kicks.Length; i++)
+        {
+            float since = (i / (float)rate + interval / 2) % interval;
+            kicks[i] += 0.3f * MathF.Min(1, since / 0.005f) * MathF.Exp(-since / 0.15f) * MathF.Sin(2 * MathF.PI * 55 * since);
+        }
+        var analyzer = new AudioAnalyzer();
+        var beats = SyntheticAudio.Run(analyzer, kicks, rate);
+        int expectedKicks = (int)(18 / interval);
+        output.WriteLine($"{beats.Count(t => t >= 2)} beats for {expectedKicks} kicks, tempo {analyzer.Diagnostics.EstimatedBpm:F2}");
+        Assert.True(beats.Count(t => t >= 2) >= 1.6 * expectedKicks);
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, bpm - 2, bpm + 2);
+    }
+
+    [Fact]
     public void MusicLikeMixTracksTheKick()
     {
         var analyzer = new AudioAnalyzer();

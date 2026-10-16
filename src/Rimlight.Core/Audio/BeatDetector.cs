@@ -1,6 +1,8 @@
 namespace Rimlight.Core.Audio;
 
-internal readonly record struct BeatResult(bool IsBeat, float Flux, float Threshold);
+// MidFlux: the positive spectral flux over the Mid band in the same step and units, for BeatCharacter (a kick's rise is
+// mostly bass, a voice's is mostly its harmonics). It doesn't take part in detection.
+internal readonly record struct BeatResult(bool IsBeat, float Flux, float Threshold, float MidFlux = 0);
 
 // Spectral-flux beat detection on the bass band (doc 03 §2). All storage is allocated up front.
 // Flux is measured in amplitude units: magnitudes are scaled by 4/N, so a full-scale sine centered
@@ -29,15 +31,23 @@ internal sealed class BeatDetector
     private const float InlierTolerance = 0.25f; // intervals this far from the median (a share of it) are not tempo
     private const float StaleBpmSeconds = 4f;    // no beat for this long: the tempo is unknown again
 
+    // Tempo counts accented beats only (Maxwell's feedback, round 1). Four-on-the-floor EDM often puts a bass note on
+    // every off-beat; it is a bass onset like the kick, at about half the kick's flux, and with it every interval is half
+    // a beat (about 250 BPM for 128). A beat whose flux is under TempoAccentRatio of a beat less than TempoWindowSeconds before it
+    // still counts as a beat (BeatCount, the light), but not as a tempo beat. Kicks at any tempo up to 200 BPM are more
+    // than 0.3 s apart, so a steady kick always counts.
+    internal const float TempoAccentRatio = 0.7f;
+    internal const float TempoWindowSeconds = 0.3f;
+
     private readonly float[] previous;
     private readonly float[] fluxValues = new float[MaxHistory];
     private readonly float[] fluxDurations = new float[MaxHistory];
     private readonly float[] selection = new float[MaxHistory];
     private readonly float[] intervals = new float[IntervalCount];
     private readonly float[] sortedIntervals = new float[IntervalCount];
-    private int fluxHead, fluxCount, intervalHead, intervalCount, seededStart, seededEnd;
-    private bool hasBeat;
-    private float sinceBeat, sinceFlux, lastThreshold;
+    private int fluxHead, fluxCount, intervalHead, intervalCount, seededStart, seededEnd, seededMidStart, seededMidEnd;
+    private bool hasBeat, hasTempoBeat;
+    private float sinceBeat, sinceTempoBeat, sinceFlux, lastThreshold, lastBeatFlux;
 
     public BeatDetector(int spectrumLength) => previous = new float[spectrumLength];
 
@@ -54,6 +64,7 @@ internal sealed class BeatDetector
     public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning, float windowRms)
     {
         sinceBeat += dtSeconds;
+        sinceTempoBeat += dtSeconds;
         sinceFlux += dtSeconds;
         if (hasBeat && sinceBeat > StaleBpmSeconds)
         {
@@ -73,6 +84,17 @@ internal sealed class BeatDetector
             if (k >= seededStart && k < seededEnd) flux += MathF.Max(0, magnitude - previous[k]);
             previous[k] = magnitude;
         }
+        // The Mid band's flux, seeded the same way. Its bins never overlap the bass band's (BandAnalyzer.BassBins).
+        (int midStart, int midEnd) = BandAnalyzer.MidBins(magnitudes.Length, (float)sampleRate / windowSize, tuning);
+        float midFlux = 0;
+        for (int k = midStart; k < midEnd; k++)
+        {
+            float magnitude = magnitudes[k] * scale;
+            if (k >= seededMidStart && k < seededMidEnd) midFlux += MathF.Max(0, magnitude - previous[k]);
+            previous[k] = magnitude;
+        }
+        seededMidStart = midStart;
+        seededMidEnd = midEnd;
         bool seeded = seededEnd > seededStart;
         seededStart = start;
         seededEnd = end;
@@ -116,11 +138,18 @@ internal sealed class BeatDetector
 
         if (isBeat)
         {
-            if (hasBeat && sinceBeat <= MaxIntervalSeconds) AddInterval(sinceBeat);
+            bool accented = !hasBeat || sinceBeat >= TempoWindowSeconds || flux >= TempoAccentRatio * lastBeatFlux;
+            if (accented)
+            {
+                if (hasTempoBeat && sinceTempoBeat <= MaxIntervalSeconds) AddInterval(sinceTempoBeat);
+                hasTempoBeat = true;
+                sinceTempoBeat = 0;
+            }
             hasBeat = true;
             sinceBeat = 0;
+            lastBeatFlux = flux;
         }
-        return new BeatResult(isBeat, flux, lastThreshold);
+        return new BeatResult(isBeat, flux, lastThreshold, midFlux);
     }
 
     // Real time covered by the stored flux history, for tests.
@@ -138,16 +167,16 @@ internal sealed class BeatDetector
     // The tempo estimate is kept (it goes stale on its own).
     public void Restart()
     {
-        fluxHead = fluxCount = seededStart = seededEnd = 0;
+        fluxHead = fluxCount = seededStart = seededEnd = seededMidStart = seededMidEnd = 0;
         sinceFlux = 0;
     }
 
     public void Reset()
     {
         Array.Clear(previous);
-        fluxHead = fluxCount = intervalHead = intervalCount = seededStart = seededEnd = 0;
-        hasBeat = false;
-        sinceBeat = sinceFlux = lastThreshold = 0;
+        fluxHead = fluxCount = intervalHead = intervalCount = seededStart = seededEnd = seededMidStart = seededMidEnd = 0;
+        hasBeat = hasTempoBeat = false;
+        sinceBeat = sinceTempoBeat = sinceFlux = lastThreshold = lastBeatFlux = 0;
         EstimatedBpm = 0;
     }
 

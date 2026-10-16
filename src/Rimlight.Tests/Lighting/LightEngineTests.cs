@@ -174,6 +174,38 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void AGradedBeatPushesInProportionToItsHeight()
+    {
+        // Maxwell's feedback, round 1: the analyzer grades each beat 0..1. A beat of 0.5 pushes 0.005 cycles, one rising
+        // from a leftover 0.3 to 0.8 pushes 0.008 (the height it reaches), and a rise of 0.1 or less is no beat at all.
+        var engine = Settled(Music, Loud);
+        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        double advance = 0, time = 0;
+        void Step(float beat)
+        {
+            float next = engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, Music, false).Phase;
+            advance += Advance(phase, next);
+            phase = next;
+            time += Dt;
+        }
+        void Decay(float from)
+        {
+            for (int i = 0; i < 120; i++) Step(from *= MathF.Exp(-Dt / 0.12f));
+        }
+        Step(0.5f);
+        Decay(0.5f);
+        Assert.Equal(0.015 * time + 0.005, advance, 1e-5);
+        Step(0.3f);
+        Step(0.29f);
+        Step(0.8f);
+        Decay(0.8f);
+        Assert.Equal(0.015 * time + 0.005 + 0.003 + 0.008, advance, 1e-5);   // the 0.3 is a beat too
+        Step(0.09f);
+        Decay(0.09f);
+        Assert.Equal(0.015 * time + 0.016, advance, 1e-5);
+    }
+
+    [Fact]
     public void ABeatCountsOnceHoweverItRises()
     {
         // A Beat that ramps up over several frames, or repeats on dt = 0 frames, is one beat. A later beat counts again.
