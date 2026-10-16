@@ -112,9 +112,12 @@ internal sealed class GlowRaster
             BuildShape(corner, core, spread, minHalf);
 
         // Per frame: the glow falls off as exp(-depth / spread), and the beat pushes it further in (doc 04 §3 step 2).
-        // The band's light doesn't change with the beat, so it is cached with the shape.
-        float pulsedSpread = MathF.Max(spread * (1 + 0.35f * pulse), 1);
-        float gain = frame.Intensity * (1 + 0.25f * pulse);
+        // The band's light doesn't change with the beat, so it is cached with the shape. The spread's floor is the
+        // shader's (K7 floored it at a whole pixel, which at about a quarter pixel per DIP drew Glow 0's hairline up to
+        // about 40 code values brighter than the shader does at this scale). The gain scales the whole profile, as in
+        // the shader.
+        float pulsedSpread = GlowProfile.PulsedSpread(spread, pulse);
+        float gain = GlowProfile.Gain(frame.Intensity, pulse);
         float visibility = frame.Visibility;
         // Beyond this depth the glow is under half a code value (GlowPeak e^(-depth/spread) gain visibility < 1/510),
         // so pixels without band light are transparent there.
@@ -132,8 +135,7 @@ internal sealed class GlowRaster
                 pixels[p] = 0;
                 continue;
             }
-            float shape = GlowProfile.Combine(GlowProfile.Glow(depth, pulsedSpread), band);
-            float alpha = GlowProfile.SoftClip(shape * gain) * visibility;
+            float alpha = GlowProfile.Combine(GlowProfile.Glow(depth, pulsedSpread), band) * gain * visibility;
             if (alpha < 0.5f / 255)
             {
                 pixels[p] = 0;

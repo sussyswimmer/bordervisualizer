@@ -16,8 +16,9 @@ public sealed class GlowProfileTests
     private static readonly float[] Thicknesses = [0, 0.5f, 1, 2, 3, 4, 6, 8, 12, 20, 30, 40];
     private static readonly float[] Glows = [0, 0.1f, 0.15f, 0.2f, 0.3f, 0.45f, 0.6f, 0.9f, 1];
 
-    // Intensity and Pulse together. Up to a gain of 0.9 (Intensity x (1 + 0.25 Pulse)) alpha is the shape times the
-    // gain; above it SoftClip rolls the top off. Default Brightness 0.8 tops out at a gain of 0.8 without a beat.
+    // Intensity and Pulse together. Up to a gain of 0.9 (Intensity x (1 + 0.25 Pulse)) the gain is used as it is;
+    // above it GlowProfile.Gain rolls it off under 1, so the profile is scaled, never reshaped. Default Brightness 0.8
+    // tops out at a gain of 0.8 without a beat and 1 on a full one; Brightness 100 % reaches 1.25.
     private static readonly (float Intensity, float Pulse)[] BelowTheKnee = [(0.3f, 0), (0.5f, 0), (0.72f, 0), (0.72f, 0.25f), (0.6f, 0.5f), (0.8f, 0), (0.9f, 0)];
     private static readonly (float Intensity, float Pulse)[] AnyGain = [.. BelowTheKnee, (0.8f, 1), (1, 0), (1, 0.5f), (1, 1)];
 
@@ -58,9 +59,10 @@ public sealed class GlowProfileTests
     public void TheDefaultLookFadesWithoutALine(int width, int height, float dpi, bool half)
     {
         // At the default Thickness and Glow the light falls from the edge with a slope that only ever eases off: no
-        // inflection, which is where the eye puts a line. The solid core's inner edge made the drop between neighbours
-        // jump by about 29 code values at these settings (see TheOldSolidCoreFailsTheseChecks).
-        foreach ((float intensity, float pulse) in BelowTheKnee)
+        // inflection, which is where the eye puts a line. That holds at every brightness and beat, because the gain
+        // only scales the profile. The solid core's inner edge made the drop between neighbours jump by about 29 code
+        // values at these settings (see TheOldSolidCoreFailsTheseChecks).
+        foreach ((float intensity, float pulse) in AnyGain)
         {
             GlowConstants c = Surface(width, height, dpi, half, Defaults.CoreThicknessDip, Defaults.Glow, intensity, pulse);
             double growth = LargestGrowthOfTheDrop(EdgeCodes(c), from: 0);
@@ -73,22 +75,64 @@ public sealed class GlowProfileTests
     [MemberData(nameof(Surfaces))]
     public void NoSettingDrawsABar(int width, int height, float dpi, bool half)
     {
-        // At any Thickness and Glow the drop from one pixel to the next never jumps, inside the outermost pixel
-        // pair, by more than a code value (a band much wider than its glow eases in over a soft shoulder; the worst
-        // measured is 0.8). The outermost pair may round over by a few (5.4 at most, a wide band on a hairline glow,
-        // both near full at the very edge). The solid core's inner edge jumped by 29 to 31.
+        // At any Thickness, Glow, brightness and beat the drop from one pixel to the next never jumps, inside the
+        // outermost pixel pair, by more than about a code value (a band much wider than its glow eases in over a soft
+        // shoulder; the worst measured is 0.94 up to a gain of 0.9 and 1.02 at the largest gain: Thickness 30 on
+        // Glow 0.2, 1080p at 150 % and half scale, a full beat at Brightness 100 %). The outermost pair may round over
+        // by a few (5.9 at most, a wide band on a hairline glow, both near full at the very edge). The solid core's
+        // inner edge jumped by 29 to 31; clipping each pixel instead of the gain drew a rim on the beat (see
+        // TheseChecksCatchAKinkedBlendAndAClippedPixel).
         foreach (float thickness in Thicknesses)
             foreach (float glow in Glows)
-                foreach ((float intensity, float pulse) in BelowTheKnee)
+                foreach ((float intensity, float pulse) in AnyGain)
                 {
                     GlowConstants c = Surface(width, height, dpi, half, thickness, glow, intensity, pulse);
                     string what = Describe(width, height, dpi, half, thickness, glow, intensity, pulse);
                     double[] edge = EdgeCodes(c);
                     double inside = LargestGrowthOfTheDrop(edge, from: 2);
-                    Assert.True(inside <= 1, $"{what}: the drop grows by {inside:0.00} code values inside the edge");
+                    Assert.True(inside <= 1.1, $"{what}: the drop grows by {inside:0.00} code values inside the edge");
                     double outermost = LargestGrowthOfTheDrop(edge, from: 0);
                     Assert.True(outermost <= 6, $"{what}: the drop grows by {outermost:0.00} code values at the edge");
                 }
+    }
+
+    [Theory]
+    [MemberData(nameof(Surfaces))]
+    public void TheFadeNeverEasesOffFasterThanItsLights(int width, int height, float dpi, bool half)
+    {
+        // The other direction of a kink: where a steep light hands over to a shallow one with a jump in the slope, the
+        // drop between neighbours shrinks suddenly (a Mach band; max(glow, band) does that). The glow and the band are
+        // exponentials, and their screen blend subtracts their product, which falls faster than either, so from one
+        // pixel pair to the next the drop shrinks at most by the faster light's own factor, e^(-1 / its e-folding
+        // distance). Along the edge both fields' distances are the pixel's, so the bound is exact.
+        foreach (float thickness in Thicknesses)
+            foreach (float glow in Glows)
+                foreach ((float intensity, float pulse) in AnyGain)
+                {
+                    GlowConstants c = Surface(width, height, dpi, half, thickness, glow, intensity, pulse);
+                    double shrink = LargestShrinkOfTheDrop(EdgeCodes(c), Fastest(c));
+                    Assert.True(shrink <= 1e-3, $"{Describe(width, height, dpi, half, thickness, glow, intensity, pulse)}: " +
+                        $"the drop shrinks by {shrink:0.000} code values more than its lights allow");
+                }
+    }
+
+    [Fact]
+    public void TheseChecksCatchAKinkedBlendAndAClippedPixel()
+    {
+        // max(glow, band) instead of the screen blend, at Thickness 20 on the default Glow (1080p at 100 %): the band
+        // (b = 10 px) hands over to the glow (38 px) with the slope jumping from about 15 to 4 code values per pixel.
+        GlowConstants c = Surface(1920, 1080, 1, false, 20, Defaults.Glow, 0.72f, 0);
+        double[] kinked = Codes(c, (glow, band) => Math.Max(glow, band), clipEachPixelAt: 0);
+        Assert.True(LargestShrinkOfTheDrop(kinked, Fastest(c)) > 5);
+        Assert.True(LargestShrinkOfTheDrop(EdgeCodes(c), Fastest(c)) <= 1e-3);
+
+        // Brightness 100 % on a full beat (gain 1.25), Thickness 12 on Glow 0.1: clipping each pixel, even with
+        // SoftClip's smooth knee, squashes the brightest into a rim whose fade then steepens by about 17 code values.
+        // Rolling off the gain instead keeps the profile's shape.
+        c = Surface(1920, 1080, 1, false, 12, 0.1f, 1, 1);
+        double[] clipped = Codes(c, GlowProfile.Combine, clipEachPixelAt: 1.25f);
+        Assert.True(LargestGrowthOfTheDrop(clipped, from: 2) > 10);
+        Assert.True(LargestGrowthOfTheDrop(EdgeCodes(c), from: 2) <= 1.1);
     }
 
     [Fact]
@@ -135,6 +179,34 @@ public sealed class GlowProfileTests
     }
 
     [Fact]
+    public void TheGainRollsOffUnderOneAndOnlyScalesTheProfile()
+    {
+        // Up to the knee the gain is Intensity x (1 + 0.25 Pulse) itself; above it, it rolls off and never reaches 1,
+        // so the profile (<= 1) times the gain never needs clipping. It still grows with both, so a beat always
+        // brightens.
+        Assert.Equal(0.72f, GlowProfile.Gain(0.72f, 0));
+        Assert.Equal(0.9f, GlowProfile.Gain(0.72f, 1), 5);
+        Assert.Equal(0.95f, GlowProfile.Gain(0.8f, 1), 4); // the default Brightness on a full beat
+        Assert.InRange(GlowProfile.Gain(1, 1), 0.975f, 0.98f); // the largest gain
+        for (float intensity = 0; intensity <= 1; intensity += 0.05f)
+            for (float pulse = 0; pulse < 1; pulse += 0.05f)
+            {
+                float gain = GlowProfile.Gain(intensity, pulse);
+                Assert.InRange(gain, 0, 0.98f);
+                Assert.True(GlowProfile.Gain(intensity, pulse + 0.05f) >= gain);
+                Assert.True(GlowProfile.Gain(intensity + 0.05f, pulse) > gain);
+            }
+
+        // The constants carry it: Brightness 100 % scales the default profile, it doesn't reshape it.
+        GlowConstants bright = Surface(1920, 1080, 1, false, Defaults.CoreThicknessDip, Defaults.Glow, 1, 0);
+        GlowConstants dim = Surface(1920, 1080, 1, false, Defaults.CoreThicknessDip, Defaults.Glow, 0.5f, 0);
+        Assert.Equal(GlowProfile.Gain(1, 0), bright.Gain);
+        double[] brightCodes = EdgeCodes(bright), dimCodes = EdgeCodes(dim);
+        for (int k = 0; k < 100; k++)
+            Assert.Equal(brightCodes[k] / bright.Gain, dimCodes[k] / dim.Gain, 1e-3);
+    }
+
+    [Fact]
     public void SoftClipLeavesEverythingBelowTheKneeAndNeverReachesOne()
     {
         for (float x = 0; x <= GlowProfile.KneeStart; x += 0.001f)
@@ -155,14 +227,29 @@ public sealed class GlowProfileTests
     }
 
     [Fact]
-    public void ScreenBlendNeverPassesOne()
+    public void ScreenBlendNeverPassesOneAndAlwaysAddsLight()
     {
+        // Strictly brighter as either light grows while the other is under 1: a piecewise blend such as max(), which
+        // ignores the dimmer light and so kinks where the two cross, fails this.
         for (float glow = 0; glow <= GlowProfile.GlowPeak; glow += 0.05f)
             for (float band = 0; band <= 1; band += 0.05f)
             {
                 float both = GlowProfile.Combine(glow, band);
                 Assert.InRange(both, Math.Max(glow, band) - 1e-6f, 1);
+                if (band < 0.99f)
+                    Assert.True(GlowProfile.Combine(glow + 0.01f, band) > both, $"more glow than {glow} adds nothing ({band})");
+                Assert.True(GlowProfile.Combine(glow, band + 0.01f) > both, $"more band than {band} adds nothing ({glow})");
             }
+    }
+
+    [Fact]
+    public void TheBeatPushesTheGlowInAndTheFloorOnlyGuardsTheDivision()
+    {
+        Assert.Equal(38f * 1.35f, GlowProfile.PulsedSpread(38, 1), 4);
+        Assert.Equal(38f, GlowProfile.PulsedSpread(38, 0));
+        // One DIP at half scale on a 100 % monitor is half a pixel: not widened.
+        Assert.Equal(0.5f, GlowProfile.PulsedSpread(0.5f, 0));
+        Assert.Equal(GlowProfile.MinSpreadPx, GlowProfile.PulsedSpread(0.275f, 0)); // the Settings preview's hairline
     }
 
     [Fact]
@@ -210,10 +297,26 @@ public sealed class GlowProfileTests
     {
         float bandDistance = GlowProfile.Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.BandRadiusPx);
         float glowDistance = GlowProfile.Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.GlowRadiusPx);
-        float spread = Math.Max(c.SpreadPx * (1 + 0.35f * c.Pulse), 0.5f);
-        float shape = GlowProfile.Combine(GlowProfile.Glow(glowDistance, spread),
+        float shape = GlowProfile.Combine(GlowProfile.Glow(glowDistance, GlowProfile.PulsedSpread(c.SpreadPx, c.Pulse)),
             GlowProfile.Band(bandDistance, c.BandScalePx, c.BandGain));
-        return GlowProfile.SoftClip(shape * c.Intensity * (1 + 0.25f * c.Pulse)) * c.Visibility * 255;
+        return shape * c.Gain * c.Visibility * 255;
+    }
+
+    // EdgeCodes drawn another way, for the checks that must catch it: with another blend, and (when clipEachPixelAt
+    // is not 0) with that raw gain clipped on each pixel by SoftClip instead of rolled off once (the first draft).
+    private static double[] Codes(in GlowConstants c, Func<float, float, float> combine, float clipEachPixelAt)
+    {
+        int count = (int)(Math.Min(c.ScreenWidthPx, c.ScreenHeightPx) / 2);
+        float spread = GlowProfile.PulsedSpread(c.SpreadPx, c.Pulse);
+        var codes = new double[count];
+        for (int k = 0; k < count; k++)
+        {
+            float d = k + 0.5f;
+            float shape = combine(GlowProfile.Glow(d, spread), GlowProfile.Band(d, c.BandScalePx, c.BandGain));
+            float alpha = clipEachPixelAt > 0 ? GlowProfile.SoftClip(shape * clipEachPixelAt) : shape * c.Gain;
+            codes[k] = alpha * c.Visibility * 255;
+        }
+        return codes;
     }
 
     // How much the drop from one pixel to the next ever grows from one pair to the next, from pixel `from` inward:
@@ -228,6 +331,29 @@ public sealed class GlowProfileTests
             largest = Math.Max(largest, drop - before);
         }
         return largest;
+    }
+
+    // How far the drop from one pixel to the next ever falls below `factor` times the drop before it: never positive
+    // for a sum of exponentials that fall no faster than e^(-1 / pixel) by that factor; a convex kink shows as a sudden
+    // shrink.
+    private static double LargestShrinkOfTheDrop(double[] codes, double factor)
+    {
+        double largest = double.NegativeInfinity;
+        for (int k = 2; k < codes.Length; k++)
+        {
+            double drop = codes[k - 1] - codes[k];
+            double before = codes[k - 2] - codes[k - 1];
+            largest = Math.Max(largest, factor * before - drop);
+        }
+        return largest;
+    }
+
+    // Per pixel, the faster of the two lights falls by this factor: e^(-1 / the shorter e-folding distance).
+    private static double Fastest(in GlowConstants c)
+    {
+        double spread = GlowProfile.PulsedSpread(c.SpreadPx, c.Pulse);
+        double fastest = c.BandGain > 0 ? Math.Min(spread, c.BandScalePx) : spread;
+        return Math.Exp(-1 / fastest);
     }
 
     // The band's light per unit of edge in the surface's pixels: the sum over pixel centres of its pixel averages.

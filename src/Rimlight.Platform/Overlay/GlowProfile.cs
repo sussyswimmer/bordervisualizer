@@ -1,10 +1,11 @@
 namespace Rimlight.Platform.Overlay;
 
 /// <summary>
-/// The glow's edge profile: how bright the light is at a given distance in from the screen edge, before Intensity,
-/// Pulse's gain and Visibility (doc 04 §3 step 2, reworked after Maxwell's first run: "a very obvious line or bar
-/// around the screen ... I want it to fade in more"). <c>Glow.hlsl</c> computes the same per pixel, and the Settings
-/// preview (<c>GlowRaster</c>) calls these methods, so the two agree. Pure math: any thread, no allocation.
+/// The glow's edge profile: how bright the light is at a given distance in from the screen edge, before the light's
+/// gain (<see cref="Gain"/>: Intensity and the beat) and Visibility (doc 04 §3 step 2, reworked after Maxwell's first
+/// run: "a very obvious line or bar around the screen ... I want it to fade in more"). <c>Glow.hlsl</c> computes the
+/// same per pixel, and the Settings preview (<c>GlowRaster</c>) calls these methods, so the two agree. Pure math: any
+/// thread, no allocation.
 /// </summary>
 /// <remarks>
 /// <para>Doc 04 drew a solid core line (alpha 1 for the Thickness setting) and then
@@ -17,21 +18,39 @@ namespace Rimlight.Platform.Overlay;
 /// no edge of its own, and Thickness 0 leaves the glow alone.</item>
 /// </list>
 /// <para>They combine like light on a screen, <c>1 - (1 - glow)(1 - band)</c> (<see cref="Combine"/>), which never
-/// passes 1: the edge peaks at 1 when there is a band, so Intensity and Pulse scale it as they scaled the core.
+/// passes 1: the edge peaks at 1 when there is a band, so the gain scales it as Intensity scaled the core.
 /// Every term is smooth, so the profile has no step or kink anywhere: it falls monotonically from the edge and, at
 /// the default Thickness, with a slope that only ever eases off (no inflection, which the eye reads as a line). A
 /// band much wider than the glow eases in over a soft shoulder instead, which is what asking for it means.</para>
-/// <para>Intensity × (1 + 0.25 Pulse) can pass 1 (Brightness above 80 % on a strong beat). Clamping would flatten the
-/// brightest pixels into a plateau that ends in a kink, a bar flashing on the beat; <see cref="SoftClip"/> rolls
-/// the top off instead and leaves everything below 0.9 as it was.</para>
+/// <para>Intensity × (1 + 0.25 Pulse) can pass 1 (Brightness above 80 % on a strong beat), and alpha can't. Doc 04
+/// clamps each pixel, which flattens the brightest ones into a plateau ending in a kink; even a smooth per-pixel knee
+/// squashes them into a shoulder where the fade steepens again (on a full beat at Brightness 100 %, up to 17 code
+/// values of extra drop between neighbouring pixels), a brighter rim flashing on the beat. So the roll-off is on the
+/// gain instead (<see cref="Gain"/>): the profile is only ever scaled, never reshaped, and everything above holds at
+/// any brightness and beat. Gains up to 0.9 are unchanged; above that the light grows a little less on the
+/// strongest beats, and the beat's push of the glow further in (<see cref="PulsedSpread"/>) is untouched.</para>
 /// </remarks>
 public static class GlowProfile
 {
-    /// <summary>The glow's brightness at the very edge, before Intensity: doc 04 §3's <c>glow * 0.85</c>.</summary>
+    /// <summary>The glow's brightness at the very edge, before the gain: doc 04 §3's <c>glow * 0.85</c>.</summary>
     public const float GlowPeak = 0.85f;
 
-    /// <summary>Where <see cref="SoftClip"/> starts to roll off: alpha up to this is unchanged.</summary>
+    /// <summary>Where <see cref="SoftClip"/> starts to roll the gain off: gains up to this are unchanged.</summary>
     public const float KneeStart = 0.9f;
+
+    /// <summary>
+    /// How much further in a full beat pushes the glow: doc 04 §3's <c>SpreadPx * (1 + 0.35 * Pulse)</c>.
+    /// </summary>
+    public const float BeatPush = 0.35f;
+
+    /// <summary>
+    /// The pulsed spread's floor in pixels. <see cref="SpreadFor"/> is at least one DIP, which is half a swap-chain
+    /// pixel at half render scale: the floor only guards the division and must not widen that hairline halo.
+    /// </summary>
+    public const float MinSpreadPx = 0.5f;
+
+    // How much a full beat brightens the light: doc 04 §3's Intensity * (1 + 0.25 * Pulse).
+    private const float BeatGain = 0.25f;
 
     // PRD §1: "Glow: how far the light spills inward. 0 means a hairline; 100 means about 35% of the shorter screen
     // dimension." Spill is taken as three e-folding distances (the glow is down to 5% there). The slider is raised to
@@ -132,13 +151,32 @@ public static class GlowProfile
     public static float Band(float distancePx, float bandScalePx, float bandGain) =>
         Math.Clamp(bandGain * MathF.Exp(-distancePx / bandScalePx), 0, 1);
 
-    /// <summary>Glow and band together, 0..1: they add like light on a screen and never pass 1.</summary>
+    /// <summary>
+    /// The glow's e-folding distance on a beat: <paramref name="spreadPx"/> (<see cref="SpreadFor"/>) pushed further
+    /// in by <paramref name="pulse"/> (0..1), never under <see cref="MinSpreadPx"/>.
+    /// </summary>
+    public static float PulsedSpread(float spreadPx, float pulse) =>
+        Math.Max(spreadPx * (1 + BeatPush * pulse), MinSpreadPx);
+
+    /// <summary>
+    /// Glow and band together, 0..1: they add like light on a screen and never pass 1. Smooth, and brighter whenever
+    /// either light is (while the other is under 1): a <c>max</c> would hand the light from one to the other with a
+    /// kink in the slope, which the eye sees as a line (a Mach band).
+    /// </summary>
     public static float Combine(float glow, float band) => 1 - (1 - glow) * (1 - band);
 
     /// <summary>
-    /// Alpha for a brightness <paramref name="x"/> ≥ 0 (shape × Intensity × the beat's gain), before Visibility:
-    /// <paramref name="x"/> itself up to <see cref="KneeStart"/>, then a smooth roll-off that approaches 1 (0.95 at
-    /// 1, 0.98 at 1.25) with no kink where it starts.
+    /// The light's overall gain, which scales the whole profile: Intensity × the beat's (1 + 0.25 Pulse), rolled off
+    /// by <see cref="SoftClip"/>. It stays under 1, so alpha (profile × gain × Visibility) never needs clipping.
+    /// </summary>
+    /// <param name="intensity">The light state's Intensity, 0..1.</param>
+    /// <param name="pulse">The light state's Pulse, 0..1.</param>
+    public static float Gain(float intensity, float pulse) => SoftClip(intensity * (1 + BeatGain * pulse));
+
+    /// <summary>
+    /// A gain <paramref name="x"/> ≥ 0 rolled off below 1: <paramref name="x"/> itself up to <see cref="KneeStart"/>,
+    /// then a smooth roll-off that approaches 1 (0.95 at 1, 0.978 at 1.25, the largest gain) with no kink where it
+    /// starts, so a beat's brightening eases in and out over time instead of stopping dead.
     /// </summary>
     public static float SoftClip(float x)
     {

@@ -55,7 +55,7 @@ public sealed class GlowConstantsTests
         Assert.InRange(half.ColorRadiusPx * stretch - full.ColorRadiusPx, -1, 1);
         Assert.InRange(half.GlowRadiusPx * stretch - full.GlowRadiusPx, -1, 1);
         // Everything that isn't a length stays as it is.
-        Assert.Equal(full.Intensity, half.Intensity);
+        Assert.Equal(full.Gain, half.Gain);
         Assert.Equal(full.Pulse, half.Pulse);
         Assert.Equal(full.Phase, half.Phase);
         Assert.Equal(full.Visibility, half.Visibility);
@@ -89,7 +89,7 @@ public sealed class GlowConstantsTests
         {
             Intensity = 3, Pulse = -1, Visibility = float.NaN, Phase = 1.25f, CoreThicknessDip = float.PositiveInfinity,
         }, 1920, 1080, 1, 1, float.NaN, new Rgb(float.NaN, 1, 0));
-        Assert.Equal(1, c.Intensity);
+        Assert.Equal(GlowProfile.Gain(1, 0), c.Gain); // Intensity clamped to 1, Pulse to 0, then rolled off
         Assert.Equal(0, c.Pulse);
         Assert.Equal(0, c.Visibility);
         Assert.Equal(0.25f, c.Phase, 6);
@@ -129,10 +129,10 @@ public sealed class GlowConstantsTests
     {
         GlowConstants a = GlowConstants.Create(State, 1920, 1080, 1, 1, 0, Mean);
         GlowConstants b = a;
-        b.Intensity += 0.4f / 255;
+        b.Gain += 0.4f / 255;
         b.Phase += 0.0001f;
         Assert.True(a.LooksLike(b));
-        b.Intensity += 0.2f / 255;
+        b.Gain += 0.2f / 255;
         Assert.False(a.LooksLike(b));
 
         GlowConstants wrap = a;

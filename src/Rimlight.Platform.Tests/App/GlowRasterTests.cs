@@ -17,8 +17,9 @@ public sealed class GlowRasterTests
     [InlineData(6f, 0.45f, 0.72f, 0f)]  // the defaults, Idle Glow's level
     [InlineData(6f, 0.45f, 0.8f, 1f)]   // a full beat at the default Brightness
     [InlineData(0f, 0.45f, 0.72f, 0f)]  // glow only
-    [InlineData(40f, 0.2f, 1f, 1f)]     // a wide band, a narrow glow, past the knee
+    [InlineData(40f, 0.2f, 1f, 1f)]     // a wide band, a narrow glow, the gain rolled off
     [InlineData(1f, 0f, 0.55f, 0f)]     // a hairline
+    [InlineData(0f, 0f, 0.72f, 1f)]     // a hairline glow alone, on the beat: the shader's half-pixel spread floor
     public void ThePreviewDrawsTheOverlaysProfile(float thicknessDip, float glow, float intensity, float pulse)
     {
         var raster = new GlowRaster(Width, Height);
@@ -27,7 +28,9 @@ public sealed class GlowRasterTests
         Assert.True(raster.Render(state, 0));
 
         int row = Height / 2;
-        float spread = MathF.Max(GlowProfile.SpreadFor(glow, Height, Scale) * (1 + 0.35f * pulse), 1);
+        // The shader's spread floor (half a pixel) and gain (rolled off once, then scaling the profile).
+        float spread = GlowProfile.PulsedSpread(GlowProfile.SpreadFor(glow, Height, Scale), pulse);
+        float gain = GlowProfile.Gain(intensity, pulse);
         float thicknessPx = thicknessDip * Scale;
         int previous = 255;
         for (int x = 0; x < 80; x++)
@@ -35,7 +38,7 @@ public sealed class GlowRasterTests
             float d = x + 0.5f;
             float shape = GlowProfile.Combine(GlowProfile.Glow(d, spread),
                 GlowProfile.Band(d, GlowProfile.BandScale(thicknessPx), GlowProfile.BandGain(thicknessPx)));
-            float expected = GlowProfile.SoftClip(shape * intensity * (1 + 0.25f * pulse)) * 255;
+            float expected = shape * gain * 255;
             int alpha = (int)((uint)raster.Pixels[row * Width + x] >> 24);
             Assert.InRange(alpha - expected, -1, 1);
             Assert.True(alpha <= previous, $"pixel {x} is brighter than the one outside it");

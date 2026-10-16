@@ -24,7 +24,7 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     public float BandScalePx;  // the soft band's e-folding distance (GlowProfile.BandScale): half the thickness
 
     public float SpreadPx;
-    public float Intensity;
+    public float Gain;         // Intensity x the beat's gain, rolled off under 1 (GlowProfile.Gain); scales the profile
     public float Pulse;
     public float Phase;
 
@@ -61,7 +61,9 @@ internal struct GlowConstants : IEquatable<GlowConstants>
             CornerRadiusPx = cornerPx,
             BandScalePx = bandScalePx,
             SpreadPx = spreadPx,
-            Intensity = Clamp01(state.Intensity),
+            // The gain scales the whole profile, so the light keeps its shape at any brightness and beat; rolled off
+            // under 1, it never needs clipping per pixel (GlowProfile.Gain).
+            Gain = GlowProfile.Gain(Clamp01(state.Intensity), Clamp01(state.Pulse)),
             Pulse = Clamp01(state.Pulse),
             Phase = Fraction(state.Phase),
             Visibility = Clamp01(state.Visibility),
@@ -101,21 +103,21 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
         CornerRadiusPx == other.CornerRadiusPx && BandScalePx == other.BandScalePx && BandGain == other.BandGain &&
         BandRadiusPx == other.BandRadiusPx && SpreadPx == other.SpreadPx && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
-        Near(Intensity, other.Intensity) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
+        Near(Gain, other.Gain) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
         Near(MeanRed, other.MeanRed) && Near(MeanGreen, other.MeanGreen) && Near(MeanBlue, other.MeanBlue) &&
         PhaseNear(Phase, other.Phase);
 
     public readonly bool Equals(GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
         CornerRadiusPx == other.CornerRadiusPx && BandScalePx == other.BandScalePx &&
-        SpreadPx == other.SpreadPx && Intensity == other.Intensity && Pulse == other.Pulse && Phase == other.Phase &&
+        SpreadPx == other.SpreadPx && Gain == other.Gain && Pulse == other.Pulse && Phase == other.Phase &&
         Visibility == other.Visibility && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
         BandGain == other.BandGain && MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue &&
         BandRadiusPx == other.BandRadiusPx;
 
     public override readonly bool Equals(object? obj) => obj is GlowConstants other && Equals(other);
 
-    public override readonly int GetHashCode() => HashCode.Combine(ScreenWidthPx, ScreenHeightPx, SpreadPx, Intensity, Pulse, Phase, Visibility);
+    public override readonly int GetHashCode() => HashCode.Combine(ScreenWidthPx, ScreenHeightPx, SpreadPx, Gain, Pulse, Phase, Visibility);
 
     private static float Finite(float value) => float.IsFinite(value) ? value : 0;
 

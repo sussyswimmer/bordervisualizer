@@ -9,10 +9,10 @@ cbuffer Light : register(b0)
     float  CornerRadiusPx;  // shape corner radius; 0 = square corners. The radii below are at least this
     float  BandScalePx;     // soft band's e-folding distance: half the Thickness setting
     float  SpreadPx;        // glow reach (e-folding distance)
-    float  Intensity;       // 0..1
+    float  Gain;            // Intensity x the beat's 1 + 0.25 Pulse, rolled off under 1 (GlowProfile.Gain)
     float  Pulse;           // 0..1 beat kick
     float  Phase;           // 0..1 gradient rotation
-    float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Intensity
+    float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Gain
     float  ColorRadiusPx;   // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
     float  GlowRadiusPx;    // corner radius of the glow field (>= CornerRadiusPx), see PSMain step 2
     float  BandGain;        // soft band's brightness factor; 0 = no band (Thickness 0), see PSMain step 2
@@ -140,16 +140,14 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float spread = max(SpreadPx * (1 + 0.35 * Pulse), 0.5);
     float glow = 0.85 * exp(-glowDistance / spread);
     float shape = 1 - (1 - glow) * (1 - band);
-    float x = shape * Intensity * (1 + 0.25 * Pulse);
+    // Intensity and the beat's gain can pass 1 (Brightness above 80% on a strong beat); the CPU rolls the gain off
+    // under 1 instead of clipping here, so the profile is only ever scaled: clipping (or a per-pixel knee) would
+    // squash the brightest pixels into a brighter rim flashing on the beat (GlowProfile.Gain).
+    float a = shape * Gain * Visibility;
     // Far inside: below half a code value. The test is on the undithered alpha so whole waves skip together; the
-    // only output lost is a sparse speckle of dithered 1/255 pixels. (The knee below changes nothing under 0.9.)
-    [branch] if (x * Visibility < 0.5 / 255)
+    // only output lost is a sparse speckle of dithered 1/255 pixels.
+    [branch] if (a < 0.5 / 255)
         return 0;
-    // Intensity and the beat's gain can take the edge past 1 (Brightness above 80% on a strong beat). Clamping would
-    // flatten the brightest pixels into a plateau ending in a kink; a soft knee rolls the top off instead and leaves
-    // everything below 0.9 unchanged (GlowProfile.SoftClip).
-    float over = max(x - 0.9, 0) / (1 - 0.9);
-    float a = (min(x, 0.9) + (1 - 0.9) * over / (1 + over)) * Visibility;
 
     // 3-5. Colour around the perimeter from the Oklab-blended gradient (built on the CPU when the palette changes).
     float u = frac(PerimeterT(p, ScreenPx, ColorRadiusPx) + Phase);
