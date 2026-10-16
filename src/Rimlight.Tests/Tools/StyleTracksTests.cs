@@ -12,6 +12,8 @@ public sealed class StyleTracksTests
     [InlineData(MusicStyle.Rap, 40)]
     [InlineData(MusicStyle.Edm, 52)]
     [InlineData(MusicStyle.BalladWithDrums, 60)]
+    [InlineData(MusicStyle.FolkBand, 100)]
+    [InlineData(MusicStyle.PianoBallad, 96)]
     public void SectionsAreContiguousAndMixedToTheirLevels(MusicStyle style, double seconds)
     {
         StyleTrack track = StyleTracks.Render(style);
@@ -46,7 +48,7 @@ public sealed class StyleTracksTests
     [Fact]
     public void KicksFallInTheDrumSectionsOnly()
     {
-        foreach (MusicStyle style in new[] { MusicStyle.Rap, MusicStyle.Edm, MusicStyle.BalladWithDrums })
+        foreach (MusicStyle style in new[] { MusicStyle.Rap, MusicStyle.Edm, MusicStyle.BalladWithDrums, MusicStyle.FolkBand })
         {
             StyleTrack track = StyleTracks.Render(style);
             Assert.NotEmpty(track.KickTimes);
@@ -55,6 +57,40 @@ public sealed class StyleTracksTests
         }
         // Rap: an 808 on each of the 60 beats, and on the "and" of 4 in every second bar.
         Assert.Equal(60 + 7, StyleTracks.Render(MusicStyle.Rap).KickTimes.Count);
+        // The piano ballad has no drums.
+        StyleTrack piano = StyleTracks.Render(MusicStyle.PianoBallad);
+        Assert.Empty(piano.KickTimes);
+        Assert.All(piano.Sections, s => Assert.False(s.Drums));
+    }
+
+    [Fact]
+    public void MixPutsEachStemAtItsLevelUnderTheMusicInEverySection()
+    {
+        // The folk band's guitar and voice, with its brush kit 12 dB under them: in every section the added signal is
+        // the kit at the music's own section level − 12 dB (each stem is mixed to the section targets on its own, and
+        // not clipped: clipped, the kit sat 14.6 dB under the music in the choruses, with flattened kicks).
+        StyleTrack music = StyleTracks.Render(MusicStyle.FolkBand, parts: StyleParts.Guitar | StyleParts.Voice);
+        StyleTrack drums = StyleTracks.Render(MusicStyle.FolkBand, parts: StyleParts.Drums);
+        StyleTrack mix = StyleTracks.Mix(music, (drums, -12));
+        Assert.Equal(StyleParts.Guitar | StyleParts.Voice | StyleParts.Drums, mix.Parts);
+        Assert.Equal(drums.KickTimes, mix.KickTimes);
+        Assert.Equal(music.Sections, mix.Sections);
+        foreach (TrackSection s in music.Sections)
+        {
+            int from = (int)((s.Start + 0.5) * mix.SampleRate), to = (int)((s.End - 0.5) * mix.SampleRate);
+            double musicSquares = 0, addedSquares = 0;
+            for (int i = from; i < to; i++)
+            {
+                double added = mix.Samples[i] - (double)music.Samples[i];
+                musicSquares += music.Samples[i] * (double)music.Samples[i];
+                addedSquares += added * added;
+            }
+            Assert.InRange(10 * Math.Log10(addedSquares / musicSquares), -13, -11);
+        }
+        // A stem isn't clipped (the kit alone peaks above full scale in the choruses); the mix is.
+        Assert.True(drums.Samples.Max(MathF.Abs) > 1);
+        Assert.InRange(mix.Samples.Max(MathF.Abs), 0.05f, 1f);
+        Assert.Throws<ArgumentException>(() => StyleTracks.Mix(music, (StyleTracks.Render(MusicStyle.PianoBallad), -6)));
     }
 
     [Fact]
