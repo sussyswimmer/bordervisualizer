@@ -56,7 +56,7 @@ current += (target - current) * coef
 2. Keep a ring of the last **1.0 s** of flux values. `threshold = mean + 1.5 * stddev`.
 3. A beat fires when `flux > threshold` **and** `flux > minFlux` (to avoid noise during silence) **and** at least **180 ms** have passed since the last beat (max ≈333 BPM).
 4. On a beat, `Beat = 1`. Otherwise, `Beat` decays exponentially with τ = **120 ms**. *Clarification (Maxwell's feedback, round 1): detection is unchanged, but `Beat` jumps to the beat's grade, 0..1: how kick-like the onset is (the rise of a fixed 30–100 Hz kick band against the music above the bass band), how drum-driven the last onsets have been (one kick-like onset alone is no groove yet), how it compares with the strongest recent kick, and how loud the moment is within the song. A kick in a loud groove is still exactly 1; soft drums give smaller pulses, kicks under a whispered passage about a third of one, and a sung syllable, a plucked or struck low string or a bass guitar under a drumless song 0 (CORE-API §4.2).*
-5. `Sensitivity` (0.25–2×) scales the multiplier 1.5 inversely (higher sensitivity → lower threshold) and scales the final `Level` gain.
+5. `Sensitivity` (0.25–2×) scales the multiplier 1.5 inversely (higher sensitivity → lower threshold) and scales the final `Level` gain. *Clarification (Maxwell's feedback, round 1): it also scales each beat's grade (step 4), so at 0.5 the pulses are about half as big (CORE-API §4.2).*
 
 ### Silence
 - `IsSilent = true` when the raw RMS of the time-domain signal stays below −60 dBFS (or no packets arrive) for **2000 ms**. It becomes false as soon as RMS rises above −55 dBFS (hysteresis).
@@ -75,7 +75,7 @@ A small always-on-top WPF window showing live:
 - A beat counter and estimated BPM (median of recent beat intervals). *Clarification (C13, H-016): the estimate is the mean of the last 16 intervals that lie within ±25 % of their median, or the median when none does. A plain median is biased by whole-frame intervals at a steady frame rate (171.4 for 174 BPM at 60 fps); `docs/CORE-API.md` §4.4 has the details. Since Maxwell's feedback round 1, where kicks play only the kick-like beats at least 0.6× as strong as the strongest recent kick count for the tempo, so an off-beat bass note doesn't double it; where none play, every beat counts.*
 - `IsSilent`, the capture format, and the device name
 
-This is how Maxwell will tune the feel. Make all the parameters above live-editable here (sliders) and add a "Copy params as JSON" button. Parameters live in an `AudioTuning` record in Core with the defaults above.
+This is how Maxwell will tune the feel. Make all the parameters above live-editable here (sliders) and add a "Copy params as JSON" button. Parameters live in an `AudioTuning` record in Core with the defaults above. *Clarification (Maxwell's feedback, round 1): the constants behind the round-1 clarifications above (the song memory and range, kick-likeness, punch, the wave factors and the contrast depth) are internal, not `AudioTuning` fields. They have no sliders yet, and "Copy params as JSON" doesn't carry them; HANDOFF H-025 proposes exposing them.*
 
 ## 5. Tests (Rimlight.Tests)
 - FFT: a pure sine at bin frequency produces a peak in the correct bin, and Parseval's identity holds within tolerance.

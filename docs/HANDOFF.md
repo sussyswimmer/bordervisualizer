@@ -1,5 +1,59 @@
 # Handoff
 
+## [OPEN] H-026 · from: claude-code (feedback round 1) · to: codex · blocking: none
+**Need:** Maxwell's first Windows run (PROGRESS.md, "Feedback round 1") needed Core changes, so round 1 changed Lane A paths. Please review them and keep them in later Lane A work. Relative to 5b387fc:
+- **`src/Rimlight.Core/Audio/`:**
+  - `SongLoudness` and `BeatCharacter` (new): the song reference, kick-likeness, punch and each beat's grade (CORE-API §4.2).
+  - `AudioAnalyzer`: Level comes from the song position, with doc 03's target as the contrast, and its time constants blend by punch. Beat is the grade, and `BeatCharacter` picks the tempo beats.
+  - `AudioFrontEnd.LevelTarget`. `BandAnalyzer.WeightedPower` and `KickBins` work on fixed internal bands; `Rms` now sums through `Squares`.
+  - `BeatDetector`: `BeatResult` gains `KickLevel`, which detection doesn't use. Tempo intervals come only from `AddTempoBeat(secondsAgo)`, and the tempo goes stale 4 s after the last tempo beat. Detection is unchanged.
+- **`src/Rimlight.Core/Lighting/LightEngine.cs`:** the phase push is 0.01 cycles × the height Beat rises to.
+- **Docs:** the `CoreFactory.CreateAnalyzer` and `CreateLightEngine` remarks, `docs/CORE-API.md` (§2 units, §4.1–4.4, §6, §6.1) and doc 03's clarifications.
+- **`src/Rimlight.Tests/`:**
+  - `SyntheticAudio.Run` spots a beat by `BeatCount` rising, because Beat is now a grade. It takes `pulses:`, and `StrongPulseRate` checks the pulse size.
+  - New: `MusicDynamicsTests`, `SongLoudnessTests`, `BeatCharacterTests` and `StyleTracksTests`, plus `AudioAnalyzerTests.OffBeatBassNotesAreBeatsButNotTempo` and `LightEngineTests.AGradedBeatPushesInProportionToItsHeight`.
+  - Changed on purpose:
+    - WavAnalyze: full pulses ≥ beats − 3. The first second only listens, and the drive needs two kicks.
+    - `FollowsTheRealAnalyzerThroughMusicSilenceAndMusicAgain`: pushes follow the graded rule, with full pulses ≥ beats − 4.
+    - Four `AudioAnalyzerTests` gained `StrongPulseRate` assertions.
+- **`tools/audio-tools/StyleTracks.cs` (new):** procedural CalmBallad, Rap, Edm, BalladWithDrums, FolkBand and PianoBallad, with single stems and `Mix`. Stems are not clipped.
+- **From the Settings change:**
+  - `.github/labeler.yml`: lane-b gains `src/Rimlight.App.Tests/**`.
+  - A comment in `.github/workflows/ci.yml`: the Windows job also runs `Rimlight.App.Tests`.
+  - `CONTRIBUTING.md`: layout and lanes.
+
+**Repro:** `git diff 5b387fc 3a2fd04 -- src/Rimlight.Core src/Rimlight.Tests tools .github CONTRIBUTING.md` (merges ee8f7a4 and af5d2a6).
+**Proposed:** Codex reviews these on the round-1 PR (contract compliance, hot-path allocations, the test-helper change) and acknowledges them here. The beat tests now check detection (`BeatCount`) and pulse size (`StrongPulseRate`) separately; new beat tests should do the same.
+---
+## [OPEN] H-025 · from: claude-code (feedback round 1) · to: maxwell · type: CONTRACT CHANGE · blocking: none
+**Need:** Round 1's dynamics (PROGRESS.md, "Feedback round 1", Dynamics) run on internal constants that aren't `AudioTuning` fields. The stages behind each pulse aren't in `AnalyzerDiagnostics` either. So the K8 visualizer can't show why a beat got its size: a "beat fired" tick with little Beat under it is a beat graded low, but it can't say why (not kick-like, no groove yet, or a quiet moment in the song). "Copy params as JSON" (H-015) can't move what Maxwell's listening is most likely to need tuned:
+- **`SongLoudness`:**
+  - song memory τ 10 s (`MemorySeconds`)
+  - range 24 dB (`RangeDb`)
+  - reference percentile 0.9
+- **`BeatCharacter`:**
+  - kick-likeness smoothstep from 4 to 9 dB of kick prominence (`KickFromDb`, `KickAtDb`). The first version's bass-share threshold is gone.
+  - punch smoothstep from 0.3 to 0.75 of the drive (`PunchFrom`, `PunchAt`)
+  - drive hold 3 s and fade τ 2.5 s (`DriveHoldSeconds`, `DriveReleaseSeconds`)
+  - loud gate from 0.3 to 0.6 of the song position, with a floor of 0.3 × punch (`QuietFrom`, `LoudAt`, `LoudFloor`)
+- **`AudioAnalyzer`:**
+  - wave factors 10× on the attack and 5× on the release (`WaveAttackFactor`, `WaveReleaseFactor`)
+  - contrast depth 0.6 (`ContrastDepth`)
+  - Level knee 0.8 (`LevelKnee`)
+
+**Repro:** the `internal const` fields in `src/Rimlight.Core/Audio/SongLoudness.cs`, `BeatCharacter.cs` and `AudioAnalyzer.cs`. For the same reason, the round-1 Windows checklist asks Maxwell for screen recordings rather than JSON.
+**Proposed:** two independent parts; Maxwell approves either or both.
+1. **Diagnostics only ("approved: diagnostics").**
+   - `AnalyzerDiagnostics` gains four preallocated 240-entry histories, in step with `FluxHistory` (one entry per `Process` call): `GradeHistory` (the latest beat's grade), `KickLikenessHistory`, `PunchHistory` and `SongPositionHistory`.
+   - Core fills them without allocating, and K8 copies them on the render thread (H-004) and plots them under Beat.
+   - No behaviour or default changes.
+2. **Tuning fields ("approved: tuning fields"),** only if Maxwell's listening shows the constants need live tuning.
+   - The constants above become `AudioTuning` fields with today's values as defaults, for example `SongMemorySeconds`, `SongRangeDb`, `KickFromDb`/`KickAtDb`, `PunchHoldSeconds`/`PunchReleaseSeconds`, `WaveAttackFactor`/`WaveReleaseFactor` and `LevelContrastDepth`.
+   - They are validated like the existing fields, get K8 sliders, and `wav-analyze --tuning` reads them.
+   - Tuned values reach the defaults under whatever H-005 decides.
+
+Until then the constants stay internal and change only in code, with `MusicDynamicsTests` as the guard.
+---
 ## [OPEN] H-024 · from: claude-code (K6) · to: maxwell, codex · blocking: none (K6 handles it; a default change would be a CONTRACT CHANGE)
 **Need:** *(Filed as H-019 on the K6 branch; renumbered in the stack merge, because C12's entry holds H-019.)* A decision on the default glow shortcut. `Settings.ToggleHotkey` defaults to `Ctrl+Alt+L` (frozen `Contracts/Settings.cs:57`, PRD "6. Shell"). Windows treats Ctrl+Alt as AltGr, so `RegisterHotKey(Ctrl+Alt+L)` also fires on AltGr+L and swallows what it types in every app: ł on Polish (Programmers), Czech, Slovak, Hungarian, Croatian and Slovenian layouts, ø on US-International.
 **Repro:** Since the K6 review, Platform checks every installed keyboard layout before registering (`GlobalHotkey.TypesCharacter`, via `ToUnicodeEx`). On such a layout the default is not registered (`HotkeyState.TypesCharacter`): the welcome and the Behavior page's inline warning say why, and the Behavior page's shortcut recorder refuses such combinations. Those users start without a shortcut until they pick one.
@@ -18,6 +72,10 @@
 - `LightState.Ratio`: "0..1". The engine gives 0.1..0.9.
 **Repro:** `docs/CORE-API.md` §10 lists them with the right wording.
 **Proposed:** Maxwell writes "approved: XML only" under this entry. Then only these seven XML summaries change, to the wording in CORE-API.md. No type, member, signature or default changes. Until then, CORE-API.md §10 is the correction.
+**Progress (feedback round 1):** round 1 adds to this list. CORE-API.md §10 doesn't have these yet; they could go in the same XML-only change.
+- `AudioTuning.Sensitivity`'s new wording should also say that it scales each beat's grade (CORE-API §4.2–4.3).
+- `AudioTuning.LevelAttackSeconds`/`LevelReleaseSeconds` are the Level envelope with drums, and 10× / 5× that with none (§4.3).
+- `Settings.CoreThicknessDip` and `LightState.CoreThicknessDip` ("Core thickness") now set the width of a soft band at the edge, not a solid core (PRD §4 clarification). The names stay.
 ---
 ## [DONE] H-022 · from: claude-code (K12) · to: claude-code (K10) or codex · blocking: the first release (v1.0.0)
 **Need:** *(Filed without a number on the K12 branch; numbered in the K10 docs pass.)* CHANGELOG.md catches up before the v1.0.0 tag.
@@ -74,6 +132,11 @@
 - It found PaceModel without C13's fade rule; that is fixed (H-018).
 
 Item 1 (Maxwell's Windows CPU numbers) stays open: row 14 of the K11 checklist in PROGRESS.md.
+**Progress (feedback round 1):**
+- **Item 1:** take the numbers on a build with round 1 (3a2fd04 or later).
+  - The soft edge lights about 40 % more pixels at the default Glow: at 4K, 54 % of the screen instead of 38 %. It also adds one exp and one divide per pixel before the early-out.
+  - The analyzer's song reference and beat grading add about 1–2 µs a step. That is within run-to-run noise on Linux, so PERF.md is unchanged.
+- **Item 2:** round 1 didn't change `MusicGlowSource`, `FramePacer` or `OverlayHost`'s loop (one comment only), and `BenchMirrorTests` passes at 3a2fd04.
 ---
 ## [OPEN] H-018 · from: claude-code (K10) · to: codex, maxwell · blocking: none
 **Need:** Maxwell asked Claude Code to finish both lanes, so K10 changed Lane A files. Please review them on the K10 PR and keep them in later Lane A work:
@@ -97,6 +160,7 @@ Item 1 (Maxwell's Windows CPU numbers) stays open: row 14 of the K11 checklist i
 - AGENTS.md "Environment" says the Windows projects won't build in the sandbox. That is no longer true for Platform and its tests.
 
 **Proposed:** Codex acknowledges the list here. Maxwell updates CLAUDE.md and AGENTS.md, or says how they should read.
+**Progress (feedback round 1):** doc 09 §2 now also puts `src/Rimlight.App.Tests/**` (the WPF smoke tests) in Lane B. CLAUDE.md and AGENTS.md don't name it either. Round 1's own Lane A changes are listed in H-026.
 ---
 ## [DONE] H-017 · from: claude-code · to: codex · blocking: none (C5/C6; K7's settings preview relies on it)
 **Need:** *(Filed as H-012 on the K7 branch; renumbered at the Lane A + Lane B integration because C10 had claimed H-012.)* Two independent light engines and palette blenders at once. The settings window's live preview (K7) creates its own `ILightEngine` and `IPaletteBlender` from `CoreFactory` and drives them on the UI thread, about 30 times a second while the Appearance page is open. The overlay's pair keeps running on the render thread. Each instance is still used by one thread only (H-004), and nothing changes in `Contracts/`.
@@ -337,6 +401,9 @@ At 30 fps the first wake step counts 1/60 s, so a 300 ms fade takes 317 ms. `Lig
 **Repro:** `AudioTuning.cs` declares every default inline (e.g. `MinFlux = 0.01f` at line 61, a provisional value C2 will also want to calibrate).
 **Proposed:** Maxwell writes "approved: default values only" under this entry, so Codex may change default *values* in `AudioTuning.cs` (never names, types or members) without a new CONTRACT CHANGE. Otherwise each re-tune needs its own CONTRACT CHANGE entry.
 **Note (K8):** the visualizer's "Copy params as JSON" is ready for sync point 2 (H-015). Tuned values only reach the defaults once Maxwell answers this entry. The tuning session's steps are row 17 of the K11 checklist in PROGRESS.md.
+**Progress (feedback round 1):** the dynamics change added constants that aren't `AudioTuning` fields, so a sync point 2 JSON can't tune them. H-025 proposes exposing them. Two existing fields now have a narrower meaning:
+- `LevelAttackSeconds`/`LevelReleaseSeconds` apply in a drum groove; with no drums Level uses 10× and 5× them.
+- `Sensitivity` also scales each pulse.
 ---
 ## [DONE] H-004 · from: claude-code · to: codex · blocking: none (needed before C2/C5 merge)
 **Need:** Confirm, and state in the C2/C5 PRs, how Lane B will call Core. Lane B (K2/K3/K8) is built on these assumptions:

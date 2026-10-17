@@ -30,7 +30,7 @@ In **Music Sync**, when no audio is detected for 2 s, fade over 1.5 s to the `Wh
 - **Override album color**: a toggle that forces Manual colors even when Album Art is selected.
 
 ### 4. Appearance controls
-- **Thickness**: the solid core line, 0–40 px (DIPs), default 6.
+- **Thickness**: the solid core line, 0–40 px (DIPs), default 6. *Clarification (Maxwell's feedback, round 1): the solid line read as "a very obvious line or bar around the screen", so there is none any more. Thickness is the width of a soft bright band at the edge: brightest at the edge, with no edge of its own, blending into the glow. 0 leaves only the glow (doc 04 §3 step 2).*
 - **Glow**: how far the light spills inward, 0–100%. 0 means a hairline; 100 means about 35% of the shorter screen dimension.
 - **Brightness**: 10–100%, default 80.
 - **Sensitivity**: how strongly audio drives the light, 0.25×–2×, default 1×.
