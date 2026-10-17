@@ -35,6 +35,8 @@ Loudness differs wildly between songs and volume settings. For each band, track 
 - `norm = clamp((value_dB - floor) / max(peak_dB - floor, 12 dB), 0, 1)`.
 This makes quiet acoustic tracks and loud EDM both use the full 0..1 range. **The OS volume slider must not change how bright the glow is.** Unit-test this: the same signal at −20 dB and at 0 dB must give a similar `norm` after a 2 s warm-up.
 
+*Clarification (Maxwell's feedback, round 1): with a 4 s peak this also stretches a whispered verse over the full range about 6 s after the chorus, so a calm song's verse looked as bright as its chorus. Auto-gain stays as written and still normalizes `Bass` and the contrast within a groove, but `Level` is now judged against a song-level reference (the 90th percentile of the loudness over a 10 s memory, cleared by 1 s of near-silence between songs) and blends between a slow wave and the envelope below by how drum-driven the music is. The same song at another volume still gives the same light (within 0.01 of brightness down to −35 dB). A volume change in the middle of a song can't be told from the music itself getting quieter or louder, so it settles as the reference turns over: a step of up to about 5 dB barely shows in the loud parts, and a larger one is back within 0.1 of brightness after up to 25 s (30 s when a step up lands at the start of a quiet verse) instead of 2–15 s. `docs/CORE-API.md` §4.2 has the details.*
+
 ### Level and Bass envelopes
 Apply an asymmetric one-pole envelope to each normalized value:
 ```
@@ -47,11 +49,13 @@ current += (target - current) * coef
 | Level | 30 ms | 250 ms | `0.55*bass + 0.35*mid + 0.10*high` |
 | Bass | 15 ms | 180 ms | `bassNorm` |
 
+*Clarification (Maxwell's feedback, round 1): these Level time constants apply with drums; with none, Level uses 10× the attack and 5× the release (0.3 s / 1.25 s), and its target is the song position (full within about 5 dB of the song's loud parts) cut by the weighted bands above (CORE-API §4.2).*
+
 ### Beat detection (spectral flux on the bass band)
 1. `flux = Σ max(0, |X[k]| - |Xprev[k]|)` over bass bins (positive changes only).
 2. Keep a ring of the last **1.0 s** of flux values. `threshold = mean + 1.5 * stddev`.
 3. A beat fires when `flux > threshold` **and** `flux > minFlux` (to avoid noise during silence) **and** at least **180 ms** have passed since the last beat (max ≈333 BPM).
-4. On a beat, `Beat = 1`. Otherwise, `Beat` decays exponentially with τ = **120 ms**.
+4. On a beat, `Beat = 1`. Otherwise, `Beat` decays exponentially with τ = **120 ms**. *Clarification (Maxwell's feedback, round 1): detection is unchanged, but `Beat` jumps to the beat's grade, 0..1: how kick-like the onset is (the rise of a fixed 30–100 Hz kick band against the music above the bass band), how drum-driven the last onsets have been (one kick-like onset alone is no groove yet), how it compares with the strongest recent kick, and how loud the moment is within the song. A kick in a loud groove is still exactly 1; soft drums give smaller pulses, kicks under a whispered passage about a third of one, and a sung syllable, a plucked or struck low string or a bass guitar under a drumless song 0 (CORE-API §4.2).*
 5. `Sensitivity` (0.25–2×) scales the multiplier 1.5 inversely (higher sensitivity → lower threshold) and scales the final `Level` gain.
 
 ### Silence
@@ -68,7 +72,7 @@ Total target: **< 50 ms**. Use the newest samples every frame, and do not queue 
 A small always-on-top WPF window showing live:
 - The spectrum (log frequency axis) with the band boundaries marked
 - Scrolling plots of `Level`, `Bass`, `Beat`, raw flux, and the beat threshold
-- A beat counter and estimated BPM (median of recent beat intervals). *Clarification (C13, H-016): the estimate is the mean of the last 16 intervals that lie within ±25 % of their median, or the median when none does. A plain median is biased by whole-frame intervals at a steady frame rate (171.4 for 174 BPM at 60 fps); `docs/CORE-API.md` §4.4 has the details.*
+- A beat counter and estimated BPM (median of recent beat intervals). *Clarification (C13, H-016): the estimate is the mean of the last 16 intervals that lie within ±25 % of their median, or the median when none does. A plain median is biased by whole-frame intervals at a steady frame rate (171.4 for 174 BPM at 60 fps); `docs/CORE-API.md` §4.4 has the details. Since Maxwell's feedback round 1, where kicks play only the kick-like beats at least 0.6× as strong as the strongest recent kick count for the tempo, so an off-beat bass note doesn't double it; where none play, every beat counts.*
 - `IsSilent`, the capture format, and the device name
 
 This is how Maxwell will tune the feel. Make all the parameters above live-editable here (sliders) and add a "Copy params as JSON" button. Parameters live in an `AudioTuning` record in Core with the defaults above.

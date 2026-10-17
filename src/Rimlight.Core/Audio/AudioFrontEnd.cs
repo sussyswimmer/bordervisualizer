@@ -29,6 +29,10 @@ internal sealed class AudioFrontEnd
     // Time-domain RMS of the current analysis window.
     public float WindowRms => spectrum.WindowRms;
 
+    // The latest Level target before the envelope: doc 03 §2's weighted auto-gain bands. AudioAnalyzer blends it into its
+    // own Level by the music's punch (BeatCharacter), with LevelAttackSeconds/LevelReleaseSeconds at full punch.
+    public float LevelTarget { get; private set; }
+
     // Live tuning (doc 03 §4). WindowSize is fixed per instance; the analyzer rebuilds the front end to change it.
     public AudioTuning Tuning
     {
@@ -61,6 +65,7 @@ internal sealed class AudioFrontEnd
         float highNorm = highGain.Update(energies.High, dtSeconds, tuning, silent);
         // Weights are free-form live-tuning values (doc 03 §4), so clamp instead of requiring a sum of 1.
         float target = Math.Clamp(tuning.LevelBassWeight * bassNorm + tuning.LevelMidWeight * midNorm + tuning.LevelHighWeight * highNorm, 0, 1);
+        LevelTarget = target;
         return new AmplitudeFeatures(
             level.Update(target, dtSeconds, tuning.LevelAttackSeconds, tuning.LevelReleaseSeconds),
             bass.Update(bassNorm, dtSeconds, tuning.BassAttackSeconds, tuning.BassReleaseSeconds));
@@ -74,6 +79,7 @@ internal sealed class AudioFrontEnd
         highGain.Reset();
         level.Reset();
         bass.Reset();
+        LevelTarget = 0;
         previousSampleRate = 0;
     }
 

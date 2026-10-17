@@ -56,12 +56,16 @@ internal static class SyntheticAudio
     // Frame times jitter by ±jitter. Audio arrives continuously, or in whole packets of packetSeconds (WASAPI
     // delivers 10–20 ms packets; Bluetooth and some drivers deliver larger ones), so frames can be empty.
     // afterFrame, if given, runs after each frame with the frame's end time, e.g. to sample the diagnostics.
-    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0, Action<double>? afterFrame = null)
+    // A beat is a frame on which Diagnostics.BeatCount rose (the detector fired). Until Maxwell's feedback round 1 this
+    // read Beat jumping to 1; Beat is now each beat's grade (kick-like, how drum-driven the music is, accented, loud
+    // within the song), so detection and the pulse are checked apart: pulses, if given, collects the frames on which
+    // Beat rose to StrongPulse or more (see StrongPulseRate).
+    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0, Action<double>? afterFrame = null, List<float>? pulses = null)
     {
         var random = new Random(seed);
         var beats = new List<float>();
         int packet = packetSeconds > 0 ? Math.Max(1, (int)MathF.Round(packetSeconds * sampleRate)) : 1;
-        int position = 0;
+        int position = 0, beatCount = analyzer.Diagnostics.BeatCount;
         double time = 0, end = samples.Length / (double)sampleRate;
         float previousBeat = 0;
         while (time < end)
@@ -70,13 +74,34 @@ internal static class SyntheticAudio
             time += dt;
             long arrived = Math.Min(samples.Length, (long)(time * sampleRate) / packet * packet);
             int count = (int)Math.Max(0, arrived - position);
-            var features = analyzer.Process(samples.AsSpan(position, count), sampleRate, dt);
+            float beat = analyzer.Process(samples.AsSpan(position, count), sampleRate, dt).Beat;
             position += count;
-            if (features.Beat >= 0.999f && previousBeat < 0.999f) beats.Add((float)time);
-            previousBeat = features.Beat;
+            int fired = analyzer.Diagnostics.BeatCount;
+            if (fired > beatCount) beats.Add((float)time);
+            beatCount = fired;
+            if (beat >= StrongPulse && previousBeat < StrongPulse) pulses?.Add((float)time);
+            previousBeat = beat;
             afterFrame?.Invoke(time);
         }
         return beats;
+    }
+
+    // A strong pulse: what a kick in a groove gives (MusicDynamicsTests uses the same bar).
+    public const float StrongPulse = 0.7f;
+
+    // The share of the detected beats at or after skipSeconds whose pulse rose to StrongPulse within maxDelay. The groove
+    // takes about 2 s to establish itself (the first second only listens and the drive needs two kicks: BeatCharacter),
+    // so skipSeconds is 3 s or more.
+    public static float StrongPulseRate(IReadOnlyList<float> beats, IReadOnlyList<float> pulses, float skipSeconds, float maxDelay = 0.1f)
+    {
+        int detected = 0, strong = 0;
+        foreach (float beat in beats)
+        {
+            if (beat < skipSeconds) continue;
+            detected++;
+            if (pulses.Any(p => p >= beat && p <= beat + maxDelay)) strong++;
+        }
+        return detected == 0 ? 0 : strong / (float)detected;
     }
 
     // Fraction of the kicks at or after skipSeconds that were followed by a detected beat within maxDelay.

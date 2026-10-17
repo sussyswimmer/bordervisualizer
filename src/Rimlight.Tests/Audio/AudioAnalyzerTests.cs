@@ -17,13 +17,16 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
     public void KickTrackTempoIsDetectedWithinTwoBpm(int sampleRate, float bpm)
     {
         // Doc 03 §5: decaying 60 Hz bursts + noise → tempo ± 2 BPM. Frames jitter ±20 % like a real render loop.
+        // And every kick from 3 s on is a strong pulse (Maxwell's feedback, round 1: the groove has established itself).
         var analyzer = new AudioAnalyzer();
-        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(sampleRate, 20, bpm, 0.8f, 0.2f), sampleRate, jitter: 0.2f);
+        var pulses = new List<float>();
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(sampleRate, 20, bpm, 0.8f, 0.2f), sampleRate, jitter: 0.2f, pulses: pulses);
         int expected = (int)(18 * bpm / 60);
         output.WriteLine($"{sampleRate} Hz, {bpm} BPM: {beats.Count(t => t >= 2)}/{expected} beats, estimate {analyzer.Diagnostics.EstimatedBpm:F2}");
         Assert.InRange(analyzer.Diagnostics.EstimatedBpm, bpm - 2, bpm + 2);
         Assert.InRange(SyntheticAudio.BpmFromBeats(beats, 2), bpm - 2, bpm + 2);
         Assert.InRange(beats.Count(t => t >= 2), expected - 1, expected + 1);
+        Assert.Equal(1, SyntheticAudio.StrongPulseRate(beats, pulses, 3));
     }
 
     [Theory]
@@ -86,12 +89,37 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void OffBeatBassNotesAreBeatsButNotTempo()
+    {
+        // Maxwell's feedback, round 1: four-on-the-floor with a bass note on every off-beat, at under half the kick's
+        // flux. Both are bass onsets and both fire (BeatCount), but only the accented kicks count for the tempo, which
+        // would otherwise read the off-beats' 256 BPM (BeatCharacter.TempoBeatAge: the off-beat stands out like a kick,
+        // but rises under 0.6 of the kick's rise).
+        const int rate = 48000;
+        const float bpm = 128, interval = 60 / bpm;
+        float[] kicks = SyntheticAudio.KickTrack(rate, 20, bpm, 0.8f, 0.05f);
+        for (int i = 0; i < kicks.Length; i++)
+        {
+            float since = (i / (float)rate + interval / 2) % interval;
+            kicks[i] += 0.3f * MathF.Min(1, since / 0.005f) * MathF.Exp(-since / 0.15f) * MathF.Sin(2 * MathF.PI * 55 * since);
+        }
+        var analyzer = new AudioAnalyzer();
+        var beats = SyntheticAudio.Run(analyzer, kicks, rate);
+        int expectedKicks = (int)(18 / interval);
+        output.WriteLine($"{beats.Count(t => t >= 2)} beats for {expectedKicks} kicks, tempo {analyzer.Diagnostics.EstimatedBpm:F2}");
+        Assert.True(beats.Count(t => t >= 2) >= 1.6 * expectedKicks);
+        Assert.InRange(analyzer.Diagnostics.EstimatedBpm, bpm - 2, bpm + 2);
+    }
+
+    [Fact]
     public void MusicLikeMixTracksTheKick()
     {
         var analyzer = new AudioAnalyzer();
-        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.MusicLike(48000, 20, 124), 48000, jitter: 0.2f);
+        var pulses = new List<float>();
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.MusicLike(48000, 20, 124), 48000, jitter: 0.2f, pulses: pulses);
         Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 122, 126);
         Assert.InRange(beats.Count(t => t >= 2), 36, 38);
+        Assert.Equal(1, SyntheticAudio.StrongPulseRate(beats, pulses, 3));
     }
 
     [Theory]
@@ -121,10 +149,12 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         foreach (var (samples, bpm) in new[] { (SyntheticAudio.KickTrack(48000, 20, 120, 0.8f, 0.2f), 120f), (SyntheticAudio.MusicLike(48000, 20, 124), 124f) })
         {
             var analyzer = new AudioAnalyzer();
-            var beats = SyntheticAudio.Run(analyzer, samples, 48000, fps, jitter, packetSeconds: packetSeconds);
-            float hits = SyntheticAudio.HitRate(beats, bpm, 20, 2);
-            output.WriteLine($"{fps} fps, {packetSeconds * 1000} ms packets, {bpm} BPM: {hits:P0} hit, {SyntheticAudio.FalseBeats(beats, bpm, 2)} false, estimate {analyzer.Diagnostics.EstimatedBpm:F1}");
+            var pulses = new List<float>();
+            var beats = SyntheticAudio.Run(analyzer, samples, 48000, fps, jitter, packetSeconds: packetSeconds, pulses: pulses);
+            float hits = SyntheticAudio.HitRate(beats, bpm, 20, 2), strong = SyntheticAudio.StrongPulseRate(beats, pulses, 3);
+            output.WriteLine($"{fps} fps, {packetSeconds * 1000} ms packets, {bpm} BPM: {hits:P0} hit, {strong:P0} strong, {SyntheticAudio.FalseBeats(beats, bpm, 2)} false, estimate {analyzer.Diagnostics.EstimatedBpm:F1}");
             Assert.True(hits >= 0.95f, $"{hits:P0} of kicks detected");
+            Assert.True(strong >= 0.95f, $"{strong:P0} of the detected kicks strong pulses");
             Assert.Equal(0, SyntheticAudio.FalseBeats(beats, bpm, 2));
             Assert.InRange(analyzer.Diagnostics.EstimatedBpm, bpm - 2, bpm + 2);
         }
@@ -151,8 +181,10 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
     public void HighSampleRatesKeepTempoAndStayQuietOnNoise(int sampleRate)
     {
         var analyzer = new AudioAnalyzer();
-        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(sampleRate, 20, 120, 0.8f, 0.2f), sampleRate, jitter: 0.2f);
+        var pulses = new List<float>();
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(sampleRate, 20, 120, 0.8f, 0.2f), sampleRate, jitter: 0.2f, pulses: pulses);
         Assert.True(SyntheticAudio.HitRate(beats, 120, 20, 2) >= 0.95f);
+        Assert.True(SyntheticAudio.StrongPulseRate(beats, pulses, 3) >= 0.95f);
         Assert.InRange(analyzer.Diagnostics.EstimatedBpm, 118, 122);
         Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(), SyntheticAudio.WhiteNoise(sampleRate, 30, 0.3f, 5), sampleRate, jitter: 0.2f));
         Assert.Empty(SyntheticAudio.Run(new AudioAnalyzer(), SyntheticAudio.WhiteNoise(sampleRate, 30, 1f, 6), sampleRate, 30));
