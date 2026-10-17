@@ -37,7 +37,7 @@
                         <TextBlock x:Name="ThicknessValue" DockPanel.Dock="Right" Style="{StaticResource ValueText}" />
                         <TextBlock Style="{StaticResource RowLabel}" Text="Thickness" />
                     </DockPanel>
-                    <TextBlock Style="{StaticResource RowDescription}" Text="The solid line along the edges. 0 leaves only the glow." />
+                    <TextBlock Style="{StaticResource RowDescription}" Text="How wide the brightest light along the edges is, before it fades into the glow. 0 leaves only the glow." />
                     <Slider x:Name="ThicknessSlider" Margin="0,8,0,0" Minimum="0" Maximum="40" SmallChange="1" LargeChange="5"
                             TickFrequency="1" IsSnapToTickEnabled="True" AutomationProperties.Name="Thickness in pixels"
                             ValueChanged="OnThicknessChanged" />

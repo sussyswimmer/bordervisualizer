@@ -888,7 +888,7 @@ public sealed class OverlayHost : IDisposable
         surface.SkippingSinceMs is long since && nowMs - since >= StalledCheckMs;
 
     // One overlay's constants for this frame. At half scale the swap chain's pixels are twice as large, so every
-    // pixel measure is converted at the surface's render scale; only the thin-core fade stays in screen pixels.
+    // pixel measure is converted at the surface's render scale (a thin band keeps its light: GlowProfile.BandGain).
     private GlowConstants Constants(in LightState state, Overlay overlay, OverlaySurface surface, float cornerRadiusDip, float visibility)
     {
         GlowConstants constants = GlowConstants.Create(state, surface.Width, surface.Height, overlay.Monitor.Scale,
