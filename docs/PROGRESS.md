@@ -1755,7 +1755,7 @@ Maxwell ran the app on Windows and reported, verbatim:
   - Soft edge (the line): 5420417.
   - Settings window (no settings): af5d2a6.
   - Dynamics and soft edge each had two reviews and a fix round before merging.
-- **Merged state, checked in the docs pass:** `dotnet build Rimlight.sln -c Release` gives 0 warnings. `dotnet test` passes Rimlight.Tests 815, Rimlight.Platform.Tests 368 and Rimlight.IconGen.Tests 89. Rimlight.App.Tests isn't a test project off Windows.
+- **Merged state, checked in the docs pass:** `dotnet build Rimlight.sln -c Release` gives 0 warnings. `dotnet test` passes Rimlight.Tests 815, Rimlight.Platform.Tests 368 and Rimlight.IconGen.Tests 89. Rimlight.App.Tests isn't a test project off Windows; on Windows CI it passes 23 of 23 (see Settings window, Verified).
 - **Not changed:** no file under `Contracts/`, and no `AudioTuning` or `Settings` default. Nothing has run on Windows yet; the checklist is at the end of this section.
 
 ### Dynamics
@@ -2014,7 +2014,8 @@ Branch `wip/settings-window` (ff5db1c, 7c16c3a), on 5b387fc. Effort: M.
 - **Verified here (Linux, SDK 8.0.426):**
   - Release and Debug builds have 0 warnings, and ff5db1c builds on its own.
   - `dotnet test Rimlight.sln -c Release` passes.
-  - Rimlight.App.Tests has not run anywhere yet. Off Windows it isn't a test project, and forcing it aborted the run with "Microsoft.WindowsDesktop.App not found".
+  - Rimlight.App.Tests can't run here: off Windows it isn't a test project, and forcing it aborted the run with "Microsoft.WindowsDesktop.App not found".
+  - **Windows CI, 2026-10-17:** a manual run of CI on 3a2fd04 ([run 38992796791](https://github.com/sussyswimmer/bordervisualizer/actions/runs/38992796791)) ran Rimlight.App.Tests in the "Full solution (Windows)" job: **23 passed, 0 skipped**. With the Fluent styles loaded as the app loads them, the settings window, all six pages, the colour editors, the welcome window and the visualizer window build and lay out without a logged failure on windows-latest. So the window itself can be built on Windows; what Maxwell saw still needs his rimlight.log or a description (a hidden tray icon in Windows 11's overflow, a build from the other #25–#30 stack, or something specific to his PC).
 - **Left for later:**
   - **The cause on Maxwell's PC** is still unknown. It needs his rimlight.log lines (checklist item 1) or the first Windows CI run.
   - **The first CI run** may hit environment issues:
