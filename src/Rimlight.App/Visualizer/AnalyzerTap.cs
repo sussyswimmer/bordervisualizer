@@ -7,8 +7,9 @@ namespace Rimlight.App.Visualizer;
 /// <summary>
 /// The overlay thread's half of the debug visualizer (doc 03 §4), owned by <see cref="Overlay.MusicGlowSource"/>.
 /// While a <see cref="VisualizerFeed"/> is attached it applies the tunings the UI posts (H-004: only the render thread
-/// touches the analyzer), records Level, Bass, Beat and the time step of every analyzer call next to the analyzer's
-/// own flux and threshold histories, and about 60 times a second copies all of it into the feed's next snapshot.
+/// touches the analyzer), records Level, Bass, Beat, whether a beat fired and the time step of every analyzer call next
+/// to the analyzer's own flux and threshold histories, and about 60 times a second copies all of it into the feed's next
+/// snapshot.
 /// Nothing here allocates per frame. With no feed attached it costs nothing and holds on to none
 /// (<see cref="Detach"/>).
 /// </summary>
@@ -21,8 +22,10 @@ internal sealed class AnalyzerTap
     private float[] level = new float[VisualizerFeed.HistoryEntries];
     private float[] bass = new float[VisualizerFeed.HistoryEntries];
     private float[] beat = new float[VisualizerFeed.HistoryEntries];
+    private float[] fired = new float[VisualizerFeed.HistoryEntries];
     private float[] seconds = new float[VisualizerFeed.HistoryEntries];
     private int head;              // where the next entry goes
+    private int beatCount = -1;    // the analyzer's BeatCount after the last recorded call; -1 before the first
     private float sinceSnapshot;
     private long sequence;
 
@@ -80,6 +83,9 @@ internal sealed class AnalyzerTap
         level[head] = features.Level;
         bass[head] = features.Bass;
         beat[head] = features.Beat;
+        // A beat fired on this call when BeatCount rose. It falls back to 0 on a reset or a WindowSize change.
+        fired[head] = beatCount >= 0 && diagnostics.BeatCount > beatCount ? 1 : 0;
+        beatCount = diagnostics.BeatCount;
         seconds[head] = dt;
         head = (head + 1) % level.Length;
 
@@ -98,6 +104,7 @@ internal sealed class AnalyzerTap
         CopyOldestFirst(level, snapshot.Level, history);
         CopyOldestFirst(bass, snapshot.Bass, history);
         CopyOldestFirst(beat, snapshot.Beat, history);
+        CopyOldestFirst(fired, snapshot.Fired, history);
         CopyOldestFirst(seconds, snapshot.FrameSeconds, history);
         snapshot.HistoryLength = history;
         snapshot.Features = features;
@@ -133,8 +140,10 @@ internal sealed class AnalyzerTap
         Array.Clear(level);
         Array.Clear(bass);
         Array.Clear(beat);
+        Array.Clear(fired);
         Array.Clear(seconds);
         head = 0;
+        beatCount = -1;
         sinceSnapshot = SnapshotSeconds;
     }
 
@@ -144,6 +153,7 @@ internal sealed class AnalyzerTap
         level = new float[history];
         bass = new float[history];
         beat = new float[history];
+        fired = new float[history];
         seconds = new float[history];
         head = 0;
     }

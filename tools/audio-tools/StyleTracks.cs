@@ -1,0 +1,1056 @@
+namespace Rimlight.AudioTools;
+
+/// <summary>The kinds of procedural song <see cref="StyleTracks"/> renders.</summary>
+public enum MusicStyle
+{
+    /// <summary>
+    /// A calm folk ballad at 72 BPM with no drums: fingerpicked acoustic guitar with alternating low-string bass,
+    /// a soft baritone voice (fundamental 98–147 Hz in the verses, inside the 30–150 Hz beat band), breaths, plosives
+    /// and sibilants. Whispered verses at about −24 dBFS RMS, strummed choruses at about −8 dBFS.
+    /// </summary>
+    CalmBallad,
+
+    /// <summary>
+    /// Rap at 90 BPM: an 808 on every beat (and on the "and" of 4 every other bar) with long saturated sub tails, a
+    /// snare and clap on 2 and 4, 16th-note hi-hats, and a rhythmic male vocal on 16ths whose fundamental lies in the
+    /// beat band. About −10 dBFS RMS throughout.
+    /// </summary>
+    Rap,
+
+    /// <summary>
+    /// Four-on-the-floor EDM at 128 BPM: a punchy kick on every beat, offbeat bass, claps, hats and a pumping pad in two
+    /// drops (about −8 dBFS RMS), with a 12 s breakdown of pad and lead only between them (about −14 dBFS RMS).
+    /// </summary>
+    Edm,
+
+    /// <summary>
+    /// The ballad's instruments at 76 BPM with acoustic drums (kick, snare, hats) entering only at the chorus: a
+    /// drumless verse at about −20 dBFS RMS, a drummed chorus at about −10 dBFS, and a drumless verse again.
+    /// </summary>
+    BalladWithDrums,
+
+    /// <summary>
+    /// A folk band at 76 BPM in the ballad's form (whispered verses at about −24 dBFS RMS, choruses at about −9 dBFS):
+    /// fingerpicked and strummed acoustic guitar modelled additively with strong low fundamentals, the baritone voice, a
+    /// fingered bass guitar (half notes in the verses, quarter notes in the choruses) and a soft brush kit (felt kick on
+    /// 1 and 3, brush on 2 and 4, swishes on the eighths) playing throughout. Render the parts as stems and combine them
+    /// with <see cref="StyleTracks.Mix"/> to set the bass and the drums at exact levels under the music.
+    /// </summary>
+    FolkBand,
+
+    /// <summary>
+    /// A piano ballad at 70 BPM: whispered verses (about −24 dBFS RMS) over broken chords and one sustained left-hand
+    /// bass note a bar, and loud choruses (about −8 dBFS) with left-hand octaves (both notes inside the 30–150 Hz beat
+    /// band) struck on every beat under block chords. Inharmonic additive piano with hammer noise, and the baritone voice.
+    /// </summary>
+    PianoBallad,
+}
+
+/// <summary>Which instruments of a <see cref="StyleTrack"/> to render, e.g. the voice alone.</summary>
+[Flags]
+public enum StyleParts
+{
+    /// <summary>Nothing.</summary>
+    None = 0,
+    /// <summary>Acoustic guitar: fingerpicking and strumming.</summary>
+    Guitar = 1,
+    /// <summary>Singing or rapping, with breaths, plosives and sibilants.</summary>
+    Voice = 2,
+    /// <summary>Kicks, 808s, snares, claps and hi-hats.</summary>
+    Drums = 4,
+    /// <summary>Synthesizers: bass, pads and lead.</summary>
+    Synth = 8,
+    /// <summary>Fingered bass guitar.</summary>
+    Bass = 16,
+    /// <summary>Acoustic piano.</summary>
+    Piano = 32,
+    /// <summary>Everything.</summary>
+    All = Guitar | Voice | Drums | Synth | Bass | Piano,
+}
+
+/// <summary>A labelled stretch of a <see cref="StyleTrack"/>.</summary>
+/// <param name="Name">The section's name, e.g. <c>verse1</c> or <c>chorus1</c>.</param>
+/// <param name="Start">Start time in seconds.</param>
+/// <param name="End">End time in seconds.</param>
+/// <param name="Drums">Whether drums play in this section.</param>
+/// <param name="TargetRmsDb">The RMS level the section was mixed to, in dBFS.</param>
+public readonly record struct TrackSection(string Name, double Start, double End, bool Drums, double TargetRmsDb);
+
+/// <summary>A rendered style track with its ground truth.</summary>
+/// <param name="Style">What it imitates.</param>
+/// <param name="Samples">Mono samples.</param>
+/// <param name="SampleRate">Sample rate in Hz.</param>
+/// <param name="Bpm">Tempo.</param>
+/// <param name="Sections">The sections, in order and without gaps.</param>
+/// <param name="KickTimes">Every kick drum onset, in seconds (empty without drums).</param>
+/// <param name="Parts">The instruments rendered.</param>
+public sealed record StyleTrack(MusicStyle Style, float[] Samples, int SampleRate, double Bpm, IReadOnlyList<TrackSection> Sections, IReadOnlyList<double> KickTimes, StyleParts Parts)
+{
+    /// <summary>The track's length in seconds.</summary>
+    public double Seconds => Samples.Length / (double)SampleRate;
+
+    /// <summary>Finds a section by name.</summary>
+    /// <param name="name">The section name.</param>
+    /// <returns>The section.</returns>
+    /// <exception cref="ArgumentException">There is no such section.</exception>
+    public TrackSection Section(string name)
+    {
+        foreach (TrackSection section in Sections)
+            if (section.Name == name) return section;
+        throw new ArgumentException($"{Style} has no section \"{name}\".", nameof(name));
+    }
+}
+
+/// <summary>
+/// Procedural songs in four styles for tuning and testing how the light follows the character and the dynamics of
+/// music (no recorded music). They are built from simple physical-ish models: additive plucked strings whose
+/// partials decay faster the higher they are, a formant-shaped voice with vibrato, breath and consonant noise, and
+/// synthesized drums. Each section is mixed to a target RMS, so the dynamics between sections are known exactly.
+/// Rendering is deterministic for a seed and takes about a second for the longest track. Each instrument draws from its
+/// own random stream, so rendering only some <see cref="StyleParts"/> gives exactly those instruments of the full mix
+/// (each section then mixed to its target RMS on its own, and not clipped, so a stem can exceed ±1).
+/// </summary>
+public static class StyleTracks
+{
+    /// <summary>Renders a style track.</summary>
+    /// <param name="style">The style.</param>
+    /// <param name="sampleRate">Sample rate in Hz, 8000 to 192000.</param>
+    /// <param name="seed">Seed for the humanization, noise and melody.</param>
+    /// <param name="parts">The instruments to render; at least one.</param>
+    /// <returns>The track and its ground truth.</returns>
+    public static StyleTrack Render(MusicStyle style, int sampleRate = 48000, ulong seed = 1, StyleParts parts = StyleParts.All)
+    {
+        if (sampleRate is < 8000 or > 192000) throw new ArgumentOutOfRangeException(nameof(sampleRate), "Expected 8000 to 192000 Hz.");
+        if ((parts & StyleParts.All) == StyleParts.None) throw new ArgumentOutOfRangeException(nameof(parts), "Render at least one part.");
+        var synth = new Synth(sampleRate, seed, parts & StyleParts.All);
+        return style switch
+        {
+            MusicStyle.CalmBallad => CalmBallad(synth),
+            MusicStyle.Rap => Rap(synth),
+            MusicStyle.Edm => Edm(synth),
+            MusicStyle.BalladWithDrums => BalladWithDrums(synth),
+            MusicStyle.FolkBand => FolkBand(synth),
+            MusicStyle.PianoBallad => PianoBallad(synth),
+            _ => throw new ArgumentOutOfRangeException(nameof(style)),
+        };
+    }
+
+    /// <summary>
+    /// Adds stems to a track at levels relative to it, section by section: each stem is a render of the same style, seed
+    /// and sample rate with other <see cref="StyleParts"/>, so its sections are mixed to the same target RMS, and a stem
+    /// at −12 dB plays 12 dB under the music in every section. The result keeps the music's sections (it is a little
+    /// louder than their targets: 0.3 dB with one stem at −12 dB) and has every kick of every stem.
+    /// </summary>
+    /// <param name="music">The track the levels are relative to.</param>
+    /// <param name="stems">Each stem with its level in dB relative to <paramref name="music"/>.</param>
+    /// <returns>The mix, clipped to ±1.</returns>
+    /// <exception cref="ArgumentException">A stem has another style, sample rate or length.</exception>
+    public static StyleTrack Mix(StyleTrack music, params (StyleTrack Stem, double Db)[] stems)
+    {
+        ArgumentNullException.ThrowIfNull(music);
+        ArgumentNullException.ThrowIfNull(stems);
+        var sum = new double[music.Samples.Length];
+        for (int i = 0; i < sum.Length; i++) sum[i] = music.Samples[i];
+        var kicks = new List<double>(music.KickTimes);
+        StyleParts parts = music.Parts;
+        foreach ((StyleTrack stem, double db) in stems)
+        {
+            if (stem.Style != music.Style || stem.SampleRate != music.SampleRate || stem.Samples.Length != music.Samples.Length)
+                throw new ArgumentException("Stems must be renders of the same style, sample rate and length.", nameof(stems));
+            double gain = Math.Pow(10, db / 20);
+            for (int i = 0; i < sum.Length; i++) sum[i] += gain * stem.Samples[i];
+            kicks.AddRange(stem.KickTimes);
+            parts |= stem.Parts;
+        }
+        var samples = new float[sum.Length];
+        for (int i = 0; i < sum.Length; i++) samples[i] = (float)Math.Clamp(sum[i], -1, 1);
+        kicks.Sort();
+        return music with { Samples = samples, KickTimes = kicks.ToArray(), Parts = parts };
+    }
+
+    // ---- the songs ----
+
+    // G – Em – C – D, one chord per bar. Fingerpicking: the thumb plays the root on beat 1 and the fifth on beat 3
+    // (low E and A strings included); the fingers play chord tones on the other eighths.
+    private static readonly double[][] PickBass = [[98.00, 146.83], [82.41, 123.47], [130.81, 98.00], [146.83, 110.00]];
+    private static readonly double[][] PickTreble = [[196.00, 246.94, 293.66], [196.00, 246.94, 329.63], [196.00, 261.63, 329.63], [220.00, 293.66, 369.99]];
+    private static readonly double[][] StrumChords =
+    [
+        [98.00, 123.47, 146.83, 196.00, 246.94, 392.00],
+        [82.41, 123.47, 164.81, 196.00, 246.94, 329.63],
+        [130.81, 164.81, 196.00, 261.63, 329.63],
+        [146.83, 220.00, 293.66, 369.99],
+    ];
+    // Baritone melodies (Hz): verses sit low (G2–D3, inside the beat band), choruses higher (D3–A3).
+    private static readonly double[] VerseNotes = [98.00, 110.00, 123.47, 130.81, 146.83];
+    private static readonly double[] ChorusNotes = [146.83, 164.81, 196.00, 220.00, 196.00, 164.81];
+
+    private static StyleTrack CalmBallad(Synth synth)
+    {
+        const double bpm = 72;
+        TrackSection[] sections =
+        [
+            new("intro", 0, 8, false, -22),
+            new("verse1", 8, 30, false, -24),
+            new("chorus1", 30, 50, false, -8),
+            new("verse2", 50, 72, false, -24),
+            new("chorus2", 72, 92, false, -8),
+            new("outro", 92, 100, false, -22),
+        ];
+        synth.Allocate(sections[^1].End);
+        double beat = 60 / bpm;
+        foreach (TrackSection section in sections)
+        {
+            bool chorus = section.Name.StartsWith("chorus", StringComparison.Ordinal);
+            if (chorus) Strumming(synth, section.Start, section.End, beat);
+            else Fingerpicking(synth, section.Start, section.End, beat);
+            if (section.Name.StartsWith("verse", StringComparison.Ordinal)) Singing(synth, section.Start, section.End, beat, whisper: true);
+            if (chorus) Singing(synth, section.Start, section.End, beat, whisper: false);
+        }
+        return synth.Finish(MusicStyle.CalmBallad, bpm, sections);
+    }
+
+    private static StyleTrack BalladWithDrums(Synth synth)
+    {
+        const double bpm = 76;
+        TrackSection[] sections =
+        [
+            new("verse", 0, 24, false, -20),
+            new("chorus", 24, 48, true, -10),
+            new("verse2", 48, 60, false, -20),
+        ];
+        synth.Allocate(sections[^1].End);
+        double beat = 60 / bpm;
+        foreach (TrackSection section in sections)
+        {
+            if (section.Drums)
+            {
+                Strumming(synth, section.Start, section.End, beat);
+                Singing(synth, section.Start, section.End, beat, whisper: false);
+                AcousticDrums(synth, section.Start, section.End, beat);
+            }
+            else
+            {
+                Fingerpicking(synth, section.Start, section.End, beat);
+                Singing(synth, section.Start, section.End, beat, whisper: true);
+            }
+        }
+        return synth.Finish(MusicStyle.BalladWithDrums, bpm, sections);
+    }
+
+    // G – Em – C – D again: the bass guitar's root and fifth (Hz) for each bar.
+    private static readonly double[][] BassRoots = [[49.00, 73.42], [41.20, 61.74], [65.41, 49.00], [73.42, 55.00]];
+
+    private static StyleTrack FolkBand(Synth synth)
+    {
+        const double bpm = 76;
+        TrackSection[] sections =
+        [
+            new("intro", 0, 8, true, -22),
+            new("verse1", 8, 30, true, -24),
+            new("chorus1", 30, 50, true, -9),
+            new("verse2", 50, 72, true, -24),
+            new("chorus2", 72, 92, true, -9),
+            new("outro", 92, 100, true, -22),
+        ];
+        synth.Allocate(sections[^1].End);
+        double beat = 60 / bpm;
+        foreach (TrackSection section in sections)
+        {
+            bool chorus = section.Name.StartsWith("chorus", StringComparison.Ordinal);
+            if (chorus) FolkStrumming(synth, section.Start, section.End, beat);
+            else FolkPicking(synth, section.Start, section.End, beat);
+            if (section.Name.StartsWith("verse", StringComparison.Ordinal)) Singing(synth, section.Start, section.End, beat, whisper: true);
+            if (chorus) Singing(synth, section.Start, section.End, beat, whisper: false);
+            BassGuitar(synth, section.Start, section.End, beat, quarters: chorus);
+            BrushKit(synth, section.Start, section.End, beat);
+        }
+        return synth.Finish(MusicStyle.FolkBand, bpm, sections);
+    }
+
+    // Am – F – C – G: the left hand's roots (Hz, played with their octave in the choruses) and the right hand's chords.
+    private static readonly double[] PianoRoots = [55.00, 43.65, 65.41, 49.00];
+    private static readonly double[][] PianoChords = [[220.00, 261.63, 329.63], [220.00, 261.63, 349.23], [196.00, 261.63, 329.63], [196.00, 246.94, 293.66]];
+
+    private static StyleTrack PianoBallad(Synth synth)
+    {
+        const double bpm = 70;
+        TrackSection[] sections =
+        [
+            new("intro", 0, 6, false, -24),
+            new("verse1", 6, 28, false, -24),
+            new("chorus1", 28, 48, false, -8),
+            new("verse2", 48, 70, false, -24),
+            new("chorus2", 70, 90, false, -8),
+            new("outro", 90, 96, false, -24),
+        ];
+        synth.Allocate(sections[^1].End);
+        double beat = 60 / bpm;
+        foreach (TrackSection section in sections)
+        {
+            bool chorus = section.Name.StartsWith("chorus", StringComparison.Ordinal);
+            PianoPart(synth, section.Start, section.End, beat, chorus);
+            if (section.Name.StartsWith("verse", StringComparison.Ordinal)) Singing(synth, section.Start, section.End, beat, whisper: true);
+            if (chorus) Singing(synth, section.Start, section.End, beat, whisper: false);
+        }
+        return synth.Finish(MusicStyle.PianoBallad, bpm, sections);
+    }
+
+    private static StyleTrack Rap(Synth synth)
+    {
+        const double bpm = 90;
+        TrackSection[] sections = [new("verse", 0, 40, true, -10)];
+        synth.Allocate(sections[^1].End);
+        synth.Use(StyleParts.Drums);
+        double beat = 60 / bpm;
+        double[] bassline = [43.65, 43.65, 51.91, 38.89];   // F1 F1 G#1 D#1, one note per bar
+        int beats = (int)Math.Round(40 / beat);
+        // 808s: every beat, plus the "and" of 4 in every second bar. A new 808 cuts the previous one (mono voice).
+        var hits = new List<double>();
+        for (int b = 0; b < beats; b++)
+        {
+            hits.Add(b * beat);
+            if (b % 8 == 7) hits.Add((b + 0.5) * beat);
+        }
+        for (int i = 0; i < hits.Count; i++)
+        {
+            double t = hits[i];
+            double cut = i + 1 < hits.Count ? hits[i + 1] : 40;
+            double f = bassline[(int)(t / (4 * beat)) % bassline.Length];
+            synth.Kick808(t, f, 0.9, 0.45, cut);
+        }
+        for (int b = 0; b < beats; b++)
+        {
+            double t = b * beat;
+            if (b % 2 == 1)
+            {
+                synth.Snare(t, 0.45);
+                synth.Clap(t + 0.004, 0.25);
+            }
+            for (int s = 0; s < 4; s++)
+            {
+                double accent = s == 0 ? 1 : s == 2 ? 0.75 : 0.5;
+                synth.Hat(t + s * beat / 4 + synth.Jitter(0.003), 0.10 * accent * synth.Vary(0.15), 0.022);
+            }
+            if (b % 8 == 6) for (int r = 0; r < 4; r++) synth.Hat(t + beat / 2 + r * beat / 8, 0.06, 0.015); // a roll
+        }
+        // A rapped vocal on 16ths: phrases of 2 bars with a short gap, syllables of one or two 16ths, speech-like pitch.
+        synth.Use(StyleParts.Voice);
+        double sixteenth = beat / 4;
+        for (double bar = 0; bar * 4 * beat < 40 - 0.5; bar += 2)
+        {
+            double phraseStart = bar * 4 * beat + sixteenth;
+            double phraseEnd = phraseStart + 7 * beat;
+            double t = phraseStart;
+            while (t < phraseEnd && t < 39.5)
+            {
+                double length = synth.Chance(0.3) ? 2 * sixteenth : sixteenth;
+                if (synth.Chance(0.12)) { t += sixteenth; continue; }            // a rest
+                double f0 = 118 + 22 * synth.Uniform() + (synth.Chance(0.2) ? 15 : 0);
+                synth.Syllable(t, length * 0.9, f0, f0 * (0.92 + 0.06 * synth.Uniform()), synth.PickVowel(), 0.32, 0.06, 0.012, 0.025, 0);
+                if (synth.Chance(0.45)) synth.Plosive(t, 0.10);
+                else if (synth.Chance(0.25)) synth.Sibilant(t, 0.08, 0.07);
+                t += length;
+            }
+        }
+        return synth.Finish(MusicStyle.Rap, bpm, sections);
+    }
+
+    private static StyleTrack Edm(Synth synth)
+    {
+        const double bpm = 128;
+        TrackSection[] sections =
+        [
+            new("drop1", 0, 24, true, -8),
+            new("breakdown", 24, 36, false, -14),
+            new("drop2", 36, 52, true, -8),
+        ];
+        synth.Allocate(sections[^1].End);
+        double beat = 60 / bpm;
+        double[][] chords = [[220.00, 261.63, 329.63], [174.61, 220.00, 261.63], [196.00, 246.94, 293.66], [164.81, 196.00, 246.94]];
+        double[] roots = [55.00, 43.65, 49.00, 41.20];
+        foreach (TrackSection section in sections)
+        {
+            int first = (int)Math.Ceiling(section.Start / beat - 1e-9), last = (int)Math.Ceiling(section.End / beat - 1e-9);
+            for (int b = first; b < last; b++)
+            {
+                double t = b * beat;
+                int bar = b / 4;
+                double[] chord = chords[bar % chords.Length];
+                if (section.Drums)
+                {
+                    synth.Use(StyleParts.Drums);
+                    synth.KickPunchy(t, 0.95);
+                    if (b % 2 == 1) synth.Clap(t, 0.35);
+                    synth.Hat(t + beat / 2, 0.14, 0.07);                          // open hat on the offbeat
+                    for (int s = 0; s < 4; s++) synth.Hat(t + s * beat / 4, 0.05 * synth.Vary(0.2), 0.018);
+                    synth.Use(StyleParts.Synth);
+                    synth.Saw(t + beat / 2, beat / 2 * 0.85, roots[bar % roots.Length], 0.30, 0.004, 1800);
+                    // The pad pumps: it ducks under each kick (sidechain) and swells back by the next one.
+                    foreach (double f in chord) synth.Saw(t + 0.01, beat * 0.95, f, 0.07, 0.18, 3500, detune: true);
+                }
+                else
+                {
+                    synth.Use(StyleParts.Synth);
+                    if (b % 4 == 0) foreach (double f in chord) synth.Saw(t, 4 * beat, f, 0.10, 0.6, 2500, detune: true);
+                    synth.Saw(t, beat * 0.8, 2 * chord[(b + bar) % 3], 0.05, 0.01, 4000);  // a plucky lead
+                }
+            }
+        }
+        return synth.Finish(MusicStyle.Edm, bpm, sections);
+    }
+
+    // ---- parts ----
+
+    private static void Fingerpicking(Synth synth, double start, double end, double beat)
+    {
+        synth.Use(StyleParts.Guitar);
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            int bar = e / 8, inBar = e % 8, chord = bar % PickBass.Length;
+            double t = e * eighth + synth.Jitter(0.010);
+            if (inBar is 0 or 4)
+            {
+                // The thumb: soft flesh, a strong low string.
+                synth.Pluck(t, PickBass[chord][inBar == 0 ? 0 : 1], 0.55 * synth.Vary(0.1), 1.6, 3.0, 0.20, 0.25);
+            }
+            else
+            {
+                double[] treble = PickTreble[chord];
+                synth.Pluck(t, treble[(inBar + bar) % treble.Length], 0.32 * synth.Vary(0.15), 1.1, 2.0, 0.17, 0.35);
+            }
+        }
+    }
+
+    private static void Strumming(Synth synth, double start, double end, double beat)
+    {
+        synth.Use(StyleParts.Guitar);
+        // Down, down-up, up-down-up per bar on eighths: D . D U . U D U, with a pick.
+        bool[] down = [true, false, true, false, false, false, true, false];
+        bool[] play = [true, false, true, true, false, true, true, true];
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            int inBar = e % 8;
+            if (!play[inBar]) continue;
+            double[] chord = StrumChords[e / 8 % StrumChords.Length];
+            double t = e * eighth + synth.Jitter(0.008);
+            double ring = Math.Min(end, (e + 1) * eighth + (play[(inBar + 1) % 8] ? 0 : eighth)) - t;
+            double velocity = (inBar is 0 or 4 ? 1 : down[inBar] ? 0.85 : 0.6) * synth.Vary(0.1);
+            int strings = down[inBar] ? chord.Length : Math.Min(4, chord.Length);
+            double sweep = down[inBar] ? 0.028 : 0.016;
+            for (int s = 0; s < strings; s++)
+            {
+                int index = down[inBar] ? s : chord.Length - 1 - s;
+                double at = t + sweep * s / Math.Max(1, strings - 1);
+                synth.Pluck(at, chord[index], 0.20 * velocity, 0.9, ring + 0.03, 0.12, 0.7, pick: 0.05);
+            }
+        }
+    }
+
+    // A baritone singer: phrases of two bars (about 4.5 s of singing, then a breath). Whispered verses are breathy and
+    // soft with slow onsets; choruses are fully voiced and higher.
+    private static void Singing(Synth synth, double start, double end, double beat, bool whisper)
+    {
+        synth.Use(StyleParts.Voice);
+        double bar = 4 * beat, phrase = 2 * bar;
+        double[] notes = whisper ? VerseNotes : ChorusNotes;
+        for (double p = start + beat; p + 1 < end; p += phrase)
+        {
+            double t = p, singEnd = Math.Min(end - 0.4, p + phrase - 1.3 * beat);
+            int note = synth.NextInt(notes.Length);
+            while (t < singEnd)
+            {
+                double length = beat / 2 * (synth.Chance(0.35) ? 2 : synth.Chance(0.2) ? 3 : 1);
+                length = Math.Min(length, singEnd - t);
+                if (length < 0.12) break;
+                note = Math.Clamp(note + synth.NextInt(3) - 1, 0, notes.Length - 1);
+                double f0 = notes[note];
+                if (whisper) synth.Syllable(t, length * 0.92, f0, f0, synth.PickVowel(), 0.10, 0.07, 0.07, 0.09, 0.008);
+                else synth.Syllable(t, length * 0.95, f0, f0, synth.PickVowel(), 0.32, 0.03, 0.035, 0.07, 0.012);
+                if (synth.Chance(0.25)) synth.Plosive(t, whisper ? 0.02 : 0.05);
+                else if (synth.Chance(0.2)) synth.Sibilant(t, whisper ? 0.03 : 0.05, 0.09);
+                t += length;
+            }
+            synth.Breath(singEnd + 0.35, whisper ? 0.05 : 0.04);
+        }
+    }
+
+    // The ballad's fingerpicking pattern on the additive guitar, whose low strings keep a strong fundamental.
+    private static void FolkPicking(Synth synth, double start, double end, double beat)
+    {
+        synth.Use(StyleParts.Guitar);
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            int bar = e / 8, inBar = e % 8, chord = bar % PickBass.Length;
+            double t = e * eighth + synth.Jitter(0.010);
+            if (inBar is 0 or 4) synth.PluckAdditive(t, PickBass[chord][inBar == 0 ? 0 : 1], 0.55 * synth.Vary(0.1), 1.6, 3.0, 0.2);
+            else
+            {
+                double[] treble = PickTreble[chord];
+                synth.PluckAdditive(t, treble[(inBar + bar) % treble.Length], 0.32 * synth.Vary(0.15), 1.1, 2.0, 0.17);
+            }
+        }
+    }
+
+    // The ballad's strumming pattern on the additive guitar.
+    private static void FolkStrumming(Synth synth, double start, double end, double beat)
+    {
+        synth.Use(StyleParts.Guitar);
+        bool[] down = [true, false, true, false, false, false, true, false];
+        bool[] play = [true, false, true, true, false, true, true, true];
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            int inBar = e % 8;
+            if (!play[inBar]) continue;
+            double[] chord = StrumChords[e / 8 % StrumChords.Length];
+            double t = e * eighth + synth.Jitter(0.008);
+            double ring = Math.Min(end, (e + 1) * eighth + (play[(inBar + 1) % 8] ? 0 : eighth)) - t;
+            double velocity = (inBar is 0 or 4 ? 1 : down[inBar] ? 0.85 : 0.6) * synth.Vary(0.1);
+            int strings = down[inBar] ? chord.Length : Math.Min(4, chord.Length);
+            double sweep = down[inBar] ? 0.028 : 0.016;
+            for (int s = 0; s < strings; s++)
+            {
+                int index = down[inBar] ? s : chord.Length - 1 - s;
+                synth.PluckAdditive(t + sweep * s / Math.Max(1, strings - 1), chord[index], 0.20 * velocity, 0.9, ring + 0.03, 0.12, pick: 0.05);
+            }
+        }
+    }
+
+    // A fingered bass guitar: root and fifth as half notes, or the root on every beat with the fifth on beat 3.
+    private static void BassGuitar(Synth synth, double start, double end, double beat, bool quarters)
+    {
+        synth.Use(StyleParts.Bass);
+        int first = (int)Math.Ceiling(start / beat - 1e-9), last = (int)Math.Ceiling(end / beat - 1e-9);
+        for (int b = first; b < last; b++)
+        {
+            int inBar = b % 4;
+            double[] notes = BassRoots[b / 4 % BassRoots.Length];
+            double t = b * beat + synth.Jitter(0.006);
+            if (quarters) synth.BassNote(t, notes[inBar == 2 ? 1 : 0], 0.5 * (inBar == 0 ? 1 : 0.85) * synth.Vary(0.08), beat * 0.9);
+            else if (inBar is 0 or 2) synth.BassNote(t, notes[inBar == 0 ? 0 : 1], 0.5 * synth.Vary(0.08), 2 * beat * 0.95);
+        }
+    }
+
+    // A soft brush kit: a felt-beater kick on 1 and 3, a brush slap on 2 and 4, brush swishes on the eighths.
+    private static void BrushKit(Synth synth, double start, double end, double beat)
+    {
+        synth.Use(StyleParts.Drums);
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            double t = e * eighth;
+            int inBar = e % 8;
+            if (inBar is 0 or 4) synth.KickSoft(t, 0.8 * synth.Vary(0.08));
+            if (inBar is 2 or 6) synth.Brush(t + synth.Jitter(0.005), 0.45 * synth.Vary(0.1));
+            synth.Swish(t + synth.Jitter(0.01), 0.05 * synth.Vary(0.2));
+        }
+    }
+
+    // Verses: a sustained left-hand root a bar under broken chords. Choruses: left-hand octaves on every beat, block
+    // chords on 1 and 3, and the broken chords an octave up on the other eighths.
+    private static void PianoPart(Synth synth, double start, double end, double beat, bool chorus)
+    {
+        synth.Use(StyleParts.Piano);
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            int bar = e / 8, inBar = e % 8;
+            double root = PianoRoots[bar % PianoRoots.Length];
+            double[] chord = PianoChords[bar % PianoChords.Length];
+            double t = e * eighth + synth.Jitter(0.008);
+            if (chorus)
+            {
+                if (inBar % 2 == 0)
+                {
+                    double velocity = (inBar == 0 ? 1 : 0.85) * synth.Vary(0.08);
+                    synth.PianoNote(t, root, velocity, beat);
+                    synth.PianoNote(t + 0.004, 2 * root, velocity, beat);
+                }
+                if (inBar is 0 or 4) foreach (double f in chord) synth.PianoNote(t + synth.Jitter(0.006), f, 0.75 * synth.Vary(0.1), 2 * beat);
+                else synth.PianoNote(t, 2 * chord[(inBar + bar) % chord.Length], 0.45 * synth.Vary(0.1), eighth);
+            }
+            else
+            {
+                if (inBar == 0) synth.PianoNote(t, root, 0.6 * synth.Vary(0.08), 8 * eighth);
+                synth.PianoNote(t, chord[(inBar + bar) % chord.Length] * (inBar >= 4 ? 2 : 1), 0.4 * synth.Vary(0.12), 2 * eighth);
+            }
+        }
+    }
+
+    private static void AcousticDrums(Synth synth, double start, double end, double beat)
+    {
+        synth.Use(StyleParts.Drums);
+        double eighth = beat / 2;
+        int first = (int)Math.Ceiling(start / eighth - 1e-9), last = (int)Math.Ceiling(end / eighth - 1e-9);
+        for (int e = first; e < last; e++)
+        {
+            double t = e * eighth;
+            int inBar = e % 8;
+            if (inBar is 0 or 4 or 5) synth.KickAcoustic(t, inBar == 5 ? 0.6 : 0.8);
+            if (inBar is 2 or 6) synth.Snare(t, 0.5);
+            synth.Hat(t + synth.Jitter(0.004), (inBar % 2 == 0 ? 0.07 : 0.045) * synth.Vary(0.1), 0.03);
+        }
+    }
+
+    // ---- synthesis ----
+
+    // Instruments draw from their own random streams (Use), so leaving one out changes none of the others. Calls for an
+    // instrument that isn't rendered return at once.
+    private sealed class Synth(int rate, ulong seed, StyleParts parts)
+    {
+        private const double TwoPi = 2 * Math.PI;
+        private readonly DeterministicRandom[] streams =
+        [
+            new(DeterministicRandom.Hash(seed, 1)), new(DeterministicRandom.Hash(seed, 2)),
+            new(DeterministicRandom.Hash(seed, 3)), new(DeterministicRandom.Hash(seed, 4)),
+            new(DeterministicRandom.Hash(seed, 5)), new(DeterministicRandom.Hash(seed, 6)),
+        ];
+        private readonly List<double> kicks = [];
+        private double[] mix = [];
+        private DeterministicRandom random = null!;
+        private bool on;
+
+        public void Allocate(double seconds) => mix = new double[(int)Math.Round(seconds * rate)];
+
+        // Selects the instrument the following calls belong to: its random stream, and whether it is rendered.
+        public void Use(StyleParts part)
+        {
+            random = streams[System.Numerics.BitOperations.Log2((uint)part)];
+            on = (parts & part) != 0;
+        }
+
+        // Male vowel formants (Peterson & Barney): a, e, i, o, u.
+        private static readonly double[][] Vowels =
+        [
+            [730, 1090, 2440], [530, 1840, 2480], [270, 2290, 3010], [570, 840, 2410], [300, 870, 2240],
+        ];
+
+        public double Uniform() => random.NextDouble();
+        public bool Chance(double p) => random.NextDouble() < p;
+        public int NextInt(int max) => random.NextInt(max);
+        public double Jitter(double seconds) => seconds * random.NextSigned();
+        public double Vary(double fraction) => 1 + fraction * random.NextSigned();
+        public double[] PickVowel() => Vowels[random.NextInt(Vowels.Length)];
+
+        // A plucked string (Karplus–Strong): one period of noise, low-passed for a soft fingertip and combed by the pluck
+        // position, circulates through a delay line whose two-point average damps the higher partials faster, so the tone
+        // darkens as it rings. The fundamental decays with time constant `decay`. A guitar body radiates little below
+        // ~100 Hz (a high-pass), so the low strings' fundamentals are weaker than their harmonics. After `length` the
+        // string is damped over 30 ms. `pick` adds a pick click.
+        public void Pluck(double time, double f0, double amplitude, double decay, double length, double position, double brightness, double pick = 0)
+        {
+            if (!on) return;
+            int start = Index(time), count = Math.Min(mix.Length - start, (int)((length + 0.15) * rate));
+            if (count <= 0) return;
+            int period = Math.Max(4, (int)Math.Round(rate / f0 - 0.5));   // the average adds half a sample of delay
+            double[] excitation = new double[period], line = new double[period];
+            double smooth = Math.Clamp(1 - brightness, 0, 0.95), low = 0, mean = 0;
+            for (int i = 0; i < period; i++)
+            {
+                low = (1 - smooth) * random.NextSigned() + smooth * low;
+                excitation[i] = low;
+            }
+            int offset = Math.Max(1, (int)Math.Round(position * period));
+            for (int i = 0; i < period; i++)
+            {
+                line[i] = excitation[i] - excitation[(i - offset + period) % period];
+                mean += line[i] / period;
+            }
+            double energy = 0;
+            for (int i = 0; i < period; i++)
+            {
+                line[i] -= mean;
+                energy += line[i] * line[i];
+            }
+            double scale = amplitude / Math.Sqrt(energy / period + 1e-30);
+            for (int i = 0; i < period; i++) line[i] *= scale;
+
+            double loop = Math.Exp(-1 / (f0 * decay));
+            Filter body = Filter.HighPass(rate, 100, 0.6);
+            double fall = Math.Exp(-1 / (0.03 * rate)), damp = 1, before = line[period - 1];
+            int releaseAt = (int)(length * rate), index = 0;
+            for (int i = 0; i < count; i++)
+            {
+                double old = line[index];
+                line[index] = loop * 0.5 * (old + before);
+                before = old;
+                if (++index == period) index = 0;
+                if (i >= releaseAt) damp *= fall;
+                mix[start + i] += damp * body.Process(old);
+            }
+            if (pick > 0) Noise(time, 0.004, pick * amplitude, 0.0002, 0.0012, Filter.HighPass(rate, 2500, 0.7), null);
+        }
+
+        // A plucked string built from its partials, for a guitar whose low strings keep a strong fundamental (Pluck's
+        // filtered-noise excitation gives each note a random spectrum): partial n has |sin(nπ·position)| / n^1.2 (the
+        // pluck position combs out every 1/position-th partial), a slight stiffness (f_n = n·f0·√(1 + 10⁻⁴·n²)), a
+        // 1.5 ms finger attack, and decays faster the higher it is. The body radiates the low E string's fundamental only
+        // about 3 dB down (f / √(f² + 80²)). After `length` the string is damped over 30 ms. `pick` adds a pick click.
+        public void PluckAdditive(double time, double f0, double amplitude, double decay, double length, double position, double pick = 0)
+        {
+            if (!on) return;
+            int partials = (int)Math.Clamp(5000 / f0, 1, 40);
+            Span<double> gains = stackalloc double[40];
+            double norm = 0;
+            for (int n = 1; n <= partials; n++)
+            {
+                double f = n * f0;
+                gains[n - 1] = Math.Abs(Math.Sin(n * Math.PI * position)) / Math.Pow(n, 1.2) * f / Math.Sqrt(f * f + 80 * 80);
+                norm += gains[n - 1] * gains[n - 1];
+            }
+            norm = Math.Sqrt(norm) + 1e-12;
+            for (int n = 1; n <= partials; n++)
+                AddPartial(time, n * f0 * Math.Sqrt(1 + 1e-4 * n * n), amplitude * gains[n - 1] / norm, decay / (1 + 0.25 * (n - 1)), 0.0015, length, 0.03);
+            Noise(time, 0.004, 0.02 * amplitude, 0.0003, 0.0015, Filter.HighPass(rate, 1500, 0.7), null);
+            if (pick > 0) Noise(time, 0.004, pick * amplitude, 0.0002, 0.0012, Filter.HighPass(rate, 2500, 0.7), null);
+        }
+
+        // A fingered bass guitar note: partials with |sin(nπ/4)| / n^1.3 (plucked a quarter of the way along; round and
+        // fundamental-heavy, as from a DI), a 4 ms finger attack, the fundamental decaying with τ = 1.8 s and higher
+        // partials faster, damped over 40 ms after `length`, with a little finger noise.
+        public void BassNote(double time, double f0, double amplitude, double length)
+        {
+            if (!on) return;
+            int partials = (int)Math.Clamp(1500 / f0, 1, 24);
+            Span<double> gains = stackalloc double[24];
+            double norm = 0;
+            for (int n = 1; n <= partials; n++)
+            {
+                gains[n - 1] = Math.Abs(Math.Sin(n * Math.PI / 4)) / Math.Pow(n, 1.3);
+                norm += gains[n - 1] * gains[n - 1];
+            }
+            norm = Math.Sqrt(norm) + 1e-12;
+            for (int n = 1; n <= partials; n++)
+                AddPartial(time, n * f0, amplitude * gains[n - 1] / norm, 1.8 / (1 + 0.4 * (n - 1)), 0.004, length, 0.04);
+            Noise(time, 0.006, 0.015 * amplitude, 0.0005, 0.002, Filter.BandPass(rate, 1200, 0.8), null);
+        }
+
+        // A piano note: inharmonic partials (f_n = n·f0·√(1 + 3·10⁻⁴·n²)) struck an eighth of the way along
+        // (|sin(nπ/8)|), brighter when louder (1 / n^(1.4 − 0.4·velocity)), the soundboard radiating low fundamentals a
+        // little weaker (f / √(f² + 70²)), a 2 ms hammer attack, the fundamental decaying with τ = 3.8 s at C2 (shorter
+        // higher up, and for higher partials), the damper over 80 ms after `length`, and a soft hammer thump.
+        public void PianoNote(double time, double f0, double velocity, double length)
+        {
+            if (!on) return;
+            int partials = (int)Math.Clamp(7000 / f0, 1, 30);
+            Span<double> gains = stackalloc double[30];
+            double norm = 0, tilt = 1.4 - 0.4 * Math.Clamp(velocity, 0, 1);
+            for (int n = 1; n <= partials; n++)
+            {
+                double f = n * f0;
+                gains[n - 1] = Math.Abs(Math.Sin(n * Math.PI / 8)) / Math.Pow(n, tilt) * f / Math.Sqrt(f * f + 70 * 70);
+                norm += gains[n - 1] * gains[n - 1];
+            }
+            norm = Math.Sqrt(norm) + 1e-12;
+            double sustain = 3.0 * Math.Pow(130 / f0, 0.35), amplitude = 0.3 * velocity;
+            for (int n = 1; n <= partials; n++)
+                AddPartial(time, n * f0 * Math.Sqrt(1 + 3e-4 * n * n), amplitude * gains[n - 1] / norm, sustain / (1 + 0.12 * n), 0.002, length, 0.08);
+            Noise(time, 0.02, 0.04 * amplitude, 0.0005, 0.006, Filter.LowPass(rate, 1500, 0.7), null);
+        }
+
+        // A sung or rapped syllable: a harmonic stack up to 4.5 kHz shaped by the vowel's formants, gliding from f0Start
+        // to f0End with delayed vibrato, plus breath noise through the same formants. Raised-cosine attack and release.
+        public void Syllable(double time, double length, double f0Start, double f0End, double[] formants, double voiced, double breath, double attack, double release, double vibrato)
+        {
+            if (!on) return;
+            int start = Index(time), count = (int)(length * rate);
+            if (start >= mix.Length || count <= 0) return;
+            double f0Mean = 0.5 * (f0Start + f0End);
+            int harmonics = (int)Math.Min(48, 4500 / f0Mean);
+            Span<double> gains = stackalloc double[48];
+            double norm = 0;
+            for (int n = 1; n <= harmonics; n++)
+            {
+                double f = n * f0Mean, g = 0.15;
+                for (int i = 0; i < 3; i++)
+                {
+                    double width = 80 + 40 * i, x = (f - formants[i]) / width;
+                    g += Math.Pow(0.5, i) / (1 + x * x);
+                }
+                gains[n - 1] = g / Math.Pow(n, 0.9);
+                norm += gains[n - 1] * gains[n - 1];
+            }
+            norm = Math.Sqrt(norm) + 1e-12;
+            Filter f1 = Filter.BandPass(rate, formants[0], 3), f2 = Filter.BandPass(rate, formants[1], 4), f3 = Filter.BandPass(rate, formants[2], 5);
+            double phase = 0;
+            for (int i = 0; i < count && start + i < mix.Length; i++)
+            {
+                double t = i / (double)rate;
+                double envelope = Ramp(t / attack) * Ramp((length - t) / release);
+                double glide = f0Start + (f0End - f0Start) * t / length;
+                double depth = vibrato * Math.Min(1, Math.Max(0, (t - 0.15) / 0.2));
+                phase += TwoPi * glide * (1 + depth * Math.Sin(TwoPi * 5.5 * t)) / rate;
+                // sin(nφ) for every harmonic by the Chebyshev recurrence.
+                double s1 = Math.Sin(phase), c2 = 2 * Math.Cos(phase), previous = 0, current = s1, sum = 0;
+                for (int n = 0; n < harmonics; n++)
+                {
+                    sum += gains[n] * current;
+                    double next = c2 * current - previous;
+                    previous = current;
+                    current = next;
+                }
+                double white = random.NextSigned();
+                double noise = f1.Process(white) + 0.6 * f2.Process(white) + 0.35 * f3.Process(white);
+                mix[start + i] += envelope * (voiced * sum / norm + breath * noise);
+            }
+        }
+
+        // A plosive ("t", "k", "p"): a 10 ms burst of broadband noise with a sharp edge.
+        public void Plosive(double time, double amplitude) =>
+            Noise(time, 0.012, amplitude, 0.0004, 0.004, Filter.HighPass(rate, 1200, 0.7), null);
+
+        // A sibilant ("s"): high-band noise with a soft 25 ms onset.
+        public void Sibilant(double time, double amplitude, double length) =>
+            Noise(time, length, amplitude, 0.025, length, Filter.HighPass(rate, 4200, 0.7), Filter.LowPass(rate, 9500, 0.7));
+
+        // An inhale: band-limited noise swelling over 0.15 s.
+        public void Breath(double time, double amplitude) =>
+            Noise(time, 0.4, amplitude, 0.15, 0.4, Filter.BandPass(rate, 1400, 0.8), null);
+
+        // An 808: a saturated sine sweeping down to f0 with a long tail, a small click, cut by the next hit.
+        public void Kick808(double time, double f0, double amplitude, double decay, double cut)
+        {
+            if (!on) return;
+            kicks.Add(time);
+            int start = Index(time), count = (int)((cut - time) * rate);
+            double phase = 0;
+            for (int i = 0; i < count && start + i < mix.Length; i++)
+            {
+                double t = i / (double)rate;
+                phase += TwoPi * f0 * (1 + 1.5 * Math.Exp(-t / 0.03)) / rate;
+                double envelope = (1 - Math.Exp(-t / 0.002)) * Math.Exp(-t / decay) * Ramp((cut - time - t) / 0.008);
+                mix[start + i] += amplitude * Math.Tanh(2.2 * envelope * Math.Sin(phase)) / Math.Tanh(2.2);
+            }
+            Noise(time, 0.004, 0.12 * amplitude, 0.0002, 0.0015, Filter.HighPass(rate, 1000, 0.7), null);
+        }
+
+        // An EDM kick: a fast 200 → 48 Hz sweep, 160 ms body, a click.
+        public void KickPunchy(double time, double amplitude)
+        {
+            if (!on) return;
+            kicks.Add(time);
+            int start = Index(time), count = (int)(0.45 * rate);
+            double phase = 0;
+            for (int i = 0; i < count && start + i < mix.Length; i++)
+            {
+                double t = i / (double)rate;
+                phase += TwoPi * 48 * (1 + 3.5 * Math.Exp(-t / 0.012)) / rate;
+                mix[start + i] += amplitude * (1 - Math.Exp(-t / 0.0003)) * Math.Exp(-t / 0.16) * Math.Sin(phase);
+            }
+            Noise(time, 0.003, 0.2 * amplitude, 0.0001, 0.001, Filter.HighPass(rate, 2000, 0.7), null);
+        }
+
+        // An acoustic kick: a short 60 Hz thump with a beater click and some shell noise.
+        public void KickAcoustic(double time, double amplitude)
+        {
+            if (!on) return;
+            kicks.Add(time);
+            int start = Index(time), count = (int)(0.35 * rate);
+            double phase = 0;
+            for (int i = 0; i < count && start + i < mix.Length; i++)
+            {
+                double t = i / (double)rate;
+                phase += TwoPi * 58 * (1 + 0.8 * Math.Exp(-t / 0.015)) / rate;
+                mix[start + i] += amplitude * (1 - Math.Exp(-t / 0.0006)) * Math.Exp(-t / 0.09) * Math.Sin(phase);
+            }
+            Noise(time, 0.006, 0.15 * amplitude, 0.0002, 0.002, Filter.HighPass(rate, 3000, 0.7), null);
+            Noise(time, 0.08, 0.1 * amplitude, 0.001, 0.03, Filter.LowPass(rate, 500, 0.7), null);
+        }
+
+        // A soft kick with a felt beater: a 52 Hz thump with a small pitch drop and a 110 ms decay, and a faint click.
+        public void KickSoft(double time, double amplitude)
+        {
+            if (!on) return;
+            kicks.Add(time);
+            int start = Index(time), count = (int)(0.45 * rate);
+            double phase = 0;
+            for (int i = 0; i < count && start + i < mix.Length; i++)
+            {
+                double t = i / (double)rate;
+                phase += TwoPi * 52 * (1 + 0.5 * Math.Exp(-t / 0.02)) / rate;
+                mix[start + i] += amplitude * (1 - Math.Exp(-t / 0.001)) * Math.Exp(-t / 0.11) * Math.Sin(phase);
+            }
+            Noise(time, 0.004, 0.04 * amplitude, 0.0003, 0.0015, Filter.HighPass(rate, 1500, 0.7), null);
+        }
+
+        // A brush on the snare: a soft-edged slap of noise around 3.5 kHz with a 90 ms decay, and a little drum body.
+        public void Brush(double time, double amplitude)
+        {
+            if (!on) return;
+            Noise(time, 0.3, amplitude, 0.002, 0.09, Filter.BandPass(rate, 3500, 0.6), null);
+            AddPartial(time, 200, 0.15 * amplitude, 0.04, 0.002, 0.2, 0.01);
+        }
+
+        // A brush swish: high noise swelling over 50 ms and fading over 120 ms.
+        public void Swish(double time, double amplitude) =>
+            Noise(time, 0.35, amplitude, 0.05, 0.12, Filter.BandPass(rate, 5000, 0.7), null);
+
+        // A snare: noise above 700 Hz with a 120 ms tail, and a tuned body at 190 and 330 Hz.
+        public void Snare(double time, double amplitude)
+        {
+            if (!on) return;
+            Noise(time, 0.35, amplitude, 0.0005, 0.12, Filter.HighPass(rate, 700, 0.7), null);
+            AddPartial(time, 190, 0.6 * amplitude, 0.05, 0.0005, 0.3, 0.01);
+            AddPartial(time, 330, 0.35 * amplitude, 0.04, 0.0005, 0.3, 0.01);
+        }
+
+        // A clap: three quick noise bursts around 1.2 kHz, then a short tail.
+        public void Clap(double time, double amplitude)
+        {
+            if (!on) return;
+            for (int b = 0; b < 3; b++) Noise(time + 0.01 * b, 0.02, amplitude * 0.7, 0.0003, 0.005, Filter.BandPass(rate, 1200, 0.8), null);
+            Noise(time + 0.03, 0.25, amplitude, 0.001, 0.07, Filter.BandPass(rate, 1200, 0.8), null);
+        }
+
+        // A hi-hat: noise above 7 kHz.
+        public void Hat(double time, double amplitude, double decay) =>
+            Noise(time, Math.Min(0.4, 6 * decay), amplitude, 0.0002, decay, Filter.HighPass(rate, 7000, 0.7), Filter.HighPass(rate, 7000, 0.7));
+
+        // A saw-ish synth note (harmonics with 1/n roll-off up to `cutoff`), optionally three detuned voices.
+        public void Saw(double time, double length, double f0, double amplitude, double attack, double cutoff, bool detune = false)
+        {
+            if (!on) return;
+            int voices = detune ? 3 : 1;
+            int start = Index(time), count = Math.Min((int)(length * rate), mix.Length - start);
+            if (count <= 0) return;
+            double[] envelope = new double[count];
+            for (int i = 0; i < count; i++)
+            {
+                double t = i / (double)rate;
+                envelope[i] = Ramp(t / attack) * Ramp((length - t) / 0.02);
+            }
+            for (int v = 0; v < voices; v++)
+            {
+                double f = f0 * (detune ? 1 + 0.006 * (v - 1) : 1);
+                double phaseOffset = random.NextDouble() * TwoPi;
+                int harmonics = (int)Math.Min(40, cutoff / f);
+                for (int n = 1; n <= harmonics; n++)
+                {
+                    double gain = amplitude / voices / n, w = TwoPi * n * f / rate;
+                    double cr = Math.Cos(w), ci = Math.Sin(w), zr = Math.Cos(n * phaseOffset), zi = Math.Sin(n * phaseOffset);
+                    for (int i = 0; i < count; i++)
+                    {
+                        mix[start + i] += gain * envelope[i] * zi;
+                        (zr, zi) = (zr * cr - zi * ci, zr * ci + zi * cr);
+                    }
+                }
+            }
+        }
+
+        // One exponentially decaying sine with an exponential attack, damped over `release` after `length`.
+        // It stops once it has decayed below Floor (about −94 dBFS before the section gain).
+        private void AddPartial(double time, double frequency, double amplitude, double tau, double attack, double length, double release)
+        {
+            const double Floor = 2e-5;
+            if (frequency >= rate / 2.0 || amplitude <= Floor) return;
+            int start = Index(time);
+            int count = Math.Min((int)(Math.Min(tau * Math.Log(amplitude / Floor), length + 5 * release) * rate), mix.Length - start);
+            double w = TwoPi * frequency / rate, r = Math.Exp(-1 / (tau * rate));
+            double cr = r * Math.Cos(w), ci = r * Math.Sin(w), zr = amplitude, zi = 0;
+            double rise = Math.Exp(-1 / (attack * rate)), fall = Math.Exp(-1 / (release * rate));
+            double onset = 1, damp = 1;
+            int releaseAt = (int)(length * rate);
+            for (int i = 0; i < count; i++)
+            {
+                if (i >= releaseAt) damp *= fall;
+                mix[start + i] += (1 - onset) * damp * zi;
+                onset *= rise;
+                (zr, zi) = (zr * cr - zi * ci, zr * ci + zi * cr);
+            }
+        }
+
+        // Filtered white noise with an exponential attack and decay, cut after `length`.
+        private void Noise(double time, double length, double amplitude, double attack, double decay, Filter first, Filter? second)
+        {
+            if (!on) return;
+            int start = Index(time), count = (int)(length * rate);
+            double rise = Math.Exp(-1 / (attack * rate)), fall = Math.Exp(-1 / (decay * rate)), onset = 1, envelope = 1;
+            for (int i = 0; i < count && start + i < mix.Length; i++)
+            {
+                double x = first.Process(random.NextSigned());
+                if (second is not null) x = second.Process(x);
+                mix[start + i] += amplitude * (1 - onset) * envelope * x;
+                onset *= rise;
+                envelope *= fall;
+            }
+        }
+
+        private int Index(double time) => (int)Math.Round(Math.Max(0, time) * rate);
+
+        private static double Ramp(double x) => x <= 0 ? 0 : x >= 1 ? 1 : 0.5 - 0.5 * Math.Cos(Math.PI * x);
+
+        // Mixes each section to its target RMS, with 0.5 s gain ramps across the boundaries. A full render is clipped to
+        // ±1. A stem (only some parts) is not: a brush kit alone at a chorus's −9 dBFS RMS peaks well above full scale,
+        // and clipping it would put it 2.6 dB under its level in a Mix and flatten its kicks.
+        public StyleTrack Finish(MusicStyle style, double bpm, TrackSection[] sections)
+        {
+            bool clip = parts == StyleParts.All;
+            var gains = new double[sections.Length];
+            for (int s = 0; s < sections.Length; s++)
+            {
+                int from = Index(sections[s].Start), to = Math.Min(mix.Length, Index(sections[s].End));
+                double squares = 0;
+                for (int i = from; i < to; i++) squares += mix[i] * mix[i];
+                double rms = Math.Sqrt(squares / Math.Max(1, to - from));
+                gains[s] = rms > 0 ? Math.Pow(10, sections[s].TargetRmsDb / 20) / rms : 0;
+            }
+            var samples = new float[mix.Length];
+            const double ramp = 0.5;
+            for (int i = 0; i < mix.Length; i++)
+            {
+                double t = i / (double)rate, gain = gains[0];
+                for (int s = 1; s < sections.Length; s++)
+                {
+                    double x = (t - (sections[s].Start - ramp / 2)) / ramp;
+                    if (x <= 0) break;
+                    gain = gains[s - 1] + (gains[s] - gains[s - 1]) * Math.Min(1, x);
+                }
+                samples[i] = (float)(clip ? Math.Clamp(gain * mix[i], -1, 1) : gain * mix[i]);
+            }
+            kicks.Sort();
+            return new StyleTrack(style, samples, rate, bpm, sections, kicks.ToArray(), parts);
+        }
+    }
+
+    // A biquad (RBJ cookbook), direct form I.
+    private sealed class Filter(double b0, double b1, double b2, double a1, double a2)
+    {
+        private double x1, x2, y1, y2;
+
+        public static Filter LowPass(int rate, double f, double q) => Make(rate, f, q, 0);
+        public static Filter HighPass(int rate, double f, double q) => Make(rate, f, q, 1);
+        public static Filter BandPass(int rate, double f, double q) => Make(rate, f, q, 2);
+
+        public double Process(double x)
+        {
+            double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1;
+            x1 = x;
+            y2 = y1;
+            y1 = y;
+            return y;
+        }
+
+        private static Filter Make(int rate, double f, double q, int kind)
+        {
+            f = Math.Min(f, 0.45 * rate);
+            double w = 2 * Math.PI * f / rate, alpha = Math.Sin(w) / (2 * q), cos = Math.Cos(w), a0 = 1 + alpha;
+            return kind switch
+            {
+                0 => new Filter((1 - cos) / 2 / a0, (1 - cos) / a0, (1 - cos) / 2 / a0, -2 * cos / a0, (1 - alpha) / a0),
+                1 => new Filter((1 + cos) / 2 / a0, -(1 + cos) / a0, (1 + cos) / 2 / a0, -2 * cos / a0, (1 - alpha) / a0),
+                _ => new Filter(alpha / a0, 0, -alpha / a0, -2 * cos / a0, (1 - alpha) / a0),
+            };
+        }
+    }
+}

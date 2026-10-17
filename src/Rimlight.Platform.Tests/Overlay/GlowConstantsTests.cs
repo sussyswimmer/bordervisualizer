@@ -22,8 +22,9 @@ public sealed class GlowConstantsTests
     public void HalfScaleHalvesEveryPixelMeasure(int width, int height, float scale, float cornerDip, float glow)
     {
         // "Reduce on battery" renders into a swap chain half the window's size (OverlaySurface.BufferSize, rounded up),
-        // converts DIPs at the surface's render scale, and the visual stretches it back over the window. Only the
-        // thin-core fade stays in screen pixels (K3's review).
+        // converts DIPs at the surface's render scale, and the visual stretches it back over the window. (The solid
+        // core's screen-pixel fade, K3's review, is gone with the core: GlowProfileTests checks that a thin band keeps
+        // its light at half scale.)
         LightState state = State with { Spread = glow };
         int bufferWidth = OverlaySurface.BufferSize(width, half: true);
         int bufferHeight = OverlaySurface.BufferSize(height, half: true);
@@ -39,7 +40,8 @@ public sealed class GlowConstantsTests
         {
             Assert.Equal(0.5f, renderScale);
             Assert.Equal(full.CornerRadiusPx / 2, half.CornerRadiusPx, 4);
-            Assert.Equal(full.CoreThicknessPx / 2, half.CoreThicknessPx, 4);
+            Assert.Equal(full.BandScalePx / 2, half.BandScalePx, 4);
+            Assert.Equal(full.BandRadiusPx / 2, half.BandRadiusPx, 4);
             Assert.Equal(full.SpreadPx / 2, half.SpreadPx, 4);
             Assert.Equal(full.ColorRadiusPx / 2, half.ColorRadiusPx, 4);
             Assert.Equal(full.GlowRadiusPx / 2, half.GlowRadiusPx, 4);
@@ -47,41 +49,37 @@ public sealed class GlowConstantsTests
         // Stretched back over the window, every measure lands within a pixel of the full-scale one.
         float stretch = width / (float)bufferWidth;
         Assert.InRange(half.CornerRadiusPx * stretch - full.CornerRadiusPx, -1, 1);
-        Assert.InRange(half.CoreThicknessPx * stretch - full.CoreThicknessPx, -1, 1);
+        Assert.InRange(half.BandScalePx * stretch - full.BandScalePx, -1, 1);
+        Assert.InRange(half.BandRadiusPx * stretch - full.BandRadiusPx, -1, 1);
         Assert.InRange(half.SpreadPx * stretch - full.SpreadPx, -1, 1);
         Assert.InRange(half.ColorRadiusPx * stretch - full.ColorRadiusPx, -1, 1);
         Assert.InRange(half.GlowRadiusPx * stretch - full.GlowRadiusPx, -1, 1);
         // Everything that isn't a length stays as it is.
-        Assert.Equal(full.Intensity, half.Intensity);
+        Assert.Equal(full.Gain, half.Gain);
         Assert.Equal(full.Pulse, half.Pulse);
         Assert.Equal(full.Phase, half.Phase);
         Assert.Equal(full.Visibility, half.Visibility);
         Assert.Equal(full.MeanRed, half.MeanRed);
-        Assert.Equal(full.CoreFade, half.CoreFade);
+        // The band's gain is its average over a pixel at each scale's own pixel size.
+        Assert.Equal(GlowProfile.BandGain(2 * full.BandScalePx), full.BandGain);
+        Assert.Equal(GlowProfile.BandGain(2 * half.BandScalePx), half.BandGain);
     }
 
-    [Theory]
-    [InlineData(1f)]
-    [InlineData(1.25f)]
-    [InlineData(1.5f)]
-    [InlineData(1.75f)]
-    [InlineData(2f)]
-    public void AThinCoreFadesByItsWidthInScreenPixels(float scale)
+    [Fact]
+    public void ThicknessIsTheSoftBandsWidth()
     {
-        // CoreFade is what Glow.hlsl's saturate(CoreThicknessPx) was at full scale: a core under a screen pixel lights
-        // the pixel by its share of it. At half scale a 1-DIP core is half a swap-chain pixel, stretched over two screen
-        // pixels; fading by swap-chain pixels would halve its light, so it fades by screen pixels at either scale.
-        for (float coreDip = 0; coreDip <= 6; coreDip += 0.125f)
-        {
-            LightState state = State with { CoreThicknessDip = coreDip };
-            GlowConstants full = GlowConstants.Create(state, 1920, 1080, scale, 1, 8, Mean);
-            GlowConstants half = GlowConstants.Create(state, 960, 540, scale, 0.5f, 8, Mean);
-            Assert.Equal(Math.Clamp(full.CoreThicknessPx, 0, 1), full.CoreFade, 6);
-            Assert.Equal(full.CoreFade, half.CoreFade);
-            Assert.Equal(full.CoreThicknessPx / 2, half.CoreThicknessPx, 4);
-        }
-        Assert.Equal(0.5f, GlowConstants.Create(State with { CoreThicknessDip = 0.5f }, 960, 540, 1, 0.5f, 8, Mean).CoreFade);
-        Assert.Equal(1f, GlowConstants.Create(State with { CoreThicknessDip = 0.5f }, 960, 540, 2, 0.5f, 8, Mean).CoreFade);
+        // Thickness (DIPs) is the band's nominal width: its e-folding distance is half of it, in the surface's pixels,
+        // and its field's corners are rounded to at least two e-folding distances (or the user's corner radius).
+        GlowConstants c = GlowConstants.Create(State with { CoreThicknessDip = 6 }, 2880, 1620, 1.5f, 1, 0, Mean);
+        Assert.Equal(4.5f, c.BandScalePx, 5);
+        Assert.Equal(9f, c.BandRadiusPx, 5);
+        Assert.Equal(GlowProfile.BandGain(9), c.BandGain);
+        Assert.InRange(c.BandGain, 1, 1.01); // a band several pixels wide: the pixel average is its centre value
+        Assert.Equal(20f * 1.5f, GlowConstants.Create(State, 2880, 1620, 1.5f, 1, 20, Mean).BandRadiusPx, 5);
+
+        GlowConstants none = GlowConstants.Create(State with { CoreThicknessDip = 0 }, 1920, 1080, 1, 1, 0, Mean);
+        Assert.Equal(0, none.BandGain); // Thickness 0 leaves only the glow
+        Assert.True(none.BandScalePx > 0); // the shader still divides by it
     }
 
     [Fact]
@@ -91,12 +89,12 @@ public sealed class GlowConstantsTests
         {
             Intensity = 3, Pulse = -1, Visibility = float.NaN, Phase = 1.25f, CoreThicknessDip = float.PositiveInfinity,
         }, 1920, 1080, 1, 1, float.NaN, new Rgb(float.NaN, 1, 0));
-        Assert.Equal(1, c.Intensity);
+        Assert.Equal(GlowProfile.Gain(1, 0), c.Gain); // Intensity clamped to 1, Pulse to 0, then rolled off
         Assert.Equal(0, c.Pulse);
         Assert.Equal(0, c.Visibility);
         Assert.Equal(0.25f, c.Phase, 6);
-        Assert.Equal(0, c.CoreThicknessPx);
-        Assert.Equal(0, c.CoreFade);
+        Assert.Equal(0, c.BandGain);
+        Assert.True(c.BandScalePx > 0);
         Assert.Equal(0, c.CornerRadiusPx);
         Assert.Equal(0, c.MeanRed);
         Assert.Equal(-0.75f + 1, GlowConstants.Create(State with { Phase = -0.75f }, 100, 100, 1, 1, 0, Mean).Phase, 6);
@@ -105,13 +103,25 @@ public sealed class GlowConstantsTests
     [Fact]
     public void GlowMapsToSpreadAsThePrdSays()
     {
-        // 0 is a hairline (one DIP); 1 spills about 35 % of the shorter side (three e-folding distances); the default
-        // 0.45 is about 25 px at 1080p.
-        Assert.Equal(1f, GlowConstants.SpreadFor(0, 1080, 1));
-        Assert.Equal(2f, GlowConstants.SpreadFor(0, 2160, 2));
-        Assert.Equal(0.35f * 1080 / 3, GlowConstants.SpreadFor(1, 1080, 1), 3);
-        Assert.InRange(GlowConstants.SpreadFor(0.45f, 1080, 1), 24, 26);
-        Assert.Equal(GlowConstants.SpreadFor(1, 1080, 1), GlowConstants.SpreadFor(7, 1080, 1));
+        // 0 is a hairline (one DIP); 1 spills about 35 % of the shorter side (three e-folding distances). In between
+        // the slider is raised to the power 1.5 (soft edge, Maxwell's feedback round 1; K1 squared it, which put the
+        // default at 25 px): the default 0.45 is about 38 px at 1080p, so the light fades in instead of hugging the
+        // edge.
+        Assert.Equal(1f, GlowProfile.SpreadFor(0, 1080, 1));
+        Assert.Equal(2f, GlowProfile.SpreadFor(0, 2160, 2));
+        Assert.Equal(0.35f * 1080 / 3, GlowProfile.SpreadFor(1, 1080, 1), 3);
+        Assert.InRange(GlowProfile.SpreadFor(0.45f, 1080, 1), 37, 39);
+        Assert.InRange(GlowProfile.SpreadFor(0.45f, 2160, 2), 75, 77); // a 4K screen at 200 %: the same share of it
+        Assert.Equal(GlowProfile.SpreadFor(1, 1080, 1), GlowProfile.SpreadFor(7, 1080, 1));
+        Assert.Equal(1f, GlowProfile.SpreadFor(float.NaN, 1080, 1));
+        float previous = 0;
+        for (float glow = 0; glow <= 1; glow += 0.01f)
+        {
+            float spread = GlowProfile.SpreadFor(glow, 1080, 1);
+            Assert.True(spread >= previous, $"Glow {glow:0.00} reaches less far than the step before it");
+            previous = spread;
+        }
+        Assert.Equal(GlowProfile.SpreadFor(0.45f, 1080, 1), GlowConstants.Create(State, 1920, 1080, 1, 1, 0, Mean).SpreadPx);
     }
 
     [Fact]
@@ -119,10 +129,10 @@ public sealed class GlowConstantsTests
     {
         GlowConstants a = GlowConstants.Create(State, 1920, 1080, 1, 1, 0, Mean);
         GlowConstants b = a;
-        b.Intensity += 0.4f / 255;
+        b.Gain += 0.4f / 255;
         b.Phase += 0.0001f;
         Assert.True(a.LooksLike(b));
-        b.Intensity += 0.2f / 255;
+        b.Gain += 0.2f / 255;
         Assert.False(a.LooksLike(b));
 
         GlowConstants wrap = a;
@@ -137,9 +147,12 @@ public sealed class GlowConstantsTests
         GlowConstants faded = a;
         faded.Visibility -= 1f / 255;
         Assert.False(a.LooksLike(faded));
-        GlowConstants thinner = a;
-        thinner.CoreFade -= 0.001f; // so must the thin-core fade
-        Assert.False(a.LooksLike(thinner));
+        GlowConstants dimmerBand = a;
+        dimmerBand.BandGain -= 0.001f; // so must the band
+        Assert.False(a.LooksLike(dimmerBand));
+        GlowConstants rounder = a;
+        rounder.BandRadiusPx += 0.001f;
+        Assert.False(a.LooksLike(rounder));
     }
 
     [Fact]

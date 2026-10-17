@@ -74,6 +74,14 @@ Per pixel:
    - `spread = SpreadPx * (1 + 0.35 * Pulse)` (the beat briefly pushes the light further in)
    - `glow = exp(-d / max(spread, 1))`
    - `a = saturate(max(core, glow * 0.85)) * Intensity * (1 + 0.25 * Pulse)`, then clamp to 1
+   - *Clarification (Maxwell's feedback, round 1): the solid core read as "a very obvious line or bar", so the shape is now two lights that are brightest at the edge and fade smoothly, with no step or kink. `GlowProfile.cs` (Platform) is the reference, and `Glow.hlsl` mirrors it:*
+     - `band = saturate(G * exp(-dBand / b))`, with `b = max(thickness px / 2, 1/8 px)` and `G = 2b * sinh(1 / 2b)` (the band's average over a pixel; 0 at thickness 0)
+     - `glow = 0.85 * exp(-dGlow / max(spread, 0.5))`, with `spread` as above
+     - `shape = 1 - (1 - glow) * (1 - band)`: they add like light and never pass 1. Thickness 0 is the glow alone.
+     - `a = shape * Gain`, where `Gain = SoftClip(Intensity * (1 + 0.25 * Pulse))` is computed once a frame on the CPU. It is unchanged up to 0.9 and then rolls off toward 1 (0.95 at 1), so no pixel is clipped and the profile is only ever scaled.
+     - Each light has its own rounded distance field instead of step 1's square one: corner radius at least `2b` for the band and `2 * spread` for the glow.
+     - `SpreadPx` maps Glow with the slider to the power 1.5: the default 45 % is 38 px at 1080p.
+     - The cbuffer above is the original sketch; `GlowConstants.cs` has the real layout.
 3. **Perimeter coordinate** `t ∈ [0,1)`: the normalized arc-length position of the nearest edge point, going clockwise from the top-left. Compute it from which edge is nearest and the position along it. Approximating corners with the nearest edge is fine, as long as it is continuous.
 4. **Color around the perimeter:** `u = frac(t + Phase)`. Build a smooth two-color loop where ColorA covers `Ratio` of the perimeter and ColorB covers the rest, with soft blends of width 0.08 at both boundaries (use `smoothstep`, wrap-safe). `rgb = lerp(ColorB, ColorA, wA)`.
 5. **Mix in Oklab, not RGB.** RGB lerp between complementary colors goes muddy grey. Either precompute a 64-texel 1D gradient texture on the CPU each time the palette changes (preferred, cheap) and sample it with `u`, or do the Oklab conversion in-shader.

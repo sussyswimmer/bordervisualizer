@@ -1,22 +1,24 @@
 using Rimlight.Core;
+using Rimlight.Platform.Overlay;
 
 namespace Rimlight.App.SettingsUi;
 
 /// <summary>
 /// Draws the glow on the CPU for the Appearance page's preview: a port of <c>Glow.hlsl</c> (doc 04 §3) into a small
-/// premultiplied BGRA buffer, as if the card were a 1280-DIP-wide screen. Everything that depends only on the shape is
-/// cached per pixel and recomputed when the shape changes, so a frame costs one exp per lit pixel. No allocation
-/// after construction. Pure code; any one thread.
+/// premultiplied BGRA buffer, as if the card were a 1280-DIP-wide screen. The edge profile and the Glow mapping are
+/// <see cref="GlowProfile"/>'s, the same the overlay uses. Everything that depends only on the shape is cached per
+/// pixel and recomputed when the shape changes, so a frame costs one exp per lit pixel. No allocation after
+/// construction. Pure code; any one thread.
 /// </summary>
 internal sealed class GlowRaster
 {
     /// <summary>The width, in DIPs, of the screen the preview stands for: thickness and corner radius scale by it.</summary>
     public const float ScreenWidthDip = 1280;
 
-    // Same mapping as GlowConstants: Glow 0..1 spills up to 35% of the shorter side, as three e-folding distances.
-    private const float FullSpill = 0.35f;
-    private const float EFoldingsPerSpill = 3;
     private const float HalfPi = 1.5707963f;
+    // The band's light is cached as 0 below this, so pixels far inside skip it (Render's cutoff); it is under a
+    // hundredth of a code value even at the brightest beat.
+    private const float NegligibleBand = 2e-5f;
     // Colors around the perimeter, looked up rather than filtered: 1024 steps put them within about a pixel of the
     // shader's at this size.
     private const int LutSize = 1024;
@@ -24,7 +26,7 @@ internal sealed class GlowRaster
     // only the corner rounding of the glow and color fields depends on it, which nobody can see move by 10%).
     private const float SpreadCacheTolerance = 0.1f;
 
-    private readonly float[] coreAlpha;  // the solid line's coverage
+    private readonly float[] bandLight;  // the soft band's light (GlowProfile.Band), 0 where negligible
     private readonly float[] glowDepth;  // distance into the rounded glow field
     private readonly float[] perimeter;  // perimeter coordinate t in [0, 1)
     private readonly float[] meanBlend;  // how far the color has blended to the mean (deep inside)
@@ -44,7 +46,7 @@ internal sealed class GlowRaster
         Width = width;
         Height = height;
         Pixels = new int[width * height];
-        coreAlpha = new float[width * height];
+        bandLight = new float[width * height];
         glowDepth = new float[width * height];
         perimeter = new float[width * height];
         meanBlend = new float[width * height];
@@ -97,8 +99,7 @@ internal sealed class GlowRaster
         float scale = Width / ScreenWidthDip; // pixels per DIP
         int shortSide = Math.Min(Width, Height);
         float minHalf = 0.5f * shortSide;
-        float glow = Clamp01(state.Spread);
-        float spread = MathF.Max(scale, glow * glow * FullSpill / EFoldingsPerSpill * shortSide);
+        float spread = GlowProfile.SpreadFor(state.Spread, shortSide, scale);
         float corner = Math.Clamp(Finite(cornerRadiusDip) * scale, 0, minHalf);
         float core = MathF.Max(0, Finite(state.CoreThicknessDip)) * scale;
         float pulse = Clamp01(state.Pulse);
@@ -111,27 +112,30 @@ internal sealed class GlowRaster
             BuildShape(corner, core, spread, minHalf);
 
         // Per frame: the glow falls off as exp(-depth / spread), and the beat pushes it further in (doc 04 §3 step 2).
-        float pulsedSpread = MathF.Max(spread * (1 + 0.35f * pulse), 1);
-        float gain = frame.Intensity * (1 + 0.25f * pulse);
+        // The band's light doesn't change with the beat, so it is cached with the shape. The spread's floor is the
+        // shader's (K7 floored it at a whole pixel, which at about a quarter pixel per DIP drew Glow 0's hairline up to
+        // about 40 code values brighter than the shader does at this scale). The gain scales the whole profile, as in
+        // the shader.
+        float pulsedSpread = GlowProfile.PulsedSpread(spread, pulse);
+        float gain = GlowProfile.Gain(frame.Intensity, pulse);
         float visibility = frame.Visibility;
-        // Beyond this depth the glow is under half a code value (0.85 e^(-depth/spread) gain visibility < 1/510), so
-        // pixels outside the core are transparent there.
-        float strongest = 0.85f * gain * visibility * 510;
+        // Beyond this depth the glow is under half a code value (GlowPeak e^(-depth/spread) gain visibility < 1/510),
+        // so pixels without band light are transparent there.
+        float strongest = GlowProfile.GlowPeak * gain * visibility * 510;
         float cutoff = strongest > 1 ? pulsedSpread * MathF.Log(strongest) : -1;
         float phase = frame.Phase;
 
         int[] pixels = Pixels;
         for (int p = 0; p < pixels.Length; p++)
         {
-            float coverage = coreAlpha[p];
+            float band = bandLight[p];
             float depth = glowDepth[p];
-            if (coverage <= 0 && depth > cutoff)
+            if (band <= 0 && depth > cutoff)
             {
                 pixels[p] = 0;
                 continue;
             }
-            float shape = MathF.Max(coverage, MathF.Exp(-depth / pulsedSpread) * 0.85f);
-            float alpha = MathF.Min(MathF.Min(shape, 1) * gain, 1) * visibility;
+            float alpha = GlowProfile.Combine(GlowProfile.Glow(depth, pulsedSpread), band) * gain * visibility;
             if (alpha < 0.5f / 255)
             {
                 pixels[p] = 0;
@@ -158,8 +162,9 @@ internal sealed class GlowRaster
         shapeSpread = spread;
         float colorRadius = MathF.Min(MathF.Max(MathF.Max(corner, 6 * spread), 2 * core), minHalf);
         float glowRadius = MathF.Min(MathF.Max(corner, 2 * spread), minHalf);
-        float halfX = 0.5f * Width, halfY = 0.5f * Height;
-        float coreReach = Clamp01(core); // no line at thickness 0
+        float bandScale = GlowProfile.BandScale(core);
+        float bandGain = GlowProfile.BandGain(core); // 0 at thickness 0: no band
+        float bandRadius = GlowProfile.BandRadius(corner, bandScale, minHalf);
         for (int y = 0; y < Height; y++)
         {
             float py = y + 0.5f;
@@ -167,23 +172,14 @@ internal sealed class GlowRaster
             {
                 float px = x + 0.5f;
                 int p = y * Width + x;
-                float d = -SdRoundBox(px - halfX, py - halfY, halfX, halfY, corner);
-                coreAlpha[p] = (1 - SmoothStep(core - 1, core + 1, d)) * coreReach;
-                glowDepth[p] = MathF.Max(-SdRoundBox(px - halfX, py - halfY, halfX, halfY, glowRadius), 0);
+                float band = GlowProfile.Band(GlowProfile.Depth(px, py, Width, Height, bandRadius), bandScale, bandGain);
+                bandLight[p] = band < NegligibleBand ? 0 : band;
+                glowDepth[p] = GlowProfile.Depth(px, py, Width, Height, glowRadius);
                 perimeter[p] = PerimeterT(px, py, Width, Height, colorRadius);
                 float edgeDepth = MathF.Min(MathF.Min(px, py), MathF.Min(Width - px, Height - py));
                 meanBlend[p] = SmoothStep(0.5f * colorRadius, colorRadius, edgeDepth);
             }
         }
-    }
-
-    // Signed distance to a rounded box centred at the origin: negative inside.
-    private static float SdRoundBox(float x, float y, float halfX, float halfY, float radius)
-    {
-        float qx = MathF.Abs(x) - halfX + radius;
-        float qy = MathF.Abs(y) - halfY + radius;
-        float outside = MathF.Sqrt(MathF.Max(qx, 0) * MathF.Max(qx, 0) + MathF.Max(qy, 0) * MathF.Max(qy, 0));
-        return outside + MathF.Min(MathF.Max(qx, qy), 0) - radius;
     }
 
     // Arc length clockwise from the top-left corner along a rounded rectangle of corner radius r (Glow.hlsl PerimeterT).

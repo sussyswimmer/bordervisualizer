@@ -687,6 +687,7 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues — `wip/k10-integration` + `wip/k10-fix`, on top of claude/confident-mccarthy-gt8tif — effort: L (notes below; Windows manual test pending)
 - [ ] K11 Hardening on real Windows: sleep/wake, RDP, TDR, hotplug, device switching. Results go in PROGRESS.md. (needs Maxwell's Windows PC; checklist below)
 - [x] K12 `assets/icon.svg`, `assets/banner.svg/png`, README, repo settings text for Maxwell, recording instructions — this branch (claude/confident-mccarthy-gt8tif) — effort: M (`assets/icon.svg` came with C10; notes below; Windows manual test pending: the recordings and the repo settings)
+- [x] Feedback round 1: dynamics, soft edge, Settings failure message + WPF smoke tests — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 
 ## K0 notes
 
@@ -1742,6 +1743,323 @@ Branch `wip/k12-readme-banner`, review fixes on `wip/k12-readme-banner-fix`, mer
   - **When a winget manifest exists:** replace "coming soon".
   - **If the app is renamed:** re-outline the wordmark as the SVG comment describes, then run `build/icons.sh`.
   - **Optional (Lane A):** have release.yml delete vpk's duplicate `Rimlight-win*-Setup.exe` assets before it publishes, so the Releases page shows one installer per architecture. Not done: nothing needs it, and it touches the release path.
+
+## Feedback round 1 (Maxwell's first Windows run)
+
+Maxwell ran the app on Windows and reported, verbatim:
+
+> the border doesn't really sync with the type of music so its still super sharp even when listening to a calm song like noah kahan or hozier for rap I am ok with it bouncing harder but those songs it should be more of a wave. Also the bounces weren't really proportionate with what was happening in the song it would be a super big bounce when the person was whispering. Thirdly there is a very obvious line or bar around the screen I can see the glow I want it to fade in more also theres no settings to change anything
+
+- **Three changes, merged on `claude/confident-mccarthy-gt8tif` in 3a2fd04:**
+  - Dynamics (wave vs bounce, the bounce on a whisper): ee8f7a4.
+  - Soft edge (the line): 5420417.
+  - Settings window (no settings): af5d2a6.
+  - Dynamics and soft edge each had two reviews and a fix round before merging.
+- **Merged state, checked in the docs pass:** `dotnet build Rimlight.sln -c Release` gives 0 warnings. `dotnet test` passes Rimlight.Tests 815, Rimlight.Platform.Tests 368 and Rimlight.IconGen.Tests 89. Rimlight.App.Tests isn't a test project off Windows; on Windows CI it passes 23 of 23 (see Settings window, Verified).
+- **Not changed:** no file under `Contracts/`, and no `AudioTuning` or `Settings` default. Nothing has run on Windows yet; the checklist is at the end of this section.
+
+### Dynamics
+
+Branches `wip/dynamics` (b7e6817, 06bc2fd, 1aad6da) and `wip/dynamics-fix` (2a660d6, e74255d), on 5b387fc. Effort: L.
+
+- **Problem, measured at 5b387fc.** Setup: the real analyzer and light engine through `CoreFactory`, at 60 fps with 10 ms packets, default settings, on the new procedural style tracks.
+  - **Auto-gain flattening (doc 03 §2).** The 4 s peak half-life, +1 dB/s floor and 12 dB minimum range stretched a whispered verse 15 dB under the chorus back over the full range about 6 s after the chorus. In the mid band the range was 19.7 dB at 51 s and back at 12.0 dB at 57 s. The chorus was only 1.19× as bright as the verse after it.
+  - **Voice and guitar fired beats.** In a drumless ballad the 30–150 Hz detector fired 1.1–1.8 times a second, and each stem fired on its own: guitar 1.3–1.9/s, a whispered baritone 1.4/s.
+  - **Every beat was a full bounce.** `Beat` jumped to exactly 1 on each, giving 16–37 full pulses per ballad section.
+  - **Level followed syllables.** Its 30 ms attack tracked syllables and plucks: 6.6–10.2 % of the shown brightness's variance lay above 3 Hz. "Shown" is I × (1 + 0.25·Pulse).
+- **Structure.** Core internals behind the frozen contracts, with internal constants and fixed internal bands. CORE-API §4.2 has the full description.
+  - **`SongLoudness` (new), the song reference:**
+    - **Momentary loudness:** power in fixed 30–150 / 150–2000 / 2000–12000 Hz bands, weighted 0.5 / 1 / 1.5 and smoothed with τ = 0.25 s.
+    - **Reference:** a 0.5 dB histogram that forgets with τ = 10 s. Its 90th percentile is the song's loud parts.
+    - **Position:** 1 at the reference, falling linearly to 0 at 24 dB below it. It is 0 only in near-silence (−80 dBFS, the auto-gain hold level), so quiet playback stays scale-invariant.
+    - **Prior:** until the memory fills, 4 s of virtual loudness at 4 dB above the loudest moment so far.
+    - **Gaps:** 1 s of near-silence, or of no packets, clears the memory and re-arms the prior. A session reference (τ = 30 s, from about 16 s into a song) survives the gap. It then floors the next song's reference and falls 0.2 dB/s.
+    - Subnormal floats are flushed to 0.
+  - **`BeatCharacter` (new), each beat's grade and the music's punch:**
+    - **Kick prominence:** the rise of a fixed 30–100 Hz kick band over the beat's 35 ms onset window (audio time). It is measured in dB against the amplitude of the music above the bass band just before the beat, the larger of a 0.25 s and a 1.5 s average. Kick-likeness = smoothstep(4 dB, 9 dB) of it.
+    - **Punch:** a drive follows the kick-likeness of the recent onsets. It moves half the way toward a more kick-like onset and a tenth of the way toward a less kick-like one. It holds for 3 s after the last kick-like onset, then fades with τ = 2.5 s. Punch = smoothstep(0.3, 0.75, drive).
+    - **Grade** = kick-likeness × punch (as before this onset) × accent × loud × Sensitivity, clamped to 1.
+      - Accent: the rise over 0.85 × the strongest recent kick's rise, which halves every 1.5 s.
+      - Loud: the song position held over the dip between beats, through smoothstep(0.3, 0.6), never under 0.3 × punch.
+      - One kick-like onset in a wave gives no pulse, the next about 0.4, the third full size. The first second after near-silence only listens.
+    - **Beat** is the grade on the frame it rises, then decays with `BeatDecaySeconds` as before.
+  - **`AudioAnalyzer`:**
+    - Level target = min(1, position / 0.8) × (1 − 0.6 × (1 − doc 03's Level target)).
+    - Time constants: `LevelAttackSeconds` × 10^(1 − punch) and `LevelReleaseSeconds` × 5^(1 − punch). That is 0.3 s / 1.25 s with no drums, and doc 03's 30 / 250 ms in a groove and in near-silence.
+    - Tempo: where kicks play (a kick-like onset within 4 s), only kick-like beats at least 0.6× as strong as the strongest recent kick count, timed when they fired (`BeatDetector.AddTempoBeat`). Elsewhere every beat counts, as before.
+    - Detection and `BeatCount` are unchanged.
+  - **`BandAnalyzer`:** `WeightedPower` and `KickBins` use fixed bands, so live-tuning the bass band in the visualizer doesn't change the grading. `BeatResult` gains `KickLevel`.
+  - **`LightEngine`:** the phase push is 0.01 cycles × the height `Beat` rises to (it was 0.01 per beat).
+  - **Visualizer (App):**
+    - `AnalyzerTap` records whether `BeatCount` rose on each call (`AnalyzerSnapshot.Fired`), and the "beat fired" ticks use it (before, they needed Beat ≥ 0.999).
+    - The slider descriptions for the Bass band, Level attack/release, Sensitivity and Beat decay say what each now does.
+  - **`tools/audio-tools/StyleTracks.cs` (new):**
+    - Six procedural songs: CalmBallad, Rap, Edm, BalladWithDrums, FolkBand and PianoBallad.
+    - Each section is mixed to a target RMS, with kick ground truth.
+    - Single stems (`StyleParts`) and `Mix`. Stems are not clipped; a full render is.
+- **Spec clarifications and deviations:**
+  - The dynamics merge put clarifications in doc 03 (§2 auto-gain, the Level envelope, beat step 4, and the §4 tempo) and in CORE-API (§2, §4.1–4.4, §6, §6.1):
+    - Level is judged against a 10 s song reference. Auto-gain stays as written for `Bass` and the contrast within a groove.
+    - Level's time constants are 10× / 5× with no drums.
+    - `Beat` is a 0..1 grade, not always 1. A kick in a loud groove still reads exactly 1.
+    - Where kicks play, the tempo counts only kick-like beats.
+  - **Added in this docs pass, doc 03:**
+    - §2 step 5: Sensitivity also scales each beat's grade (0.5 gives pulses about half as big).
+    - §4: the new constants are internal and have no sliders yet (H-025).
+  - **Volume (doc 03 §2):**
+    - The same song at any steady volume gives the same light: within 0.0002 of Intensity down to −35 dB.
+    - A volume change in the middle of a song can't be told from the music getting quieter or louder. Steps up to about 5 dB barely show in the loud parts (the knee at 0.8). Larger ones settle in up to about 25 s, or 30 s when a step up lands at the start of a quiet verse. Doc 03's auto-gain took 0.7–15 s.
+  - **Not edited:** doc 01 §2 ("a pulse fires on each beat"; the pulse is now graded, and voice, guitar, piano and bass guitar onsets without drums give none) and doc 07 Phase 3 ("a small kick of 0.01 on each beat"; it is now 0.01 × the beat's height). CORE-API §4.2 and §6.1 carry both.
+  - **Rejected: telling a volume step from the music getting quieter** (a histogram shift on a detected gain step). On the style tracks a song's own band balance moves 2–7 dB within 0.8 s. The prototypes missed real steps and flagged section changes. The knee and the groove floor (0.3 × punch) were done instead.
+- **Verified here (Linux).** Style tracks at 60 fps with 10 ms packets, Brightness 0.8, against 5b387fc:
+
+  | Measure | 5b387fc | Now |
+  |---|---|---|
+  | Calm ballad pulses per section | 16–37, all 1.0 | 0 |
+  | Calm ballad brightness variance above 3 Hz | 6.6–10.2 % | 0.2–0.7 % |
+  | Chorus vs the whispered verse after it | 1.19× | 1.58× |
+  | Folk band + bass guitar 6 dB under: chorus pulses ≥ 0.5 | 19–23 | 0 |
+  | Same + brush kit 12 dB under: chorus pulses ≥ 0.5 | 19–20 | 0 (max 0.18), plus 1 full pulse at each chorus entrance |
+  | Same mix, chorus brightness variance above 3 Hz | 13–18 % | 2.3–3.8 % |
+  | Piano ballad pulses per section | 6–7 at 1.0 | 0 |
+  | Kit at the music's level, whispered verse 2 | 14 at 1.0 | mean 0.30, max 0.35 |
+  | Rap kicks with a pulse ≥ 0.7 | 61/61 | 61/61 (58/61 at 44.1 kHz) |
+  | EDM kicks with a pulse ≥ 0.7 | 74/77 | 73–76/77 |
+  | EDM tempo | 246 BPM | 127.8–128.2 at 44.1 and 48 kHz, seeds 1, 5 and 6 |
+  | EDM breakdown pulses | 18 at 1.0 | 0 |
+  | Folk band after itself, verse 1 mean pulse | 1.0 | 0.57 (0.82 as the first song) |
+  | Rap 10 dB quieter after a gap, mean pulse 5–10 s | 1.0 | 0.95 |
+  | Rap 14 dB quieter after a gap, mean pulse 10–20 s | 1.0 | 0.52 (trade-off) |
+  | Rap kicks in the 10 s after −10 dB mid-song, mean pulse | 0.94 | 0.73 |
+  | Volume step, last brightness difference > 0.1: rap −20 / +20 dB | 5.2 / 15.3 s | 23.5 / 6.0 s |
+  | The same, ballad −6 / +6 dB | 0.7 / 1.5 s | 16.9 / 13.6 s |
+
+  - **Kick prominence medians:**
+
+    | Source | dB |
+    |---|---|
+    | 808s | 13.5 (12.2 at 44.1 kHz) |
+    | EDM kicks | 19 |
+    | Acoustic kicks | 9.6 |
+    | Brush kit at the music's level | 17 |
+    | Brush kit 6 / 12 / 20 dB under | 12 / 7 / 4 |
+    | Bass guitar 6 dB under | −3 |
+    | Piano | −9.5 |
+    | Picked guitar | −19 |
+    | Ballad voice and guitar | −31 |
+
+  - **Cost:**
+    - About 1–2 µs a step by operation count.
+    - Side by side, 113–168 µs a frame (analyzer and engine, style track) against 104–146 µs before, in alternating runs: within this machine's noise, so PERF.md is unchanged.
+    - 0 bytes per frame. `AStyleTrackAllocatesNothingPerFrame` and the existing analyzer and engine allocation tests pass.
+  - **Mutations:** of 17, the 16 that still apply each fail at least one test.
+  - **Builds:** Release and Debug have 0 warnings on both branches.
+  - **New tests:**
+    - `MusicDynamicsTests`, `SongLoudnessTests`, `BeatCharacterTests` and `StyleTracksTests` (with `MixPutsEachStemAtItsLevel`).
+    - `AudioAnalyzerTests.OffBeatBassNotesAreBeatsButNotTempo` and `LightEngineTests.AGradedBeatPushesInProportionToItsHeight`.
+    - `VisualizerHandOffTests.TheTapMarksEveryCallThatFiredABeat`.
+  - **Tests changed on purpose:**
+    - `SyntheticAudio.Run` spots a beat by `BeatCount` rising, because `Beat` is now a grade. It takes `pulses:`, and `StrongPulseRate` puts pulse-size assertions back in four `AudioAnalyzerTests`.
+    - WavAnalyze: full pulses ≥ beats − 3.
+    - `FollowsTheRealAnalyzerThroughMusicSilenceAndMusicAgain`: pushes follow the graded rule, with full pulses ≥ beats − 4.
+    - `SoftDrumsBounceSoftly`: the chorus bound is 0.25 (measured 0.18).
+- **Left for later:**
+  - **Windows listening:** the checklist below. Everything was measured on procedural tracks, so real recordings may need threshold tuning.
+  - **Known limits:**
+    - The first song after launch has nothing to be judged against, so a soft kit that stands out of a sparse first verse still bounces (0.82).
+    - Each chorus entrance gives one full pulse.
+    - A bass guitar playing alone, or as loud as the rest of a drumless song, pulses.
+    - A quieter master after a gap dims for up to about 40 s. Most streaming apps normalize loudness, which keeps songs within a few dB of each other.
+    - The tempo of soft-drum or drumless folk is unreliable, as before (for example 38 or 167 BPM).
+    - Detection is unchanged, so its misses are too: 3 of 77 EDM kicks next to off-beat bass notes and 5 of 23 acoustic kicks.
+  - **H-025:** the new constants can't be tuned live, and the visualizer can't show grade, kick-likeness, punch or position.
+  - **H-026:** Codex's review of the Lane A paths.
+
+### Soft edge
+
+Branches `wip/soft-edge` (756fe4f) and `wip/soft-edge-fix` (7ca790c), on 5b387fc. Effort: M.
+
+- **Problem, measured at 5b387fc.** `Glow.hlsl` drew a solid core, `core = 1 − smoothstep(T − 1, T + 1, d)`, then took `max(core, 0.85·glow)`. At the defaults (6 DIP, Glow 0.45, 1080p, Intensity 0.72) the alpha codes ran 184, 184, 184, 184, 184, 155, 121, 116… That is a flat 5 px, then drops of 29 and 34 code values: the bar.
+- **Structure:**
+  - **`GlowProfile` (Platform, new)** holds the profile math. `Glow.hlsl` step 2 mirrors it, and the Settings preview (`GlowRaster`) calls it.
+  - **Band:**
+    - The e-folding distance is b = max(T / 2, 1/8 px), where T is Thickness in surface pixels (DIP × DPI scale × render scale).
+    - The gain is G = 2b·sinh(1 / 2b), the pixel average of exp(−x / b). It is 0 at Thickness 0, and below b = 1/8 px it is scaled by (T / 2) ÷ (1/8).
+    - `band = saturate(G·exp(−d_band / b))`, through its own rounded field with radius min(max(corner, 2b), short side / 2).
+  - **Glow** (K1's shape):
+    - `glow = 0.85·exp(−d_glow / max(spread·(1 + 0.35·Pulse), 0.5))`, through K1's rounded field with radius max(corner, 2·spread).
+    - Spread = max(1 DIP, Glow^1.5 × 0.35 / 3 × short side); it was Glow². The default 0.45 reaches 38 px at 1080p, against 25 before.
+  - **Combine:** `shape = 1 − (1 − glow)(1 − band)`, a screen blend. It never passes 1, and Thickness 0 is exactly the old glow.
+  - **Gain:**
+    - `Gain = SoftClip(Intensity × (1 + 0.25·Pulse))`, computed once a frame on the CPU.
+    - SoftClip(x) = min(x, 0.9) + 0.1·o / (1 + o), with o = max(x − 0.9, 0) / 0.1. That is 0.95 at 1 and 0.978 at 1.25, the largest gain.
+    - The shader draws `alpha = shape × Gain × Visibility` and returns early when that is under 0.5/255. The profile is only ever scaled.
+  - **cbuffer:** still 16 floats, 64 bytes. `BandScalePx`, `BandGain` and `BandRadiusPx` take the slots of `CoreThicknessPx`, `CoreFade` and a pad. `Gain` takes `Intensity`'s. `CornerRadiusPx` stays, and every field radius is at least it.
+  - **Appearance page:** Thickness now reads "How wide the brightest light along the edges is, before it fades into the glow. 0 leaves only the glow."
+  - **Settings preview:** it floors the pulsed spread at the shader's 0.5 px (`GlowProfile.PulsedSpread`; K7 used 1 px).
+  - **Unchanged:** the colour path, the mean-colour blend, the sRGB encode and the dither.
+  - **Candidates:** four profiles were rendered at 1080p (Thickness 0/6/20/40 × Glow 0.2/0.45/0.9, old and new spread):
+    - `0.85·glow + 0.15·band`: Thickness barely did anything.
+    - `0.70·glow + 0.30·band`: a hairline came back, and the glow-only look was 18 % dimmer.
+    - The screen blend: chosen.
+    - A Gaussian band: read as a blurred stroke with a mitre in each corner.
+  - **The first draft rolled off each pixel.** On a full beat at Brightness 100 % that squashed the brightest pixels into a shoulder: up to 16.8 code values of extra drop inside the edge and 49 at the edge, a rim flashing on the beat. The review fix rolls off the gain instead.
+- **Spec clarifications and deviations** (the PRD and doc 04 clarifications were added in this docs pass):
+  - **PRD §4:** Thickness is the width of a soft bright band at the edge that blends into the glow, not a solid line.
+  - **Doc 04 §3 step 2:**
+    - The core smoothstep is gone; band and glow combine by screen blend.
+    - The per-pixel clamp is replaced by a roll-off of the scalar gain on the CPU.
+    - Two rounded distance fields replace the square one (K1 had already rounded the glow's).
+  - **Glow → spread** uses the slider to the power 1.5 instead of K1's 2. The PRD endpoints are unchanged.
+  - **K3's screen-pixel CoreFade** is replaced by the band's pixel-average gain, which keeps a band's light at any render scale. Every measure now converts at the render scale.
+  - **Brightness 100 %:** the gain peaks at 0.95 without a beat (instead of 1) and at 0.978 on a full beat (instead of 1.25). The beat still pushes the glow 35 % further in.
+  - **Lit area:** the default glow lights about 40 % more pixels. At 4K defaults that is 54 % of the screen instead of 38 %.
+- **Verified here (Linux):**
+  - **Shader:** `Glow.hlsl` compiles under DXC 1.8.2407 (`-T ps_6_0` / `vs_6_0`, `-HV 2018`, warnings as errors) and is ASCII-only. There is no SM4 compiler here, so vs_4_0/ps_4_0 was not compiled; the shader uses only SM4-legal intrinsics.
+  - **Cost:** DXC ps_6_0 -O3, up to and including the early-out branch:
+
+    | Shader | Instructions | exp | Divides |
+    |---|---|---|---|
+    | 5b387fc | 81 | 1 | 1 |
+    | Now | 78 | 2 | 2 |
+
+    That is one more exp and one more divide per pixel, both for the band. After the branch: 256 → 255.
+  - **Cross-checks:**
+    - A NumPy port matches `GlowProfile` to four decimals, and a scratch build of the real `GlowRaster` renders the same look.
+    - A reviewer's independent port of both shaders confirmed the bar is gone. At the defaults the drop between pixels only shrinks (9.7, 8.9, 8.1, 7.3…), and the edge pixel is 199 against 204 before, at Intensity 0.8.
+  - **Tests:**
+    - `GlowProfileTests`:
+      - The profile is monotone and brightest at the edge for every Thickness, Glow, Intensity and Pulse. That holds at 100/125/150/200 % DPI and at full and half scale, along the edge and the corner diagonal.
+      - `NoSettingDrawsABar`, at every gain: inside the outermost pixel pair the drop never grows by more than 1.1 code values (worst 1.02); at that pair, by at most 6 (worst 5.86).
+      - `TheDefaultLookFadesWithoutALine`, `TheFadeNeverEasesOffFasterThanItsLights` and the gain roll-off.
+      - The old solid core fails these checks.
+    - `GlowRasterTests`: the preview is within 1 code value of `GlowProfile` and monotone, including Glow 0 on the beat, and allocates 0 bytes per frame.
+    - `GlowShaderTests`: the cbuffer names and offsets match `GlowConstants`, and step 2's formulas match `GlowProfile`'s constants.
+    - Changed on purpose:
+      - `GlowMapsToSpreadAsThePrdSays`: 37–39 px, from 24–26.
+      - `AThinCoreFadesByItsWidthInScreenPixels` is replaced by `AThinBandKeepsItsLightAtAnyScale` and `ThicknessIsTheSoftBandsWidth`.
+      - `HalfScaleHalvesEveryPixelMeasure`, `ValuesAreClamped` and `LooksLike` read the band fields and `Gain`. `Gain(1, 0)` is 0.95.
+  - **Mutations:**
+    - A `max()` combine passed all 84 Glow tests in the draft; it now fails 12.
+    - Swapping `BandGain`/`BandRadiusPx` in the shader, or `SpreadPx`/`Gain` in the struct, fails `GlowShaderTests`.
+  - **Platform.Tests:** 367 on the branch, all passing.
+- **Left for later:**
+  - **Windows:** nothing has run on a real screen yet.
+  - **Corners (pre-existing K1):** outside each rounded field there is a plateau ending in an arc kink, plus a diagonal crease.
+    - At the defaults the glow arc's slope changes by 4.4 code values per diagonal pixel at its 76 px radius; the old core stepped by 27.5.
+    - A smooth clamp of both fields would remove it, but that changes K1's corners and needs its own renders.
+  - **Preview colour:** the preview's mean-colour blend runs in sRGB space (K7), up to 4 code values off at Glow 1.
+  - **At high Glow** the top-left corner (the gradient's seam blend) shows a lighter colour wedge. The colour logic is unchanged.
+  - **Band divide:** storing the band's reciprocal would save it.
+  - **K11 (H-019 item 1):** the larger lit area and the extra exp and divide belong in the GPU/CPU measurement.
+
+### Settings window
+
+Branch `wip/settings-window` (ff5db1c, 7c16c3a), on 5b387fc. Effort: M.
+
+- **Root cause.** No defect was found. The static audit below came back clean. What it did prove is that 5b387fc hid every way Settings can fail:
+  - **(P1)** If WPF-UI didn't load, or building the window threw, the launcher showed the welcome window without its Settings button. Nothing said anything went wrong.
+  - **(P2)** If `Present()` threw, the only trace was "[App] Opening Settings failed" in the log. Nothing was shown.
+  - **(P3)** If a page threw in `SetActive` or `Refresh`, the content area stayed empty: WPF-UI 4.3.0 raises `Navigated` before `UpdateContent`. A `Refresh` that throws also kept that page's edits from ever applying.
+  - **Likely:** one of P1–P3 fired on Maxwell's PC; his log says which.
+  - **Possible:**
+    - Settings opened, and he meant that no setting changes the feel or the edge. The "very obvious line" was the default 6 px solid core; the soft edge above replaces it with a soft band.
+    - The window opened behind other windows (Windows' foreground lock).
+    - A single click, which toggles the glow, instead of a double-click.
+  - **Static audit:**
+    - WPF-UI 4.3.0 and the app's 11 BAML files were decompiled.
+    - The 14 WPF-UI resource keys the app uses exist, and the theme brushes are in all six theme dictionaries.
+    - The pack URIs resolve, and the StaticResource keys and Style TargetTypes match.
+    - Every WPF-UI member and enum value used exists.
+    - The sliders' `ValueChanged` during `InitializeComponent` only reaches `PageEdits.Update`, which ignores edits before the first refresh.
+- **Structure:**
+  - **`SettingsUi/WindowFailure` (new):** a plain `MessageBox`, which needs no WPF-UI styles. It reads "Rimlight couldn't open its settings window. What went wrong: …", followed by:
+    - the outer and innermost exception, up to 600 characters
+    - the log as `%APPDATA%\Rimlight\logs\rimlight.log` (never the expanded path), and the `[Settings]` or `[Visualizer]` and `[UiTheme]` lines to look at
+    - an offer to open the logs folder (Yes)
+
+    It is posted with `BeginInvoke`, one box at a time. `Quiet` is for the tests.
+  - **The settings and visualizer launchers** show it when the styles are missing, or when building or showing the window fails. The full exception is still logged. A window that failed to show is kept and shown again on the next try.
+  - **`SettingsWindow`** runs each page's `SetActive`, `Refresh` and `ShowHotkeyStatus` through `RunPage`. The first failure per page is logged in full and reported; later ones get one line. A navigation failure is reported too.
+  - **`UiTheme`** logs as "[UiTheme]" (it was "[Ui]") and writes "[UiTheme] Loaded the Fluent styles (… theme)." The launcher writes "[Settings] Created the settings window." once.
+  - **The welcome window** is only the first-run welcome now. `ShowWelcome()` is private and always offers Settings.
+  - **Test seams:**
+    - `AboutPage.LoadIcon` uses the assembly-qualified pack URI, so it also resolves in the test host.
+    - `AppController.Unstarted(SettingsService)` is an internal seam.
+    - The App project gains `InternalsVisibleTo Rimlight.App.Tests`.
+  - **`src/Rimlight.App.Tests` (new), 23 WPF smoke tests:**
+    - **Host:** one STA thread with a plain WPF `Application` (OnExplicitShutdown) that runs `UiTheme.Load`. The app's `App` can't be used: its constructor would start the tray, the capture and the overlay.
+    - **Theme (5):** the styles load, every theme key the source uses exists in Light, Dark and HighContrast, and the icon loads.
+    - **Pages (8):**
+      - Each of the six is built, refreshed, started, stopped and laid out at 572×520 and 372×360.
+      - The GlowColorEditor.
+      - Edits apply only after the first refresh.
+    - **Settings window (4):**
+      - Opened through the tray path; the X hides it, and reopening brings back the same window.
+      - Every page in all three themes.
+    - **Other windows (3):** the welcome with and without its button, and the visualizer.
+    - **Failure message (3).**
+    - **How they fail:**
+      - On a dispatcher exception.
+      - On any `[Settings]`, `[UiTheme]`, `[Visualizer]` or `[App]` line containing "fail", "can't", "unhandled", "exception" or "not applied".
+      - Operations time out after 30 s and waits after 15 s.
+    - **Where they run:**
+      - In Rimlight.sln, which CI's "Full solution (Windows)" job tests. They are not in Rimlight.Core.slnf.
+      - Off Windows the project builds with `IsTestProject=false`, because there is no WPF test host there.
+    - **Docs:** CONTRIBUTING (layout, lanes), the doc 02 layout, the doc 09 ownership map, the lane-b labeler and a ci.yml comment.
+- **Spec clarifications and deviations:**
+  - A Settings failure now opens an error box instead of the welcome window. This replaces a K6/K7 behaviour.
+  - The log area "[Ui]" is now "[UiTheme]".
+  - No contract, default value or existing test changed.
+- **Verified here (Linux, SDK 8.0.426):**
+  - Release and Debug builds have 0 warnings, and ff5db1c builds on its own.
+  - `dotnet test Rimlight.sln -c Release` passes.
+  - Rimlight.App.Tests can't run here: off Windows it isn't a test project, and forcing it aborted the run with "Microsoft.WindowsDesktop.App not found".
+  - **Windows CI, 2026-10-17:** a manual run of CI on 3a2fd04 ([run 38992796791](https://github.com/sussyswimmer/bordervisualizer/actions/runs/38992796791)) ran Rimlight.App.Tests in the "Full solution (Windows)" job: **23 passed, 0 skipped**. With the Fluent styles loaded as the app loads them, the settings window, all six pages, the colour editors, the welcome window and the visualizer window build and lay out without a logged failure on windows-latest. So the window itself can be built on Windows; what Maxwell saw still needs his rimlight.log or a description (a hidden tray icon in Windows 11's overflow, a build from the other #25–#30 stack, or something specific to his PC).
+- **Left for later:**
+  - **The cause on Maxwell's PC** is still unknown. It needs his rimlight.log lines (checklist item 1) or the first Windows CI run.
+  - **The first CI run** may hit environment issues:
+    - WPF windows on windows-latest
+    - `UISettings.TextScaleFactor` on Windows Server ("[Settings] Reading the text size failed" would fail the tray-path test)
+    - DWM, Mica and the dark title bar on Server 2022/2025
+  - **Harmless lines:** if CI logs a harmless, environment-only line, loosen the failure rule on purpose and say why.
+  - **The error box has no owner window.** If Windows refuses it foreground rights it can open behind other windows; check this on Maxwell's PC.
+  - **High contrast:** the smoke run uses whichever palette WPF-UI picks on a machine that isn't in high contrast (HCWhite). Real high contrast still needs a manual check.
+  - **If "no settings" meant no setting for the feel:** the motion now follows the music without one, and the edge is soft. A new `Settings` field would be a CONTRACT CHANGE, and live tuning of the dynamics is H-025.
+
+### Windows checklist (round 1)
+
+**Setup.** Quit the installed Rimlight, then on `claude/confident-mccarthy-gt8tif` run `dotnet run --project src/Rimlight.App -c Release -- --debug-visualizer` (the glow plus the audio visualizer, for item 8). Default settings (Music Sync, Thickness 6, Glow 45 %, Brightness 80 %), a dark wallpaper, system volume about 50 %. Give each song about 30 s: the first second only listens, and the light learns a song's loud parts over its first 15–25 s.
+
+1. **Settings opens.**
+   - Do: double-click the tray icon (a single click turns the glow on or off), or right-click > Settings…. Click each page, close with X and reopen, then switch Windows between dark and light mode.
+   - Expect: "Rimlight Settings" with Appearance, Color, Motion, Displays, Behavior and About, each showing its controls; X only hides it, the same page comes back, and it follows the theme. rimlight.log (tray > Open logs folder) has "[UiTheme] Loaded the Fluent styles (… theme)." at start and "[Settings] Created the settings window." at the first open.
+   - Bug: the small "Rimlight is running" window, an empty right side, nothing at all, or an error box.
+   - If it fails: the box reads "Rimlight couldn't open its settings window. What went wrong: …". Click Yes (it opens the logs folder) and send the box's text with every rimlight.log line that starts with [Settings], [UiTheme] or [App] and contains "failed", "can't" or "Unhandled", plus the first "[App] Rimlight … started: Windows 10.0.NNNNN" line (or the whole file). The 5b387fc build you ran first writes "[Ui]" instead of "[UiTheme]"; its lines help too. If nothing appears and nothing like that is logged, look behind other windows and say what you saw.
+2. **The edge.**
+   - Expect: brightest at the very screen edge, fading smoothly inward: about a third as bright 40 px in and nearly gone by about 150 px on a 1080p screen (twice that on 4K). It bends round the corners, and over a white window it tints smoothly.
+   - Bug: any line, bar or brighter stripe along an edge, an inner outline, or a band that stays flat and then drops. A quarter-circle arc or a 45° crease in a corner is known (pre-existing); report it if you see it at normal viewing distance.
+3. **Thickness and Glow** (Settings > Appearance). Thickness no longer draws a solid line: it sets the width of a soft bright band at the edge.
+   - Do: Thickness 0, 20 and 40, each at Glow 10 % and 45 %; drag Glow from 0 to 100; apply the Minimal preset.
+   - Expect: Thickness 0 leaves only the glow, and more widens the bright part at the edge as a soft gradient (a wide band on a narrow glow may look like a soft shoulder). Glow goes smoothly from a soft hairline to a wide wash. Minimal is a thin soft edge, not a crisp 1 px line (intended). The preview card matches the screen; changes apply live and survive a restart.
+   - Bug: a hard inner edge, a line where the band meets the glow, jumps while dragging, or a preview that clearly differs from the screen.
+4. **Calm songs** (Noah Kahan or Hozier, for example "Stick Season" or "Cherry Wine").
+   - Expect: the glow swells and eases with the phrases, with no bounce on the voice, strums, piano or bass guitar. The chorus is clearly brighter; the next quiet verse eases down over 2–3 s and stays dimmer. Where a full kit comes in, bouncing on its kicks is fine, and it calms down within about 5–8 s after the drums stop.
+   - Bug: a sharp bounce on a sung word, a strum or a piano chord, a big bounce on a whisper, jittery brightness in a quiet verse, or a chorus no brighter than the verse.
+   - Known limits: in the first song after launch a soft kit in a sparse first verse can still bounce, and a chorus coming in gives one bigger pulse.
+5. **Rap and EDM.**
+   - Expect: after the first 2 s, a strong, tight bounce on every 808 or kick. An EDM breakdown has no pulses, only a slow wave, and the first kicks of the drop hit hard at once. At Brightness 100 % the light swells inward on each beat and the outermost pixels get only slightly brighter.
+   - Bug: clearly audible kicks with no bounce, a bounce that lags the kick, bounces on syllables between kicks or on pads in a breakdown, or a brighter rim flashing along the edges on the beat.
+6. **Volume and song changes.**
+   - Expect: a few notches of volume barely show, and the same song at any steady volume looks the same. A big change (50 % → 10 %, or back) shows for up to about 25 s (30 s if it lands at the start of a quiet verse) while kicks keep bouncing at least softly. A quiet song after a loud one starts dimmer and recovers over 25–40 s.
+   - Bug: no recovery after 40 s, or a flash.
+7. **Sensitivity** (Settings > Motion): at 0.5 the bounces are about half as big; at 2 they are full and the light is brighter.
+8. **Visualizer.**
+   - Expect: a "beat fired" tick on every bass onset; in a calm song, ticks with little or no Beat above them are syllables and plucks judged not to be kicks. In rap each tick has Beat near 1, and the BPM is within ±2 of the song's (EDM about 128, not 256). Moving the Bass band sliders (say to 20–200 or 30–250 Hz) doesn't make a calm song bounce or stop rap bouncing on every 808.
+9. **Half scale and mixed DPI,** if you have them. On battery with "Save power" the look is the same at half resolution, with no rim on the beat, and Thickness 1 is still faintly visible. A 100 % monitor next to a 150 % or 200 % one shows the glow proportionally the same on both.
+10. **WPF smoke tests.** Quit Rimlight (the build can't overwrite a running copy's files), then run `dotnet test src/Rimlight.App.Tests -c Release`: it opens every window and settings page. Expect 23 passed; windows flash briefly and one takes focus. A failure's message lists the logged failure lines. CI's "Full solution (Windows)" job runs the same tests.
+
+**Reporting a dynamics issue.** The new constants are internal, so "Copy params as JSON" can't move them (H-025). Send a screen recording with sound (the Snipping Tool's Record, or OBS) that shows the screen edges and ideally the visualizer; the song, artist and timestamp; the system volume and whether it was the first song after launch; and what you expected: a wave, a soft pulse or a hard bounce.
 
 ## Lane B notes
 
