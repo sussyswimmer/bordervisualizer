@@ -31,7 +31,8 @@ Rimlight/
    ├─ Rimlight.App/               # WPF exe — composition root, tray, settings UI, Velopack bootstrap
    ├─ Rimlight.Bench/             # frame benchmark and soak run of the render thread's Core work (C12)
    ├─ Rimlight.Tests/             # xUnit for Core, Bench and the tools
-   └─ Rimlight.Platform.Tests/    # xUnit, the parts of Platform and App that make no Windows calls (K10)
+   ├─ Rimlight.Platform.Tests/    # xUnit, the parts of Platform and App that make no Windows calls (K10)
+   └─ Rimlight.App.Tests/         # xUnit on an STA thread, Windows only: every XAML window and page built and shown
 ```
 
 ## Threads and data flow

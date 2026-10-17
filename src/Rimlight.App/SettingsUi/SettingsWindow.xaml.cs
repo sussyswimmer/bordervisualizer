@@ -28,6 +28,7 @@ internal partial class SettingsWindow : FluentWindow
     private readonly AppController app;
     private readonly DisplaysPage displays;
     private readonly BehaviorPage behavior;
+    private readonly HashSet<ISettingsPage> failedPages = []; // pages whose failure was logged in full and reported
     private ISettingsPage? selected;
     private ISettingsPage? active;
     private IDisposable? audio;
@@ -104,7 +105,9 @@ internal partial class SettingsWindow : FluentWindow
         }
         catch (Exception exception)
         {
+            // The window would stay open with nothing in it, so this is said, not only logged.
             Trace.WriteLine($"[Settings] Opening the {page.Name} failed: {exception}");
+            WindowFailure.Show($"the {PageName(page)} page in Settings", WindowFailure.Describe(exception));
         }
     }
 
@@ -122,17 +125,45 @@ internal partial class SettingsWindow : FluentWindow
         ISettingsPage? next = shown ? selected : null;
         if (!ReferenceEquals(next, active))
         {
-            active?.SetActive(false);
+            if (active is { } previous) RunPage(previous, "stop", page => page.SetActive(false));
             active = next;
-            if (active is not null)
+            if (active is { } current)
             {
-                active.SetActive(true); // first: a page reads what it shows (the monitors, the media) here
-                active.Refresh(app.SettingsService.Current);
+                // SetActive first: a page reads what it shows (the monitors, the media) there.
+                RunPage(current, "start", page => page.SetActive(true));
+                RunPage(current, "show the settings", page => page.Refresh(app.SettingsService.Current));
             }
         }
 
         UpdateAudioRequest();
     }
+
+    // A page that throws must not leave the window empty: WPF-UI's navigation view raises Navigated (which gets here)
+    // before it puts the page on screen (NavigationView.NavigateInternal, 4.3.0), so an exception would keep the page
+    // off screen. The first failure of each page is logged in full and reported, since its controls may then show
+    // nothing or not apply edits (PageEdits counts edits only after a refresh that completed); later ones get a line.
+    private void RunPage(ISettingsPage page, string what, Action<ISettingsPage> action)
+    {
+        try
+        {
+            action(page);
+        }
+        catch (Exception exception)
+        {
+            string name = PageName(page.GetType());
+            if (!failedPages.Add(page))
+            {
+                Trace.WriteLine($"[Settings] The {name} page failed to {what} again: {exception.Message}");
+                return;
+            }
+            Trace.WriteLine($"[Settings] The {name} page failed to {what}: {exception}");
+            WindowFailure.Show($"the {name} page in Settings", WindowFailure.Describe(exception));
+        }
+    }
+
+    // "Appearance" for AppearancePage, as the navigation names it.
+    private static string PageName(Type page) =>
+        page.Name.EndsWith("Page", StringComparison.Ordinal) ? page.Name[..^"Page".Length] : page.Name;
 
     // The analyzer runs for the meter, and for the preview in music sync (the only mode in which it uses audio), also
     // when the glow itself doesn't listen (turned off, paused).
@@ -186,11 +217,11 @@ internal partial class SettingsWindow : FluentWindow
     // A change from any page, the tray or the shortcut: the page on screen shows it.
     private void OnSettingsChanged(Settings settings)
     {
-        active?.Refresh(settings);
+        if (active is { } page) RunPage(page, "show the settings", shown => shown.Refresh(settings));
         UpdateAudioRequest();
     }
 
-    private void OnHotkeyChanged() => behavior.ShowHotkeyStatus();
+    private void OnHotkeyChanged() => RunPage(behavior, "show the shortcut", _ => behavior.ShowHotkeyStatus());
 
     // Closing hides the window; the app keeps running in the tray (doc 06 §3). Only quitting (or Windows ending the
     // session) really closes it.

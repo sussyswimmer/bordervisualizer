@@ -24,6 +24,7 @@ lane-b:
           - src/Rimlight.Platform/**
           - src/Rimlight.Platform.Tests/**
           - src/Rimlight.App/**
+          - src/Rimlight.App.Tests/**
           - assets/**
           - README.md
 

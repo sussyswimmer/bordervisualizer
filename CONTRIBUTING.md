@@ -43,7 +43,7 @@ dotnet test Rimlight.Core.slnf -c Release
 dotnet run --project tools/wav-analyze -- --help         # beats, BPM, CSV and a PNG plot for a WAV file
 ```
 
-The full solution also builds on Linux (the Windows projects set `EnableWindowsTargeting`), but the app itself only runs on Windows.
+The full solution also builds on Linux (the Windows projects set `EnableWindowsTargeting`), but the app itself only runs on Windows. So do its WPF smoke tests (`Rimlight.App.Tests`), which build and show the settings, welcome and visualizer windows: `dotnet test Rimlight.sln` skips them on Linux and macOS, and CI runs them on Windows.
 
 ## Project layout
 
@@ -58,6 +58,7 @@ src/
   Rimlight.Tests/         xUnit tests for Core and the tools
   Rimlight.Platform.Tests/
                           xUnit tests for the Windows-free parts of Platform and App (run on Linux too)
+  Rimlight.App.Tests/     WPF smoke tests: every window and settings page built and shown (Windows only)
   Rimlight.Bench/         Benchmarks and long soak runs
 tools/                    Offline tools: WAV analyzer, synthetic test tracks, icon generator
 build/                    Packaging and release scripts
@@ -74,7 +75,7 @@ Rimlight is built in two lanes that meet only at the interfaces in `src/Rimlight
 | Lane | Owns | Checked by |
 |---|---|---|
 | **A: Engine & Pipeline** | `Rimlight.Core` (except `Contracts/`), `Rimlight.Tests`, `Rimlight.Bench`, `tools/`, `build/`, `.github/`, the community files | Unit tests, benchmarks, CI on Linux and Windows |
-| **B: Windows & Experience** | `Rimlight.Platform`, `Rimlight.App`, `Rimlight.Platform.Tests`, `assets/`, `README.md` | Unit tests of the Windows-free parts, running the app on Windows, manual test checklists |
+| **B: Windows & Experience** | `Rimlight.Platform`, `Rimlight.App`, `Rimlight.Platform.Tests`, `Rimlight.App.Tests`, `assets/`, `README.md` | Unit tests of the Windows-free parts, WPF smoke tests in CI on Windows, running the app on Windows, manual test checklists |
 
 - **Contracts are frozen.** Platform and App use only `CoreFactory` and the interfaces in `Contracts/`, never Core internals. Changing a contract takes a `CONTRACT CHANGE` entry in [docs/HANDOFF.md](docs/HANDOFF.md) that the maintainer approves first.
 - **Keep a pull request inside one lane.** If you need something from the other lane, add an entry to [docs/HANDOFF.md](docs/HANDOFF.md) (the format is in doc 09 §5) and work around it locally until it lands.
