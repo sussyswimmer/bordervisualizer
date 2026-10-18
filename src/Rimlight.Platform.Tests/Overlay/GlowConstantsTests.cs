@@ -63,7 +63,7 @@ public sealed class GlowConstantsTests
     [Fact]
     public void ThicknessIsTheShouldersWidth()
     {
-        // Thickness (DIPs) is the width of the flat soft shoulder at the edge, in the surface's pixels; the light's
+        // Thickness (DIPs) is the width of the soft shoulder at the edge, in the surface's pixels; the light's
         // field is rounded to at least the shoulder plus two spreads (or the user's corner radius).
         GlowConstants c = GlowConstants.Create(State with { CoreThicknessDip = 6 }, 2880, 1620, 1.5f, 1, 0, Mean);
         Assert.Equal(9f, c.ShoulderPx, 5);
@@ -72,7 +72,8 @@ public sealed class GlowConstantsTests
         Assert.Equal(200f * 1.5f, cornered.GlowRadiusPx, 4);
         Assert.Equal(cornered.CornerRadiusPx, cornered.GlowRadiusPx);
 
-        // Thickness 0 keeps a shoulder of one DIP, so the light still starts flat at the edge.
+        // Thickness 0 keeps a shoulder of one DIP, so the light still starts flat at the edge; Thickness 1 draws the
+        // same light (GlowProfile.MinShoulderDip says why the floor isn't lower).
         GlowConstants none = GlowConstants.Create(State with { CoreThicknessDip = 0 }, 2880, 1620, 1.5f, 1, 0, Mean);
         Assert.Equal(1.5f, none.ShoulderPx, 5);
         Assert.Equal(none.ShoulderPx, GlowConstants.Create(State with { CoreThicknessDip = 1 }, 2880, 1620, 1.5f, 1, 0, Mean).ShoulderPx);

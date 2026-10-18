@@ -7,7 +7,7 @@ cbuffer Light : register(b0)
 {
     float2 ScreenPx;        // swap chain size in pixels
     float  CornerRadiusPx;  // shape corner radius; 0 = square corners. The radii below are at least this
-    float  ShoulderPx;      // width of the flat soft shoulder at the edge: the Thickness setting, at least one DIP
+    float  ShoulderPx;      // width of the soft shoulder at the edge: the Thickness setting, at least one DIP
     float  SpreadPx;        // glow reach (e-folding distance)
     float  Gain;            // Intensity x the beat's 1 + 0.25 Pulse, rolled off under 1 (GlowProfile.Gain)
     float  Pulse;           // 0..1 beat kick
@@ -133,8 +133,9 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     // 04's solid core stepped from 1 to about 0.6 at its inner edge (a bar), and round 1's exponentials were steepest
     // at the very edge, which packed the brightest light into the outermost pixels (a thin bright line). The distance
     // is eased through a hyperbola, sqrt(d^2 + w^2) - w: about d^2 / 2w near the edge, so the light starts with zero
-    // slope (a flat soft shoulder about w = Thickness wide), and about d - w further in, the exponential glow. The beat
-    // widens the shoulder and the spread alike, swelling the whole light inward.
+    // slope (a soft shoulder that bends into the fade over about w = Thickness, and stays within 3% of the edge for
+    // about sqrt(0.06 w spread)), and about d - w further in, the exponential glow. The beat widens the shoulder and
+    // the spread alike, swelling the whole light inward.
     // SpreadPx is at least one DIP, which is half a swap-chain pixel at half render scale; the floor only guards the
     // division and must not widen that hairline halo.
     float spread = max(SpreadPx * (1 + 0.35 * Pulse), 0.5);

@@ -21,7 +21,7 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     public float ScreenWidthPx;
     public float ScreenHeightPx;
     public float CornerRadiusPx;
-    public float ShoulderPx;   // the flat soft shoulder at the edge (GlowProfile.ShoulderFor): the thickness, >= 1 DIP
+    public float ShoulderPx;   // the soft shoulder at the edge (GlowProfile.ShoulderFor): the thickness, >= 1 DIP
 
     public float SpreadPx;
     public float Gain;         // Intensity x the beat's gain, rolled off under 1 (GlowProfile.Gain); scales the profile
@@ -49,7 +49,7 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         float minHalf = 0.5f * shortSide;
         float spreadPx = GlowProfile.SpreadFor(state.Spread, shortSide, scale);
         float cornerPx = Math.Clamp(Finite(cornerRadiusDip) * scale, 0, minHalf);
-        // Thickness is the width of the flat soft shoulder at the edge (GlowProfile). It converts at the render scale
+        // Thickness is the width of the soft shoulder at the edge (GlowProfile). It converts at the render scale
         // like every other measure, so at half scale the same light lands in half as many pixels.
         float shoulderPx = GlowProfile.ShoulderFor(Math.Max(0, Finite(state.CoreThicknessDip)) * scale, scale);
         return new GlowConstants

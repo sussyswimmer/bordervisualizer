@@ -12,9 +12,14 @@ namespace Rimlight.Platform.Overlay;
 /// <c>GlowPeak × exp(-(sqrt(d² + w²) - w) / s)</c> (<see cref="Glow"/>), where d is the distance in from the edge,
 /// w the <b>shoulder</b> (<see cref="ShoulderFor"/>, the Thickness setting) and s the <b>spread</b>
 /// (<see cref="SpreadFor"/>, the Glow setting). The square root is a hyperbola: about d² / 2w near the edge, so the
-/// light starts with zero slope, a flat soft shoulder about w wide; and about d - w further in, so the shoulder eases
-/// into the usual exponential fade, only w further in. It is smooth everywhere, monotonic, and bends from flat to
-/// fading exactly once (one inflection), so there is no step, kink or ring for the eye to call a line.</para>
+/// light starts with zero slope, in a soft shoulder that bends into the fade over about w; and about d - w further in,
+/// so the shoulder eases into the usual exponential fade, only w further in. It is smooth everywhere, monotonic, and
+/// bends from flat to fading exactly once (one inflection), so there is no step, kink or ring for the eye to call a
+/// line.</para>
+/// <para>The part that looks even grows more slowly than w: the light stays within 3 % of the edge for about
+/// sqrt(0.06 w s), 4 px at the defaults on a 1080p screen and 10 px at Thickness 40, and when w is much larger than s
+/// (a large Thickness on a narrow Glow) the shoulder is a soft half-Gaussian band, sigma sqrt(w s). A knee sharp
+/// enough to stay flat all the way to w would be a bar again.</para>
 /// <para>Why not an exponential from the edge: <c>exp(-d / s)</c> is steepest at d = 0, and round 1's soft band
 /// (<c>exp(-d / (Thickness / 2))</c>, screen-blended with the glow) was steeper still, about 5 % of the edge's
 /// brightness per pixel at the defaults on a 1080p screen at 100 %. That packs the brightest light into the outermost
@@ -23,9 +28,9 @@ namespace Rimlight.Platform.Overlay;
 /// outermost pixels match their neighbours (within 3 % over the first 4 px at the defaults, against 13 % in round 1)
 /// and the light simply fades in.</para>
 /// <para>Thickness 0 still has a shoulder of one DIP (<see cref="MinShoulderDip"/>), so the slope at the edge stays
-/// zero; it then fades almost exactly like the plain exponential glow. The beat widens the shoulder and the spread by
-/// the same factor (<see cref="PulsedShoulder"/>, <see cref="PulsedSpread"/>): the whole light swells inward on a
-/// beat, it never gains a rim.</para>
+/// zero; it then fades almost exactly like the plain exponential glow, and Thickness 0 and 1 draw the same light. The
+/// beat widens the shoulder and the spread by the same factor (<see cref="PulsedShoulder"/>,
+/// <see cref="PulsedSpread"/>): the whole light swells inward on a beat, it never gains a rim.</para>
 /// <para>Intensity × (1 + 0.25 Pulse) can pass 1 (Brightness above 80 % on a strong beat), and alpha can't. Doc 04
 /// clamps each pixel, which flattens the brightest ones into a plateau ending in a kink; even a smooth per-pixel knee
 /// squashes them into a shoulder where the fade steepens again, a brighter rim flashing on the beat. So the roll-off
@@ -54,9 +59,11 @@ public static class GlowProfile
     public const float MinSpreadPx = 0.5f;
 
     /// <summary>
-    /// The narrowest shoulder, in DIPs: what Thickness 0 draws. The slope at the edge is zero for any shoulder above
-    /// 0; at one DIP the outermost pixel is within 0.3 % of the edge on the default glow at 100 %, and the light then
-    /// fades almost exactly like the plain exponential glow.
+    /// The narrowest shoulder, in DIPs: what Thickness 0 draws, and Thickness 1 too, so the two look the same. The
+    /// slope at the edge is zero for any shoulder above 0; at one DIP the outermost pixel is within 0.3 % of the edge
+    /// on the default glow at 100 %, and the light then fades almost exactly like the plain exponential glow. Half a
+    /// DIP would tell Thickness 0 from 1, but at half render scale (a quarter pixel on a 100 % monitor) the default
+    /// glow would then fall fastest between the outermost two pixels again: round 1's line.
     /// </summary>
     public const float MinShoulderDip = 1f;
 
