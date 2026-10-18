@@ -28,7 +28,7 @@ dotnet run --project src/Rimlight.App -- --debug-visualizer
 dotnet run --project src/Rimlight.App -- --demo
 ```
 
-- **`--debug-visualizer`** opens a small window with the live spectrum, Level, Bass, Beat, the beat threshold, a beat counter and the estimated BPM. Sliders change every audio tuning parameter live, and **Copy params as JSON** copies them so you can share a tuning.
+- **`--debug-visualizer`** opens a small window with the live spectrum, Level, Bass, Beat, the beat threshold, a beat counter and the estimated BPM. Sliders change every audio tuning parameter live, and **Copy params as JSON** copies them so you can share a tuning. **Record 2 min** saves what the analyzer and the light computed for every frame as `analysis-YYYYMMDD-HHMMSS.csv` in the logs folder: numbers only, never sound. `wav-analyze plot` draws it like a WAV analysis.
 - **`--demo`** drives the glow with a synthetic 120 BPM beat and cycles through a few palettes, so you can check visuals without playing music.
 
 Close any installed copy of Rimlight first: only one instance runs at a time, and a second launch just opens the running one's Settings.
@@ -41,6 +41,7 @@ Close any installed copy of Rimlight first: only one instance runs at a time, an
 dotnet build Rimlight.Core.slnf -c Release
 dotnet test Rimlight.Core.slnf -c Release
 dotnet run --project tools/wav-analyze -- --help         # beats, BPM, CSV and a PNG plot for a WAV file
+dotnet run --project tools/wav-analyze -- plot analysis-20261018-153012.csv   # the plot of a Record 2 min file
 ```
 
 The full solution also builds on Linux (the Windows projects set `EnableWindowsTargeting`), but the app itself only runs on Windows. So do its WPF smoke tests (`Rimlight.App.Tests`), which build and show the settings, welcome and visualizer windows: `dotnet test Rimlight.sln` skips them on Linux and macOS, and CI runs them on Windows.
@@ -124,6 +125,8 @@ Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\lo
 3. [Open a bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) and drag the zip into the **Logs** box.
 
 Logs never contain audio or track titles, and Rimlight writes your profile folder as `%USERPROFILE%`, not with your Windows user name. An error message can still name a device or a file, so have a quick look before you upload them.
+
+If the glow doesn't follow the music the way you expect, record what it did: start Rimlight with `--debug-visualizer`, play the song, click **Record 2 min**, and attach the `analysis-….csv` it saves in the logs folder, with the song's name and where in it you started. The file holds the numbers Rimlight computed for each frame (loudness, bass, beats and the light), never the sound, and names neither the device nor the track.
 
 If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight. Rimlight doesn't write that one, so its paths show your user name.
 
