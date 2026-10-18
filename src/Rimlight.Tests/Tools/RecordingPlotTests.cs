@@ -106,6 +106,27 @@ public sealed class RecordingPlotTests(ITestOutputHelper output) : IDisposable
     }
 
     [Fact]
+    public void TheSampleRateIsTheOneTheSamplesCountIn()
+    {
+        // The samples column counts what the analyzer was handed, at the capture's rate; it decimates a 96 kHz capture to
+        // 48 kHz inside. A run's sample rate is the rate of its counts, as for a WAV file, so 10 ms packets add up to the
+        // recording's time at 96 kHz, not at 48.
+        const string Rows = "time,dt,samples,level,bass,beat,isSilent,beatCount,flux,threshold\n"
+            + "0.01,0.01,960,0,0,0,0,0,0,0\n0.02,0.01,960,0,0,0,0,0,0,0\n";
+        AnalysisResult run = RecordingCsv.Read(new StringReader(
+            "# capture: 96000 Hz, 2 ch, 32-bit float, captured at 96000 Hz, analyzed at 48000 Hz; 0 samples dropped during the recording\n" + Rows)).ToAnalysis();
+        Assert.Equal(96000, run.SampleRate);
+        Assert.Equal(run.AudioSeconds, run.Frames.Sum(f => f.Samples) / (double)run.SampleRate, 9);
+
+        // Nothing captured when it started (the capture was still opening): the device captured at the end counted them.
+        run = RecordingCsv.Read(new StringReader("# capture: none (no output device was captured); 0 samples dropped by the capture at the end\n"
+            + "# captureAtEnd: 44100 Hz, 2 ch, 16-bit PCM, captured at 44100 Hz, analyzed at 44100 Hz\n" + Rows)).ToAnalysis();
+        Assert.Equal(44100, run.SampleRate);
+
+        Assert.Equal(0, RecordingCsv.Read(new StringReader(Rows)).ToAnalysis().SampleRate); // no comment: unknown
+    }
+
+    [Fact]
     public void ABadFileFailsWithAMessageThatSaysWhere()
     {
         string bad = Path.Combine(directory, "bad.csv");
@@ -155,6 +176,14 @@ public sealed class RecordingPlotTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(0, code);
         Assert.Contains("wav-analyze plot <recording.csv> [options]", text);
         Assert.Contains(@"%APPDATA%\Rimlight\logs\analysis-*.csv", text);
+        Assert.Contains("pandas.read_csv(path, comment=\"#\")", text);
+        // Its description lines up with the other commands' (column 44), on the line below its longer command.
+        string[] lines = text.ReplaceLineEndings("\n").Split('\n');
+        int column = lines.Single(l => l.StartsWith("  wav-analyze selftest ", StringComparison.Ordinal)).IndexOf("Analyze", StringComparison.Ordinal);
+        string plot = lines[Array.FindIndex(lines, l => l.StartsWith("  wav-analyze plot ", StringComparison.Ordinal)) + 1];
+        Assert.Equal(44, column);
+        Assert.Equal(column, plot.Length - plot.TrimStart().Length);
+        Assert.StartsWith("Plot a recording", plot.TrimStart(), StringComparison.Ordinal);
     }
 
     // A recording in the app's format (AnalysisRecordingCsv): the header comments, the header row, then one row per

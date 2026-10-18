@@ -10,7 +10,10 @@ namespace Rimlight.AudioTools;
 /// </summary>
 /// <param name="Time">Seconds since the recording started: the sum of the time steps so far, this frame's included.</param>
 /// <param name="Dt">The frame's time step in seconds.</param>
-/// <param name="Samples">New mono samples the analyzer got that frame (0 between capture packets).</param>
+/// <param name="Samples">
+/// New mono samples the analyzer got that frame, at the capture's rate (0 between capture packets); the analyzer
+/// decimates a 96 or 192 kHz capture itself.
+/// </param>
 /// <param name="Features">Level, Bass, Beat and IsSilent, as the analyzer returned them.</param>
 /// <param name="BeatCount">The analyzer's beat count after the frame: a beat fired where it rises.</param>
 /// <param name="Flux">The frame's bass flux, in the analyzer's flux units.</param>
@@ -59,8 +62,10 @@ public sealed record Recording(IReadOnlyList<KeyValuePair<string, string>> Comme
 
     /// <summary>
     /// The rows as an offline run, for the plot and the beat statistics: each beat at the time of the row where the
-    /// beat count rose (a fall is the analyzer starting over, and counts the beats since). The sample rate is the
-    /// analysis rate the capture comment names, or 0.
+    /// beat count rose (a fall is the analyzer starting over, and counts the beats since). The sample rate is the one
+    /// the samples column counts in, as for a WAV file's run: the capture rate the capture comment names (not the
+    /// analysis rate after it, which is half or a quarter of a 96 or 192 kHz capture's), or captureAtEnd's when nothing
+    /// was captured at the start, or 0. A captureAtEnd comment with another rate means the counts change rate partway.
     /// </summary>
     /// <returns>The frames and beat times.</returns>
     public AnalysisResult ToAnalysis()
@@ -75,9 +80,15 @@ public sealed record Recording(IReadOnlyList<KeyValuePair<string, string>> Comme
             frames.Add(new AnalysisFrame(row.Time, row.Samples, row.Features, row.Flux, row.Threshold, row.Bpm, fired));
             for (int b = 0; b < fired; b++) beats.Add(row.Time);
         }
-        Match rate = Regex.Match(Comment("capture") ?? "", @"analyzed at (\d+) Hz");
-        int sampleRate = rate.Success && int.TryParse(rate.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int hz) ? hz : 0;
+        int sampleRate = CaptureRate(Comment("capture")) ?? CaptureRate(Comment("captureAtEnd")) ?? 0;
         return new AnalysisResult(frames, beats, sampleRate, Seconds);
+    }
+
+    // "48000 Hz, 2 ch, 32-bit float, captured at 48000 Hz, analyzed at 48000 Hz; …" → 48000; null for "none (…)".
+    private static int? CaptureRate(string? capture)
+    {
+        Match rate = Regex.Match(capture ?? "", @"captured at (\d+) Hz");
+        return rate.Success && int.TryParse(rate.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int hz) && hz > 0 ? hz : null;
     }
 }
 

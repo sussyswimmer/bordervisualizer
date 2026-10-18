@@ -18,7 +18,7 @@ internal static class WavAnalyzeCli
           wav-analyze selftest                      Analyze generated tracks and check the beats are found
           wav-analyze tuning [--tuning <file>]      Print the effective AudioTuning as JSON, every property
           wav-analyze plot <recording.csv> [options]
-                                            Plot a recording from the debug visualizer's "Record 2 min"
+                                                    Plot a recording from the debug visualizer's "Record 2 min"
           wav-analyze --help
 
         Analyze options:
@@ -48,7 +48,8 @@ internal static class WavAnalyzeCli
         Plot options: --out <dir>, --plot <file>, --range <a>:<b> and --width <px>, as for a WAV file.
           The recording is %APPDATA%\Rimlight\logs\analysis-*.csv: one row per overlay frame of what the app
           computed from the music (no audio), with time, dt, level, bass, beat, isSilent, beatCount, flux,
-          threshold, bpm and the light state. The plot has the same panels as a WAV analysis.
+          threshold, bpm and the light state. The plot has the same panels as a WAV analysis. Its lines starting
+          with # are comments: pandas.read_csv(path, comment="#") reads the rest.
 
         Generate options (levels are peak dBFS, or "off"):
           --bpm <n> (120)  --seconds <s> (30)  --rate <Hz> (48000)  --channels <n> (1)  --seed <n> (1)
