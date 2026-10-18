@@ -1,30 +1,43 @@
 namespace Rimlight.Core.Audio;
 
-// The real IAudioAnalyzer (doc 03 §2): AudioFrontEnd for the spectrum, Bass and doc 03's Level target, spectral-flux
-// beats, silence detection and diagnostics, plus the music's character and dynamics (Maxwell's feedback, round 1):
-//   Level  follows how loud this moment is within the song (SongLoudness) and moves like a slow wave when there are no
-//          drums. BeatCharacter's punch blends it toward doc 03's Level (the auto-gain bands with LevelAttackSeconds and
-//          LevelReleaseSeconds) as drums take over.
-//   Beat   is each beat's grade (BeatCharacter: kick-like, how drum-driven the music is, accented, loud within the
-//          song), then decays as before.
+// The real IAudioAnalyzer (doc 03 §2): AudioFrontEnd for the spectrum and Bass, spectral-flux beats, silence detection
+// and diagnostics, plus the music's character and dynamics (Maxwell's feedback, rounds 1 and 2):
+//   Level  is how loud this moment is within the song (SongLoudness.Position), as a slow wave without drums; in a heavy
+//          drum groove (BeatCharacter.Punch × Weight: rap, EDM) it moves faster and pumps with the pulse, dipping between
+//          kicks, while a light one (a folk or rock kit) keeps the wave.
+//   Beat   is each beat's grade (BeatCharacter: decided on the step it fires from KickEnvelope's time-domain evidence,
+//          the groove and its weight, the kick's size and how loud the moment is), then decays as before.
 // One instance belongs to the render thread; Process never allocates after construction.
 internal sealed class AudioAnalyzer : IAudioAnalyzer
 {
-    // Level with no drums (punch 0): this many times doc 03's Level time constants, so a 30 ms attack becomes 0.3 s and
-    // a 250 ms release 1.25 s. The light then swells and eases with a phrase (0.5–2 s) instead of following syllables and
-    // plucks. Multiples rather than fixed values, so the debug visualizer's Level sliders still move both ends.
-    internal const float WaveAttackFactor = 10f;
-    internal const float WaveReleaseFactor = 5f;
+    // Level's time constants, as multiples of LevelAttackSeconds and LevelReleaseSeconds (so the debug visualizer's Level
+    // sliders still move them): in a heavy groove (punch × weight 1) 5× and 3.2×, 0.15 s / 0.8 s at doc 03's defaults;
+    // with no drums, or a light groove (punch × weight 0), another WaveAttackFactor and WaveReleaseFactor on top,
+    // 1 s / 1.6 s, so the light swells and eases with the phrases (round 2's corpus: calm songs' brightness follows their
+    // 3 s loudness at r 0.8) instead of syllables or a folk kit's snare. The envelope runs twice (the second pass at half
+    // the time constants), which rounds the start of every swell: the light eases in rather than leaping when a phrase
+    // starts.
+    internal const float GrooveAttackFactor = 5f;
+    internal const float GrooveReleaseFactor = 3.2f;
+    internal const float WaveAttackFactor = 6.67f;
+    internal const float WaveReleaseFactor = 2f;
 
-    // Level's target is the song position (SongLoudness.Position) over LevelKnee, capped at 1, with doc 03's Level target
-    // (the auto-gain bands: the local contrast within the last few seconds) cutting up to ContrastDepth out of it. With
-    // no drums the slow envelope turns that into swells with the phrases; with drums it falls between hits. The knee
-    // keeps the loud parts at full height (within 4.8 dB of the song reference; a whisper 16 dB under it gets about
-    // 0.4), so a groove keeps its height and a volume step of up to about 5 dB in the middle of a song, which SongLoudness
-    // can't tell from the music getting quieter, doesn't dim the light. Doc 03's target alone averages about 0.6 against a
-    // position of about 0.9 for the same music, so it can't replace the position: drums coming in would dim the light.
-    internal const float ContrastDepth = 0.6f;
-    internal const float LevelKnee = 0.8f;
+    // In a heavy groove the light dips between kicks and comes back with each pulse: Level × (1 − PumpDepth × punch ×
+    // weight × engaged² × (1 − pump)), where pump jumps to the pulse and falls with PumpSeconds. Round 1's light sat at
+    // an Intensity of 0.69–0.72 (Brightness 0.8) in a groove and a full pulse only multiplied it by 1.25 (Glow.hlsl), so
+    // the drawn light rose 12–18 % on a kick; with the dip it rises about 36–38 % on rap and EDM (round 2's corpus). The
+    // price is a groove about a fifth dimmer on average than the wave alone; a pump that keeps the mean (dividing by its
+    // own average) measured 24–34 %, because the loud parts it would lift are already at the top. Round 2 pumped every
+    // groove alike, and a folk kit then bounced 41–50 % like rap (its review); the weight keeps a light groove's light
+    // steady. engaged is the largest recent pulse, held EngageHoldSeconds, then released with EngageReleaseSeconds: the
+    // dip only starts once the groove has pulsed, and squared it stays shallow under soft pulses, so a groove coming back
+    // at a drop doesn't darken the light before its first full pulse (round 2: 0.72 → 0.55 for a second at an EDM drop).
+    // Both read the pulse at Sensitivity 1 (BeatCharacter.RawBeat): the pump is the music's, and Sensitivity still scales
+    // Level exactly (doc 03 §2). Without drums the punch is 0: no pump.
+    internal const float PumpDepth = 0.4f;
+    internal const float PumpSeconds = 0.3f;
+    internal const float EngageHoldSeconds = 1.5f;
+    internal const float EngageReleaseSeconds = 0.5f;
 
     // Doc 03 sets hop = "whatever arrived since the last frame". Flux grows with the hop, so at 30 fps, or with
     // 50 ms packets landing in one frame, kicks stop standing out from the flux history. New samples are therefore
@@ -61,11 +74,16 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
     private readonly SilenceDetector silenceDetector = new();
     private readonly SongLoudness loudness = new();
     private readonly BeatCharacter character = new();
+    private readonly KickEnvelope kick = new();
     private readonly Envelope level = new();
+    private readonly Envelope levelSmooth = new();
     private int inputRate, analysisRate, maxStep, minBeatStep, pendingBeatSamples, zerosFed;
     private float sinceData, silenceSeconds;
     private bool heard;                  // the latest analysis step was above near-silence
     private float lastPower;             // and its weighted power (BandAnalyzer.WeightedPower)
+    private float pump;                  // the pulse, held for Level's pump
+    private float engaged, sinceEngaged; // the largest recent pulse, held: the pump only dips once a groove pulses
+    private KickEvidence lastEvidence = KickEvidence.None;
 
     public AudioAnalyzer(AudioTuning? tuning = null)
     {
@@ -113,6 +131,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         float dt = float.IsFinite(dtSeconds) && dtSeconds > 0 ? MathF.Min(dtSeconds, MaxGapSeconds) : 0;
         if (sampleRate != inputRate) Configure(sampleRate);
         silenceSeconds = MathF.Min(silenceSeconds + dt, MaxGapSeconds);
+        character.BeginFrame();
 
         // WASAPI loopback sends no packets during silence (doc 03 §1). After NoPacketTimeoutSeconds the gap is
         // treated as digital silence: zeros flow through the window, so the spectrum, silence detection and
@@ -172,28 +191,30 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
             int fill = Math.Min(tuning.WindowSize, samples.Length);
             float fillDt = secondsPerSample * (skipped + fill);
             amplitude = frontEnd.Process(samples[..fill], analysisRate, fillDt);
+            kick.Process(samples[..fill]);
             beats.Restart();
-            BeatResult seeded = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning, frontEnd.WindowRms);
+            KickEvidence evidence = Evidence();
+            BeatResult seeded = beats.Update(frontEnd.Spectrum, true, tuning.WindowSize, analysisRate, fillDt, tuning, frontEnd.WindowRms, evidence.ProminenceDb, frontEnd.WindowPartlySilent);
             threshold = seeded.Threshold;
-            Step(seeded, fillDt, fill / (float)analysisRate);
+            Step(seeded, evidence, fillDt, fill / (float)analysisRate);
             pendingBeatSamples = 0;
             start = fill;
         }
         if (samples.IsEmpty)
         {
             amplitude = frontEnd.Process(samples, analysisRate, dt);
-            BeatResult result = beats.Update(frontEnd.Spectrum, idleZeros, tuning.WindowSize, analysisRate, dt, tuning, frontEnd.WindowRms);
+            KickEvidence evidence = Evidence();
+            BeatResult result = beats.Update(frontEnd.Spectrum, idleZeros, tuning.WindowSize, analysisRate, dt, tuning, frontEnd.WindowRms, evidence.ProminenceDb, frontEnd.WindowPartlySilent);
             threshold = result.Threshold;
             // Between packets nothing new was heard: the pulse decays and Level eases on. Once missing packets count as
             // digital silence, the song reference sees the gap too (a gap between songs, SongLoudness).
-            if (sinceData > tuning.NoPacketTimeoutSeconds) Step(result, dt, dt);
+            if (sinceData > tuning.NoPacketTimeoutSeconds) Step(result, evidence, dt, dt);
             else
             {
                 // The window still holds the last spectrum: the song reference and the character go on with it.
                 loudness.Update(lastPower, heard, dt);
-                character.Idle(dt, tuning);
+                character.Idle(dt);
                 if (character.TempoBeatAge >= 0) beats.AddTempoBeat(character.TempoBeatAge);
-                UpdateLevel(dt);
             }
         }
         else
@@ -205,11 +226,13 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
                 int end = samples.Length - length + (int)((long)length * s / steps);
                 float stepDt = secondsPerSample * (end - start);
                 amplitude = frontEnd.Process(samples[start..end], analysisRate, stepDt);
+                kick.Process(samples[start..end]);
                 pendingBeatSamples += end - start;
                 bool analyze = pendingBeatSamples >= minBeatStep;
                 if (analyze) pendingBeatSamples = 0;
-                BeatResult result = beats.Update(frontEnd.Spectrum, analyze, tuning.WindowSize, analysisRate, stepDt, tuning, frontEnd.WindowRms);
-                Step(result, stepDt, (end - start) / (float)analysisRate);
+                KickEvidence evidence = Evidence();
+                BeatResult result = beats.Update(frontEnd.Spectrum, analyze, tuning.WindowSize, analysisRate, stepDt, tuning, frontEnd.WindowRms, evidence.ProminenceDb, frontEnd.WindowPartlySilent);
+                Step(result, evidence, stepDt, (end - start) / (float)analysisRate);
                 if (result.IsBeat) beatsFired++;
                 flux = MathF.Max(flux, result.Flux);
                 threshold = result.Threshold;
@@ -218,12 +241,16 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         }
 
         character.EndFrame(dt, tuning);
+        UpdateLevel(dt);
         UpdateDiagnostics(flux, threshold, beatsFired);
-        return new AudioFeatures(Math.Clamp(level.Value * tuning.Sensitivity, 0, 1), amplitude.Bass, character.Beat, isSilent);
+        return new AudioFeatures(Math.Clamp(Level * tuning.Sensitivity, 0, 1), amplitude.Bass, character.Beat, isSilent);
     }
 
+    // KickEnvelope's reading for this step (kept for the replay harness).
+    private KickEvidence Evidence() => lastEvidence = kick.Evidence;
+
     // The music's dynamics and character for one analysis step of the newest spectrum.
-    private void Step(in BeatResult result, float stepDt, float audioSeconds)
+    private void Step(in BeatResult result, in KickEvidence evidence, float stepDt, float audioSeconds)
     {
         float rms = frontEnd.WindowRms;
         // An all-zero window (idle, no packets) has no power; skip the sum, as the FFT is skipped then.
@@ -234,7 +261,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         heard = audible;
         lastPower = power;
         loudness.Update(power, audible, stepDt);
-        character.Update(result.IsBeat, result.KickLevel, MathF.Sqrt(upper), audible, loudness.Position, stepDt, audioSeconds, tuning);
+        character.Update(result.IsBeat, result.KickLevel, MathF.Sqrt(upper), audible, loudness.Position, evidence, stepDt, audioSeconds, tuning, beats.IsMusic, result.Strict);
         // The tempo: an earlier kick whose onset window just closed, then (where no kicks play) this beat as it fires.
         if (character.TempoBeatAge >= 0) beats.AddTempoBeat(character.TempoBeatAge);
         if (result.IsBeat && !character.KickContext)
@@ -242,21 +269,38 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
             beats.AddTempoBeat(0);
             character.CountedAtFire();
         }
-        UpdateLevel(stepDt);
     }
 
-    // Level's target is where the moment sits in the song (over the knee), with doc 03's local contrast. Its time
-    // constants blend geometrically by the punch from a wave (slow) to doc 03's punchy envelope. When the music stops
-    // (near-silence) Level falls as doc 03 says.
+    // Once per frame. Level's target is where the moment sits in the song (SongLoudness.Position), through the envelope
+    // twice; its time constants blend geometrically by the punch and the weight from the wave (slow) to the groove. In a
+    // heavy groove the pump dips it between pulses. When the music stops (near-silence) Level falls with doc 03's own
+    // time constants.
     private void UpdateLevel(float dt)
     {
-        float position = loudness.Position;
-        float groove = heard ? character.Punch : 1;
-        float scale = MathF.Min(1, position / LevelKnee);
-        float attack = tuning.LevelAttackSeconds * MathF.Pow(WaveAttackFactor, 1 - groove);
-        float release = tuning.LevelReleaseSeconds * MathF.Pow(WaveReleaseFactor, 1 - groove);
-        level.Update(scale * (1 - ContrastDepth * (1 - frontEnd.LevelTarget)), dt, attack, release);
+        float groove = heard ? character.Punch * character.Weight : 1;
+        float target = heard ? loudness.Position : 0;
+        float attack = tuning.LevelAttackSeconds * (heard ? GrooveAttackFactor * MathF.Pow(WaveAttackFactor, 1 - groove) : 1);
+        float release = tuning.LevelReleaseSeconds * (heard ? GrooveReleaseFactor * MathF.Pow(WaveReleaseFactor, 1 - groove) : 1);
+        level.Update(target, dt, attack, release);
+        levelSmooth.Update(level.Value, dt, 0.5f * attack, 0.5f * release);
+        float pulse = character.RawBeat;
+        pump = MathF.Max(pulse, pump * MathF.Exp(-dt / PumpSeconds));
+        if (pump < 1e-4f) pump = 0;
+        sinceEngaged = MathF.Min(sinceEngaged + dt, EngageHoldSeconds + 1);
+        if (pulse >= engaged)
+        {
+            engaged = pulse;
+            sinceEngaged = 0;
+        }
+        else if (sinceEngaged > EngageHoldSeconds) engaged *= MathF.Exp(-dt / EngageReleaseSeconds);
+        if (engaged < 1e-4f) engaged = 0;
     }
+
+    // How much of the wave the groove's pump takes away right now (0 .. PumpDepth).
+    private float PumpDip => PumpDepth * character.Punch * character.Weight * engaged * engaged * (1 - pump);
+
+    // Level before Sensitivity: the wave, with the groove's pump.
+    private float Level => levelSmooth.Value * (1 - PumpDip);
 
     public void Reset()
     {
@@ -266,11 +310,14 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         silenceDetector.Reset();
         loudness.Reset();
         character.Reset();
+        kick.Reset();
         level.Reset();
+        levelSmooth.Reset();
         inputRate = zerosFed = pendingBeatSamples = 0;
         sinceData = silenceSeconds = 0;
         heard = false;
-        lastPower = 0;
+        lastPower = pump = engaged = sinceEngaged = 0;
+        lastEvidence = KickEvidence.None;
         Array.Clear(Diagnostics.Spectrum);
         Array.Clear(Diagnostics.FluxHistory);
         Array.Clear(Diagnostics.ThresholdHistory);
@@ -280,9 +327,17 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
 
     internal float FluxHistoryStoredSeconds => beats.StoredSeconds;
 
-    // For tests: the stages behind Level and Beat.
+    // For tests: the stages behind Level and Beat, and Level before Sensitivity and the pump (the wave alone).
     internal SongLoudness Loudness => loudness;
     internal BeatCharacter Character => character;
+    internal float Wave => levelSmooth.Value;
+
+    // For the replay harness (wav-analyze --engine, read by name): the latest step's kick evidence, the onset contrast
+    // (BeatDetector), and how much of Level the pump takes away.
+    internal float KickProminenceDb => lastEvidence.ProminenceDb;
+    internal float KickRiseDb => lastEvidence.RiseDb;
+    internal float OnsetContrast => beats.OnsetContrast;
+    internal float PumpDepthNow => PumpDip;
 
     private void SetLevels(AudioTuning value)
     {
@@ -299,6 +354,7 @@ internal sealed class AudioAnalyzer : IAudioAnalyzer
         inputRate = sampleRate;
         decimator.Configure(sampleRate);
         analysisRate = AnalysisRate(sampleRate);
+        kick.Configure(analysisRate);
         maxStep = Math.Clamp((int)MathF.Round(analysisRate * MaxStepSeconds), 1, MaxStep);
         minBeatStep = Math.Max(1, (int)MathF.Round(analysisRate * MinBeatStepSeconds));
     }

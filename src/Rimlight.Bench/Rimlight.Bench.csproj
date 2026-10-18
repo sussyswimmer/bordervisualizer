@@ -12,6 +12,8 @@
     <InternalsVisibleTo Include="Rimlight.Tests" />
     <!-- Lane B's tests check FramePipeline and PaceModel against the app's MusicGlowSource and FramePacer. -->
     <InternalsVisibleTo Include="Rimlight.Platform.Tests" />
+    <!-- tools/wav-analyze replays real music through FramePipeline (its engine mode). -->
+    <InternalsVisibleTo Include="wav-analyze" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />

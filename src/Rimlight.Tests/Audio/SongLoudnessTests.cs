@@ -4,10 +4,14 @@ using Xunit;
 namespace Rimlight.Tests.Audio;
 
 // Maxwell's feedback, round 1 (and its review): the song-level reference behind Level and the pulse grade. Fed directly
-// with weighted power in 10 ms steps; 1 is 0 dB (a full-scale sine).
+// with weighted power in 10 ms steps; 1 is 0 dB (a full-scale sine). Round 2 narrowed the range from 24 dB to
+// SongLoudness.RangeDb = 18, so the expected positions are written in terms of it; a bin is 0.5 dB, so a steady
+// loudness reads back within a quarter of a bin of where it is (Tolerance).
 public sealed class SongLoudnessTests
 {
     private const float Step = 0.01f;
+    private const float Range = SongLoudness.RangeDb;
+    private const float Tolerance = 0.25f / SongLoudness.RangeDb + 0.005f;
 
     private static float Power(float db) => MathF.Pow(10, db / 10);
 
@@ -23,14 +27,14 @@ public sealed class SongLoudnessTests
     }
 
     [Fact]
-    public void PositionIsOneAtTheReferenceAndFallsLinearlyOverTwentyFourDecibels()
+    public void PositionIsOneAtTheReferenceAndFallsLinearlyOverRangeDb()
     {
         var loudness = new SongLoudness();
         Feed(loudness, 0, 120);
         Assert.InRange(loudness.ReferenceDb, -0.25f, 0.25f);   // 0.5 dB bins
-        Assert.InRange(loudness.Position, 0.99f, 1);
-        Feed(loudness, -12, 2);                     // the momentary loudness settles within 2 s (τ = 0.25 s)
-        Assert.InRange(loudness.Position, 0.49f, 0.51f);   // and the reference still remembers 0 dB
+        Assert.InRange(loudness.Position, 1 - Tolerance, 1);
+        Feed(loudness, -Range / 2, 2);              // the momentary loudness settles within 2 s (τ = 0.25 s)
+        Assert.InRange(loudness.Position, 0.5f - Tolerance, 0.5f + Tolerance);   // and the reference still remembers 0 dB
         Feed(loudness, -30, 2);
         Assert.Equal(0, loudness.Position);
         Feed(loudness, 6, 1);
@@ -40,16 +44,16 @@ public sealed class SongLoudnessTests
     [Fact]
     public void AQuietVerseIsJudgedAgainstTheChorusForMostOfItsLength()
     {
-        // 20 s of chorus, then a verse 16 dB down: a third of the way up for 15 s and more, its own reference later.
+        // 20 s of chorus, then a verse 12 dB down: a third of the way up for 15 s and more, its own reference later.
         var loudness = new SongLoudness();
         Feed(loudness, 0, 20);
         float[] at = new float[45];
         for (int s = 0; s < at.Length; s++)
         {
-            Feed(loudness, -16, 1);
+            Feed(loudness, -12, 1);
             at[s] = loudness.Position;
         }
-        Assert.All(at[2..16], p => Assert.InRange(p, 1 - 16.5f / 24, 1 - 15.5f / 24));
+        Assert.All(at[2..16], p => Assert.InRange(p, 1 - 12.5f / Range, 1 - 11.5f / Range));
         Assert.True(at[^1] >= 0.9f, $"{at[^1]}");
     }
 
@@ -59,11 +63,11 @@ public sealed class SongLoudnessTests
         // With nothing heard yet, the prior: the loud parts are probably a little louder than the opening.
         var loudness = new SongLoudness();
         Feed(loudness, -10, 5);
-        Assert.Equal(1 - 4 / 24f, loudness.Position, 3);
+        Assert.Equal(1 - SongLoudness.PriorHeadroomDb / Range, loudness.Position, 3);
         Assert.Equal(-6, loudness.ReferenceDb, 3);
         Assert.Equal(SongLoudness.MinDb, loudness.SessionDb);      // the first song after launch has no session yet
         Feed(loudness, -10, 25);
-        Assert.InRange(loudness.Position, 0.99f, 1);
+        Assert.InRange(loudness.Position, 1 - Tolerance, 1);
         // The prior follows the loudest moment so far: a louder passage moves it up at once.
         var louder = new SongLoudness();
         Feed(louder, -20, 5);
@@ -77,7 +81,8 @@ public sealed class SongLoudnessTests
     {
         // A song at 0 dB, a second of digital silence, then a whispered opening 15 dB down. The song memory starts afresh
         // (its own reference is the prior, 4 dB over the whisper) but the session floor starts at the last song's
-        // reference and falls 0.2 dB a second, so the whisper sits at about 0.4 and comes up over about a minute.
+        // reference and falls 0.2 dB a second, so the whisper sits near the bottom (15 dB under the floor) and comes up
+        // over about a minute.
         var loudness = new SongLoudness();
         Feed(loudness, 0, 40);
         Assert.InRange(loudness.SessionDb, -0.5f, 0.5f);
@@ -86,9 +91,9 @@ public sealed class SongLoudnessTests
         Feed(loudness, -15, 2);
         Assert.Equal(-11, loudness.SongReferenceDb, 1);
         Assert.InRange(loudness.ReferenceDb, -0.4f - 0.5f, -0.4f + 0.5f);
-        Assert.InRange(loudness.Position, 0.37f, 0.42f);
+        Assert.InRange(loudness.Position, 1 - 14.6f / Range - Tolerance, 1 - 14.6f / Range + Tolerance);
         Feed(loudness, -15, 18);                    // 20 s in: the floor is 4 dB down
-        Assert.InRange(loudness.Position, 0.52f, 0.56f);
+        Assert.InRange(loudness.Position, 1 - 11 / Range - Tolerance, 1 - 11 / Range + Tolerance);
         Feed(loudness, -15, 62);                    // 80 s in: the floor is under the song, its own reference
         Assert.InRange(loudness.Position, 0.98f, 1);
     }
@@ -128,8 +133,8 @@ public sealed class SongLoudnessTests
         // position is computed as for any other level, so the light doesn't depend on the volume.
         var quiet = new SongLoudness();
         Feed(quiet, -70, 30);
-        Feed(quiet, -82, 2);
-        Assert.InRange(quiet.Position, 0.49f, 0.51f);
+        Feed(quiet, -70 - Range / 2, 2);
+        Assert.InRange(quiet.Position, 0.5f - Tolerance, 0.5f + Tolerance);
     }
 
     [Fact]

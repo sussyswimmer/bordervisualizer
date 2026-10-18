@@ -14,6 +14,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../audio-tools/Rimlight.AudioTools.csproj" />
+    <!-- The engine mode replays a WAV file through Bench's FramePipeline, the copy of the app's per-frame work that
+         BenchMirrorTests keeps in step with MusicGlowSource. -->
+    <ProjectReference Include="../../src/Rimlight.Bench/Rimlight.Bench.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- MIT. SkiaSharp brings the Windows and macOS native libraries; Linux needs its own package, and the

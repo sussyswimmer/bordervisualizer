@@ -25,19 +25,21 @@ namespace Rimlight.Core.Audio;
 // and it survives gaps. After a gap it is a floor under the reference that starts there and falls
 // SessionFallDbPerSecond while the song plays, so the opening of the next song is judged against the songs before it:
 // a quiet first verse under the last song's loud parts stays dimmer and bounces less (the folk band after itself: a mean
-// pulse of 0.57 in its first verse, against 0.82 as the first song). A quieter master is brought up as gradually,
+// pulse of 0.53 in its first verse, against 0.97 as the first song). A quieter master is brought up as gradually,
 // because the two can't be told apart: on the StyleTracks rap after itself and a 3 s gap, 10 dB down it has its full
-// bounce from 5 s and its brightness from about 25 s; 14 dB down its bounce returns over about 25 s and its brightness
-// over about 40 s. With the loudness normalization most streaming apps apply, songs play within a few dB of each other,
-// where the floor only helps. The first song after the app starts has no session.
+// bounce from about 5 s and its brightness from about 34 s; 14 dB down its bounce returns over about 30 s and its
+// brightness takes longer than the 40 s song. With the loudness normalization most streaming apps apply, songs play
+// within a few dB of each other, where the floor only helps. The first song after the app starts has no session.
 //
 // Volume (doc 03 §2: the volume slider must not change the brightness): a volume change shifts every loudness by the
 // same number of dB, so once the memory has turned over the position is exactly what it was, and the same song at any
 // volume gives the same light. A change in the middle of a song can't be told from the music getting quieter or louder:
 // a volume step moves every band by the same dB, but within a second a song's own band balance moves by 2–7 dB (measured
 // on the StyleTracks), so no test on the spectrum separates the two. The old loudness has to fall under a tenth of the
-// memory, about 2.3 × MemorySeconds. AudioAnalyzer keeps Level at the top over the top fifth of the position, which
-// hides steps of up to about 5 dB, and BeatCharacter keeps a groove's bounce; MusicDynamicsTests measures the rest.
+// memory, about 2.3 × MemorySeconds. Round 1 hid steps of up to about 5 dB by keeping Level at the top over the top
+// fifth of the position; round 2 dropped that knee, which flattened calm songs, so a small step shows until the memory
+// has turned over (4 dB: about 0.1 of Intensity for 20 s), while BeatCharacter keeps a groove's bounce (full size within
+// 8 dB of the loud parts). MusicDynamicsTests measures both.
 //
 // Every window above near-silence counts as music, whatever its level, so the whole chain stays scale-invariant at quiet
 // playback (a whispered verse at −35 dB volume dips under the −60 dBFS IsSilent level between phrases). Near-silence adds
@@ -51,7 +53,9 @@ internal sealed class SongLoudness
     internal const float BinDb = 0.5f;
     internal const float MemorySeconds = 10f;           // a verse is judged against the last chorus for about 20 s
     internal const float ReferencePercentile = 0.9f;    // the loud parts, not the single loudest moment
-    internal const float RangeDb = 24f;                 // a whisper 16 dB under the chorus sits at about a third
+    // A whisper 12 dB under the chorus sits at a third. Round 1's 24 dB, with AudioAnalyzer's knee over the top fifth,
+    // left a calm song's Intensity within 0.57–0.74 (Brightness 0.8) for 80 % of the song (round 2's corpus): no wave.
+    internal const float RangeDb = 18f;
     internal const float MomentarySeconds = 0.25f;      // power smoothing: phrases and swells, not single syllables
     internal const float GapSeconds = 1f;
     internal const float PriorSeconds = 4f;

@@ -43,6 +43,8 @@ dotnet test Rimlight.Core.slnf -c Release
 dotnet run --project tools/wav-analyze -- --help         # beats, BPM, CSV and a PNG plot for a WAV file
 ```
 
+To see what the glow would do with a real song, convert it to WAV (for example `ffmpeg -i song.mp3 -ac 1 -ar 48000 song.wav`) and run `dotnet run -c Release --project tools/wav-analyze -- song.wav --engine`. It replays the song through what the overlay's render thread runs each frame (the analyzer, palette blender and light engine, as the app's `MusicGlowSource` calls them, on 10 ms packets at 60 fps) and writes `song.engine.csv`: one row per frame with the analyzer's output, the light (Intensity, Pulse, Visibility, Phase) and the analyzer's internal dynamics (song position, punch, kick-likeness, each beat's grade). `--help` lists the columns. Keep music files out of the repository.
+
 The full solution also builds on Linux (the Windows projects set `EnableWindowsTargeting`), but the app itself only runs on Windows. So do its WPF smoke tests (`Rimlight.App.Tests`), which build and show the settings, welcome and visualizer windows: `dotnet test Rimlight.sln` skips them on Linux and macOS, and CI runs them on Windows.
 
 ## Project layout
