@@ -74,12 +74,12 @@ Per pixel:
    - `spread = SpreadPx * (1 + 0.35 * Pulse)` (the beat briefly pushes the light further in)
    - `glow = exp(-d / max(spread, 1))`
    - `a = saturate(max(core, glow * 0.85)) * Intensity * (1 + 0.25 * Pulse)`, then clamp to 1
-   - *Clarification (Maxwell's feedback, round 1): the solid core read as "a very obvious line or bar", so the shape is now two lights that are brightest at the edge and fade smoothly, with no step or kink. `GlowProfile.cs` (Platform) is the reference, and `Glow.hlsl` mirrors it:*
-     - `band = saturate(G * exp(-dBand / b))`, with `b = max(thickness px / 2, 1/8 px)` and `G = 2b * sinh(1 / 2b)` (the band's average over a pixel; 0 at thickness 0)
-     - `glow = 0.85 * exp(-dGlow / max(spread, 0.5))`, with `spread` as above
-     - `shape = 1 - (1 - glow) * (1 - band)`: they add like light and never pass 1. Thickness 0 is the glow alone.
-     - `a = shape * Gain`, where `Gain = SoftClip(Intensity * (1 + 0.25 * Pulse))` is computed once a frame on the CPU. It is unchanged up to 0.9 and then rolls off toward 1 (0.95 at 1), so no pixel is clipped and the profile is only ever scaled.
-     - Each light has its own rounded distance field instead of step 1's square one: corner radius at least `2b` for the band and `2 * spread` for the glow.
+   - *Clarification (Maxwell's feedback, rounds 1 and 2): the solid core read as "a very obvious line or bar". Round 1 replaced it with a soft exponential band on the exponential glow, which then read as "a thin bright line right at the screen edge, then the glow fades in behind it": an exponential is steepest at the edge, so it packs the brightest light into the outermost few pixels. The shape is now one light with a flat soft shoulder at the edge: zero slope at the edge, then a smooth, monotonic fade with exactly one inflection. `GlowProfile.cs` (Platform) is the reference, and `Glow.hlsl` mirrors it:*
+     - `w = max(thickness px, 1 DIP) * (1 + 0.35 * Pulse)`: the shoulder. Thickness 0 still has a one-DIP shoulder, so the edge stays flat.
+     - `glow = 0.85 * exp(-(sqrt(d * d + w * w) - w) / max(spread, 0.5))`, with `spread` as above. The hyperbola is about `d² / 2w` near the edge (flat) and about `d - w` further in (the exponential glow, `w` further in). The light never falls faster than the glow's own steepest, `0.85 / spread` per pixel; at `d = w` its relative rate of fall has eased up to 71 % of the exponential's.
+     - `a = glow * Gain`, where `Gain = SoftClip(Intensity * (1 + 0.25 * Pulse))` is computed once a frame on the CPU. It is unchanged up to 0.9 and then rolls off toward 1 (0.95 at 1), so no pixel is clipped and the profile is only ever scaled. The beat widens the shoulder and the spread by the same factor, so it swells the whole light inward and never adds a rim.
+     - One rounded distance field instead of step 1's square one, corner radius at least `2 * spread + w`. Outside the arc, in the screen's very corner, `d = 0`, and the arc now meets that plateau with zero slope instead of a kink.
+     - At the defaults (Thickness 6, Glow 45 %) the light stays within 3 % of the edge for the first 4 px at 1080p and 100 % (round 1's band: 13 %), and the drop between neighbouring pixels never grows by more than one code value.
      - `SpreadPx` maps Glow with the slider to the power 1.5: the default 45 % is 38 px at 1080p.
      - The cbuffer above is the original sketch; `GlowConstants.cs` has the real layout.
 3. **Perimeter coordinate** `t ∈ [0,1)`: the normalized arc-length position of the nearest edge point, going clockwise from the top-left. Compute it from which edge is nearest and the position along it. Approximating corners with the nearest edge is fine, as long as it is continuous.

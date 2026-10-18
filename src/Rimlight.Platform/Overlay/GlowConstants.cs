@@ -21,7 +21,7 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     public float ScreenWidthPx;
     public float ScreenHeightPx;
     public float CornerRadiusPx;
-    public float BandScalePx;  // the soft band's e-folding distance (GlowProfile.BandScale): half the thickness
+    public float ShoulderPx;   // the flat soft shoulder at the edge (GlowProfile.ShoulderFor): the thickness, >= 1 DIP
 
     public float SpreadPx;
     public float Gain;         // Intensity x the beat's gain, rolled off under 1 (GlowProfile.Gain); scales the profile
@@ -30,13 +30,13 @@ internal struct GlowConstants : IEquatable<GlowConstants>
 
     public float Visibility;
     public float ColorRadiusPx;
-    public float GlowRadiusPx;
-    public float BandGain;     // 0 = no band (thickness 0); else GlowProfile.BandGain, the band's pixel-average factor
+    public float GlowRadiusPx; // corner radius of the light's distance field (GlowProfile.GlowRadius)
+    public float Pad0;         // unused: keeps MeanColor in the last register, where HLSL packs it
 
     public float MeanRed;
     public float MeanGreen;
     public float MeanBlue;
-    public float BandRadiusPx; // corner radius of the band's distance field (GlowProfile.BandRadius)
+    public float Pad1;         // unused
 
     // Converts a frame's light state to pixels for one surface. widthPx/heightPx: the swap chain's size; dpiScale =
     // monitor DPI / 96; renderScale: swap-chain pixels per screen pixel (1, or about 0.5 at half scale); meanColor is
@@ -49,17 +49,15 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         float minHalf = 0.5f * shortSide;
         float spreadPx = GlowProfile.SpreadFor(state.Spread, shortSide, scale);
         float cornerPx = Math.Clamp(Finite(cornerRadiusDip) * scale, 0, minHalf);
-        // Thickness is the soft band's width (GlowProfile). It converts at the render scale like every other measure:
-        // BandGain averages the band over a pixel, so at half scale a thin band keeps its light in half as many pixels
-        // (the solid core needed a separate fade in screen pixels for that).
-        float corePx = Math.Max(0, Finite(state.CoreThicknessDip)) * scale;
-        float bandScalePx = GlowProfile.BandScale(corePx);
+        // Thickness is the width of the flat soft shoulder at the edge (GlowProfile). It converts at the render scale
+        // like every other measure, so at half scale the same light lands in half as many pixels.
+        float shoulderPx = GlowProfile.ShoulderFor(Math.Max(0, Finite(state.CoreThicknessDip)) * scale, scale);
         return new GlowConstants
         {
             ScreenWidthPx = widthPx,
             ScreenHeightPx = heightPx,
             CornerRadiusPx = cornerPx,
-            BandScalePx = bandScalePx,
+            ShoulderPx = shoulderPx,
             SpreadPx = spreadPx,
             // The gain scales the whole profile, so the light keeps its shape at any brightness and beat; rolled off
             // under 1, it never needs clipping per pixel (GlowProfile.Gain).
@@ -68,17 +66,14 @@ internal struct GlowConstants : IEquatable<GlowConstants>
             Phase = Fraction(state.Phase),
             Visibility = Clamp01(state.Visibility),
             // The colour path's corner radius keeps the perimeter coordinate continuous through the corners, outside
-            // a wide band too; its seam lies deeper, where the shader has blended to the mean colour. It uses the
+            // a wide shoulder too; its seam lies deeper, where the shader has blended to the mean colour. It uses the
             // unpulsed spread, so colours don't shift with the beat.
-            ColorRadiusPx = Math.Min(Math.Max(Math.Max(cornerPx, 6 * spreadPx), 2 * corePx), minHalf),
-            // Rounded glow field: no 45-degree crease where two edges' glows meet (deviation from doc 04 §3).
-            GlowRadiusPx = Math.Min(Math.Max(cornerPx, 2 * spreadPx), minHalf),
-            BandGain = GlowProfile.BandGain(corePx),
+            ColorRadiusPx = Math.Min(Math.Max(Math.Max(cornerPx, 6 * spreadPx), 2 * shoulderPx), minHalf),
+            // Rounded field: no 45-degree crease where two edges' light meets (deviation from doc 04 §3).
+            GlowRadiusPx = GlowProfile.GlowRadius(cornerPx, spreadPx, shoulderPx, minHalf),
             MeanRed = Finite(meanColor.R),
             MeanGreen = Finite(meanColor.G),
             MeanBlue = Finite(meanColor.B),
-            // The band's field is rounded too, at the band's own scale (GlowProfile.BandRadius).
-            BandRadiusPx = GlowProfile.BandRadius(cornerPx, bandScalePx, minHalf),
         };
     }
 
@@ -101,19 +96,18 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     // still reaches the screen once it adds up.
     public readonly bool LooksLike(in GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
-        CornerRadiusPx == other.CornerRadiusPx && BandScalePx == other.BandScalePx && BandGain == other.BandGain &&
-        BandRadiusPx == other.BandRadiusPx && SpreadPx == other.SpreadPx && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
+        CornerRadiusPx == other.CornerRadiusPx && ShoulderPx == other.ShoulderPx && SpreadPx == other.SpreadPx &&
+        ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
         Near(Gain, other.Gain) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
         Near(MeanRed, other.MeanRed) && Near(MeanGreen, other.MeanGreen) && Near(MeanBlue, other.MeanBlue) &&
         PhaseNear(Phase, other.Phase);
 
     public readonly bool Equals(GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
-        CornerRadiusPx == other.CornerRadiusPx && BandScalePx == other.BandScalePx &&
+        CornerRadiusPx == other.CornerRadiusPx && ShoulderPx == other.ShoulderPx &&
         SpreadPx == other.SpreadPx && Gain == other.Gain && Pulse == other.Pulse && Phase == other.Phase &&
         Visibility == other.Visibility && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
-        BandGain == other.BandGain && MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue &&
-        BandRadiusPx == other.BandRadiusPx;
+        MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue;
 
     public override readonly bool Equals(object? obj) => obj is GlowConstants other && Equals(other);
 
