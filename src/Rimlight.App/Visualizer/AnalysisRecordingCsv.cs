@@ -51,9 +51,16 @@ internal sealed record RecordingInfo(string AppVersion, DateTime Started, Record
 /// never on the overlay thread.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Privacy (doc 01): the file holds numbers only, as <see cref="AnalysisRecording"/> does: never audio samples, a
 /// spectrum, or anything else the sound could be rebuilt from. Its header says so, and names neither the device nor
 /// the track.
+/// </para>
+/// <para>
+/// Scripts must skip the comment lines, and the file says how (<c># reading:</c>): <c>pandas.read_csv(path,
+/// comment="#")</c> does; <c>numpy.genfromtxt(..., names=True)</c> needs them dropped first, or it takes the first one
+/// for the header row. Their number varies (the <c>…AtEnd</c> lines), so a fixed number of lines to skip doesn't work.
+/// </para>
 /// </remarks>
 internal static class AnalysisRecordingCsv
 {
@@ -147,11 +154,13 @@ internal static class AnalysisRecordingCsv
         if (DescribeSettings(end.Settings) != DescribeSettings(start.Settings)) writer.WriteLine($"# settingsAtEnd: {DescribeSettings(end.Settings)}");
         if (end.Tuning != start.Tuning) writer.WriteLine($"# tuningAtEnd: {JsonSerializer.Serialize(end.Tuning)}");
         if (end.Demo != start.Demo) writer.WriteLine($"# demoAtEnd: {(end.Demo ? "on" : "off")}");
+        writer.WriteLine("# reading: the lines starting with # are comments: pandas.read_csv(path, comment=\"#\") skips them; "
+            + "numpy.genfromtxt(..., names=True) needs them dropped first, or it takes the first one for the header row.");
         writer.WriteLine("# columns: time and dt in seconds (time is the sum of dt so far, the analyzer's clock); samples: new mono "
-            + "samples the analyzer got (a count); level, bass, beat: 0 to 1; isSilent: 0 or 1; beatCount: beats since the analyzer's "
-            + "last reset (a beat fired where it rises); flux and threshold: bass flux and the beat threshold, in the analyzer's "
-            + "units; bpm: 0 while unknown; intensity, pulse, spread, visibility, phase: the light state the overlay got; followsMusic: 1 "
-            + "when the light engine got this audio (music sync, glow on, not paused, no demo).");
+            + "samples the analyzer got, at the capture rate (a count); level, bass, beat: 0 to 1; isSilent: 0 or 1; beatCount: "
+            + "beats since the analyzer's last reset (a beat fired where it rises); flux and threshold: bass flux and the beat "
+            + "threshold, in the analyzer's units; bpm: 0 while unknown; intensity, pulse, spread, visibility, phase: the light "
+            + "state the overlay got; followsMusic: 1 when the light engine got this audio (music sync, glow on, not paused, no demo).");
         writer.WriteLine(Header);
 
         var row = new StringBuilder(160);
@@ -169,8 +178,10 @@ internal static class AnalysisRecordingCsv
     {
         RecordingEnd.TimeLimit => "after 2 minutes",
         RecordingEnd.BufferFull => "when its buffer was full (above 240 frames a second)",
-        RecordingEnd.Stopped => "stopped by hand",
+        RecordingEnd.Stopped => "when Stop was clicked",
         RecordingEnd.Dropped => "when the visualizer let go of it",
+        RecordingEnd.Closed => "when the visualizer's window closed (Esc, its close button or Rimlight quitting)",
+        RecordingEnd.Error => "when the visualizer stopped after an error (the log says which)",
         _ => "while still recording",
     };
 

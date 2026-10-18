@@ -106,6 +106,37 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
     }
 
     [Fact]
+    public void ItEndsWithTheReasonTheVisualizerStoppedItFor()
+    {
+        // The window closing: the overlay thread ends it with that reason on its next frame, so the file can say so.
+        var closed = new AnalysisRecording();
+        Append(closed, 0);
+        closed.Stop(RecordingEnd.Closed);
+        closed.Stop(RecordingEnd.Stopped); // the first reason stays
+        Assert.False(Append(closed, 1));
+        Assert.Equal((RecordingEnd.Closed, 1), (closed.End, closed.Count));
+
+        // An error: the window stops it and detaches at once, so the overlay thread may let go of it before it appends
+        // again. It keeps the reason.
+        var failed = new AnalysisRecording();
+        Append(failed, 0);
+        failed.Stop(RecordingEnd.Error);
+        failed.Drop();
+        Assert.Equal(RecordingEnd.Error, failed.End);
+
+        // One that ended on its own keeps its reason.
+        var full = new AnalysisRecording(capacity: 1);
+        Assert.False(Append(full, 0));
+        full.Stop(RecordingEnd.Closed);
+        full.Drop();
+        Assert.Equal(RecordingEnd.BufferFull, full.End);
+
+        // The overlay thread's reasons aren't the UI's to give.
+        foreach (RecordingEnd reason in new[] { RecordingEnd.None, RecordingEnd.TimeLimit, RecordingEnd.BufferFull, RecordingEnd.Dropped })
+            Assert.Throws<ArgumentOutOfRangeException>(() => new AnalysisRecording().Stop(reason));
+    }
+
+    [Fact]
     public void ABadTimeStepCountsAsZero()
     {
         var recording = new AnalysisRecording();
@@ -355,7 +386,7 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
         Assert.Contains("# app: Rimlight 9.8.7", lines);
         Assert.Contains("# started: 2026-10-18 15:30:12 local time", lines);
         Assert.Contains("# length: 2.000 s, 120 frames", lines);
-        Assert.Contains("# ended: stopped by hand", lines);
+        Assert.Contains("# ended: when Stop was clicked", lines);
         Assert.Contains(lines, l => l.StartsWith("# frameRate: 60.00 frames a second, measured; fpsCap=60 ", StringComparison.Ordinal));
         Assert.Contains("# capture: 48000 Hz, 2 ch, 32-bit float, captured at 48000 Hz, analyzed at 48000 Hz; 12 samples dropped during the recording", lines);
         Assert.Contains("# settings: enabled=true animation=MusicSync whenSilent=IdleGlow brightness=0.9 glow=0.45 coreThicknessDip=6 "
@@ -364,10 +395,12 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
         Assert.Equal(new AudioTuning { Sensitivity = 1.5f }, TuningJson.Parse(tuning)); // H-015's format: wav-analyze --tuning reads it
         Assert.Contains("# demo: off", lines);
         Assert.DoesNotContain(lines, l => l.Contains("AtEnd:", StringComparison.Ordinal)); // nothing changed meanwhile
-        Assert.Contains(lines, l => l.StartsWith("# columns: ", StringComparison.Ordinal));
+        // How to load it: the comment lines break loaders that take the first line for the header row.
+        Assert.Contains(lines, l => l.StartsWith("# reading: the lines starting with # are comments: pandas.read_csv(path, comment=\"#\")", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.StartsWith("# columns: ", StringComparison.Ordinal) && l.Contains("samples: new mono samples the analyzer got, at the capture rate", StringComparison.Ordinal));
         Assert.Equal(AnalysisRecordingCsv.Header, lines.Single(l => !l.StartsWith('#') && l.StartsWith("time,", StringComparison.Ordinal)));
         Assert.Equal(RecordingCsv.Header, AnalysisRecordingCsv.Header); // the app writes what the tools read
-        Assert.Equal(12 + 1 + 120, lines.Length); // the comments, the header row, one row per frame
+        Assert.Equal(13 + 1 + 120, lines.Length); // the comments, the header row, one row per frame
 
         // Changes during the recording: a device change, a Sensitivity slider, a tuning edit and the demo.
         RecordingSource atEnd = Source(settings with { Sensitivity = 0.5f }, new AudioTuning { Sensitivity = 0.5f, BeatDecaySeconds = 0.2f }, dropped: 3)
@@ -386,6 +419,30 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
             atStart with { Format = null, CaptureSampleRate = 0 }, RecordingEnd.Dropped), frames).Split('\n');
         Assert.Contains(lines, l => l.StartsWith("# capture: none (no output device was captured);", StringComparison.Ordinal));
         Assert.Contains("# ended: when the visualizer let go of it", lines);
+
+        // The window closing and an error say so, apart from Stop.
+        Assert.Contains("# ended: when the visualizer's window closed (Esc, its close button or Rimlight quitting)",
+            Write(new RecordingInfo("9.8.7", Started, atStart, atStart, RecordingEnd.Closed), frames).Split('\n'));
+        Assert.Contains("# ended: when the visualizer stopped after an error (the log says which)",
+            Write(new RecordingInfo("9.8.7", Started, atStart, atStart, RecordingEnd.Error), frames).Split('\n'));
+    }
+
+    [Fact]
+    public void TheSamplesCountAtTheCaptureRate()
+    {
+        // A 96 kHz device: the analyzer decimates it to 48 kHz inside, but the samples column counts what it was handed,
+        // at 96 kHz, and the reader pairs the counts with that rate, as a WAV file's run does.
+        RecordedFrame[] frames = Frames(60);
+        RecordingSource source = Source(new Settings(), new AudioTuning(), 0)
+            with { Format = "96000 Hz, 2 ch, 32-bit float", CaptureSampleRate = 96000, AnalysisSampleRate = CoreFactory.AnalysisSampleRate(96000) };
+        string csv = Write(new RecordingInfo("9.8.7", Started, source, source, RecordingEnd.Stopped), frames);
+        Assert.Contains("# capture: 96000 Hz, 2 ch, 32-bit float, captured at 96000 Hz, analyzed at 48000 Hz; 0 samples dropped during the recording",
+            csv.Split('\n'));
+
+        AnalysisResult analysis = RecordingCsv.Read(new StringReader(csv), "96k.csv").ToAnalysis();
+
+        Assert.Equal(96000, analysis.SampleRate);
+        Assert.Equal(frames.Sum(f => (long)f.Samples), analysis.Frames.Sum(f => (long)f.Samples));
     }
 
     [Fact]

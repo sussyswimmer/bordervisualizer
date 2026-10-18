@@ -33,13 +33,15 @@ namespace Rimlight.App.Visualizer;
 /// "Record 2 min" saves what the app computed for every frame, numbers only and never sound, as a CSV in the logs
 /// folder (<see cref="AnalysisRecording"/>, <see cref="AnalysisRecordingCsv"/>), so a tuning round can use a real
 /// song on a real PC. A recording goes on while the window is minimized (the plots aren't drawn then), so the glow can
-/// be watched meanwhile; closing the window saves what it has.
+/// be watched meanwhile; closing the window saves what it has. The tuning can't be edited while it records, so the
+/// whole file comes from the tuning its header names.
 /// </remarks>
 internal partial class VisualizerWindow : FluentWindow
 {
     private const double FrameSeconds = 1.0 / 30;
     private const double StaleSeconds = 0.5;      // no snapshot for this long: the overlay isn't calling the analyzer
     private const int TicksPerTextUpdate = 3;     // numbers change 10 times a second, so they stay readable
+    private const string TuningLocked = "The tuning can't be edited while recording, so the whole file comes from one tuning.";
     private const int WmThemeChanged = 0x031A;
     private const int WmSysColorChange = 0x0015;
     private const int WmSettingChange = 0x001A;
@@ -171,7 +173,7 @@ internal partial class VisualizerWindow : FluentWindow
         closing = true;
         ApplicationThemeManager.Changed -= OnThemeChanged; // a static event: it would keep the window alive
         Subscribe(false);
-        StopObserving();
+        StopObserving(RecordingEnd.Closed);
     }
 
     // Esc closes the window (nothing in it uses the key).
@@ -191,7 +193,7 @@ internal partial class VisualizerWindow : FluentWindow
         bool observe = shown || (IsVisible && recording is not null);
         Subscribe(shown);
         if (observe && observation is null) StartObserving();
-        else if (!observe && observation is not null) StopObserving();
+        else if (!observe && observation is not null) StopObserving(RecordingEnd.Closed); // a recording only ends here when closing hides the window
         ShowRecordingControls();
     }
 
@@ -210,10 +212,10 @@ internal partial class VisualizerWindow : FluentWindow
     }
 
     // Detaches from the overlay thread: no more snapshots, and the analyzer and the capture go back to how they idle. A
-    // recording in progress ends and is saved with what it has.
-    private void StopObserving()
+    // recording in progress ends for `reason` (Closed or Error) and is saved with what it has.
+    private void StopObserving(RecordingEnd reason)
     {
-        FinishRecording();
+        FinishRecording(reason);
         timer.Stop();
         clock.Stop();
         observation?.Dispose();
@@ -274,7 +276,7 @@ internal partial class VisualizerWindow : FluentWindow
             // keep the analyzer at the full rate and the capture open either: it detaches until it is shown again
             // (restored or reopened), which tries again.
             Trace.WriteLine($"[Visualizer] Drawing failed and stopped: {exception}");
-            StopObserving();
+            StopObserving(RecordingEnd.Error);
             ShowStatus("The visualizer stopped after an error. Open logs folder in the tray menu shows why.");
         }
     }
@@ -358,8 +360,8 @@ internal partial class VisualizerWindow : FluentWindow
         if (!hasDraft)
         {
             hasDraft = true;
-            TuningPanel.IsEnabled = ResetButton.IsEnabled = CopyButton.IsEnabled = PasteButton.IsEnabled = true;
-            ShowRecordingControls();
+            CopyButton.IsEnabled = true;
+            ShowRecordingControls(); // the sliders, Reset and Paste too
             // Sensitivity from the setting (H-007): a change made just before this snapshot reaches the analyzer a
             // frame later.
             draft = snapshot.Tuning with { Sensitivity = app.SettingsService.Current.Sensitivity };
@@ -463,17 +465,18 @@ internal partial class VisualizerWindow : FluentWindow
         recording = new AnalysisRecording();
         recordingSource = RecordingSource.From(latest, app.SettingsService.Current);
         recordingStarted = DateTime.Now;
-        recordingTicks = 0;
+        recordingTicks = 1; // the line shows now, so the ticks update it from the third on
         feed.StartRecording(recording);
         OpenRecordingButton.Visibility = Visibility.Collapsed;
-        SetMessage(RecordingText, "Recording. It is saved after 2 minutes, or when you click Stop. You can minimize this window meanwhile.");
+        SetMessage(RecordingText, RecordingProgress(recording));
+        SetMessage(TuningInfo, TuningLocked);
         ShowRecordingControls();
         Trace.WriteLine("[Visualizer] Recording the analysis for up to 2 minutes (numbers only, no sound).");
     }
 
     private void OnStopRecording(object sender, RoutedEventArgs e)
     {
-        FinishRecording();
+        FinishRecording(RecordingEnd.Stopped);
         UpdateActivity();
     }
 
@@ -484,25 +487,33 @@ internal partial class VisualizerWindow : FluentWindow
         if (recording is not { } running) return;
         if (running.End != RecordingEnd.None)
         {
-            FinishRecording();
+            FinishRecording(running.End);
             UpdateActivity(); // a minimized window lets go of the overlay now
             return;
         }
         if (recordingTicks++ % TicksPerTextUpdate != 0 || WindowState == WindowState.Minimized) return;
-        SetText(RecordingText, string.Create(CultureInfo.CurrentCulture,
-            $"Recording: {Clock(running.Seconds)} of {Clock(running.MaxDuration)}, {running.Count:N0} frames. Numbers only, no sound."));
+        SetText(RecordingText, RecordingProgress(running));
     }
 
-    // Ends the recording and saves the frames it has: on the thread pool while the window stays open, at once on this
-    // thread while it closes. The overlay thread may still be filling one more frame; that one lies past the count read
-    // here and is left out.
-    private void FinishRecording()
+    // The progress line, which also says how to watch the glow meanwhile and what ends the recording early: the window is
+    // always on top, near the screen edge being judged, and closing it is the obvious way to see that edge.
+    private static string RecordingProgress(AnalysisRecording running) => string.Create(CultureInfo.CurrentCulture,
+        $"Recording: {Clock(running.Seconds)} of {Clock(running.MaxDuration)}, {running.Count:N0} frames. Minimize this window to watch "
+        + $"the glow meanwhile; Stop, or closing this window, ends the recording early and saves it. Numbers only, no sound.");
+
+    // Ends the recording for `reason` (Stopped, Closed or Error), unless the overlay thread ended it first (2 minutes in,
+    // a full buffer: then its own reason stands), and saves the frames it has: on the thread pool while the window stays
+    // open, at once on this thread while it closes. The overlay thread may still be filling one more frame; that one
+    // lies past the count read here and is left out.
+    private void FinishRecording(RecordingEnd reason)
     {
         if (recording is not { } done || recordingSource is not { } atStart) return;
         recording = null;
-        done.Stop();
+        if (done.End == RecordingEnd.None) done.Stop(reason);
+        RecordingEnd ended = done.End; // before the count: the overlay thread publishes its reason after its last frame
         int count = done.Count;
-        RecordingEnd end = done.End == RecordingEnd.None ? RecordingEnd.Stopped : done.End;
+        RecordingEnd end = ended == RecordingEnd.None ? reason : ended;
+        if (TuningInfo.Text == TuningLocked) SetMessage(TuningInfo, "");
         ShowRecordingControls();
         if (count == 0)
         {
@@ -598,11 +609,14 @@ internal partial class VisualizerWindow : FluentWindow
         }
     }
 
-    // Record while the analyzer feeds the window and nothing records or saves; Stop while something records.
+    // Record while the analyzer feeds the window and nothing records or saves; Stop while something records. The tuning
+    // (the sliders, Reset and Paste) can't be edited while it records: the rows don't say when a tuning changed, so a
+    // file mixing two would read as one. Copying stays possible.
     private void ShowRecordingControls()
     {
         RecordButton.IsEnabled = recording is null && !saving && hasDraft && observation is not null && !closing;
         StopButton.IsEnabled = recording is not null;
+        TuningPanel.IsEnabled = ResetButton.IsEnabled = PasteButton.IsEnabled = hasDraft && recording is null;
     }
 
     // The version with the build's commit, e.g. "0.1.0+6ac553b" (AppLog.Version leaves the commit out): which code

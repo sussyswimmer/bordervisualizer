@@ -70,7 +70,7 @@ internal sealed class AnalyzerTap
     /// <param name="features">What it returned.</param>
     /// <param name="light">The light state this frame returns, for a recording.</param>
     /// <param name="dtSeconds">The time step it was given.</param>
-    /// <param name="samples">How many new samples it got, for a recording (the count only).</param>
+    /// <param name="samples">How many new mono samples it got, at the capture's rate, for a recording (the count only).</param>
     /// <param name="followsMusic">Whether the light engine got these features (music sync, on, not paused, no demo).</param>
     /// <param name="audio">The captured device, or null while there is none.</param>
     /// <param name="analyzedSampleRate">The sample rate passed to the analyzer.</param>

@@ -11,7 +11,10 @@ namespace Rimlight.App.Visualizer;
 /// included (wav-analyze's frame time).
 /// </param>
 /// <param name="Dt">This frame's time step in seconds, the one the analyzer and the light engine got (0 for a bad one).</param>
-/// <param name="Samples">How many new mono samples the analyzer got this frame: 0 between capture packets. A count, not the samples.</param>
+/// <param name="Samples">
+/// How many new mono samples the analyzer got this frame, at the capture's rate (the analyzer decimates a 96 or 192 kHz
+/// capture itself): 0 between capture packets. A count, not the samples.
+/// </param>
 /// <param name="Features">What the analyzer returned.</param>
 /// <param name="BeatCount">
 /// <see cref="AnalyzerDiagnostics.BeatCount"/> after this frame: a beat fired where it rises, whatever its grade. It
@@ -60,11 +63,17 @@ internal enum RecordingEnd
     /// <summary>Its buffer filled before that: the overlay ran above 240 frames a second.</summary>
     BufferFull,
 
-    /// <summary>The visualizer asked it to stop (<see cref="AnalysisRecording.Stop"/>: Stop, or the window closed).</summary>
+    /// <summary>The visualizer's Stop button (<see cref="AnalysisRecording.Stop"/>).</summary>
     Stopped,
 
     /// <summary>The overlay thread let go of it: the visualizer detached, or a newer recording took its place.</summary>
     Dropped,
+
+    /// <summary>The visualizer's window closed (Esc, its close button or Rimlight quitting), which stops it.</summary>
+    Closed,
+
+    /// <summary>The visualizer stopped after an error (the log has it), which stops it.</summary>
+    Error,
 }
 
 /// <summary>
@@ -107,7 +116,7 @@ internal sealed class AnalysisRecording
 
     private readonly RecordedFrame[] frames;
     private int count;         // frames published; written by the overlay thread only, with a release write
-    private int stopRequested; // set by the UI thread
+    private int stopRequested; // the RecordingEnd the UI thread stops it with (Stopped, Closed or Error); 0 until then
     private int end;           // a RecordingEnd; written by the overlay thread only, after its last count
     private double seconds;    // the time recorded so far; overlay thread only
 
@@ -160,10 +169,20 @@ internal sealed class AnalysisRecording
     }
 
     /// <summary>
-    /// UI thread: asks the overlay thread to take no more frames; it ends on its next frame. The frames published so
-    /// far (<see cref="Count"/>) can be saved at once.
+    /// UI thread: asks the overlay thread to take no more frames; it ends on its next frame, with
+    /// <paramref name="reason"/> as its <see cref="End"/>, so the file can say why. The frames published so far
+    /// (<see cref="Count"/>) can be saved at once. A recording that ended already keeps its own reason, and a second
+    /// call keeps the first one's.
     /// </summary>
-    public void Stop() => Volatile.Write(ref stopRequested, 1);
+    /// <param name="reason">
+    /// <see cref="RecordingEnd.Stopped"/> (the Stop button), <see cref="RecordingEnd.Closed"/> or <see cref="RecordingEnd.Error"/>.
+    /// </param>
+    public void Stop(RecordingEnd reason = RecordingEnd.Stopped)
+    {
+        if (reason is not (RecordingEnd.Stopped or RecordingEnd.Closed or RecordingEnd.Error))
+            throw new ArgumentOutOfRangeException(nameof(reason), reason, "Expected Stopped, Closed or Error: the overlay thread names its own reasons.");
+        Interlocked.CompareExchange(ref stopRequested, (int)reason, 0);
+    }
 
     /// <summary>
     /// Overlay thread, once per frame: appends the frame, after the analyzer and the light engine ran. Allocates
@@ -183,9 +202,10 @@ internal sealed class AnalysisRecording
         float bpm, in LightState light, bool followsMusic)
     {
         if (end != (int)RecordingEnd.None) return false; // only this thread writes it
-        if (Volatile.Read(ref stopRequested) != 0)
+        int stop = Volatile.Read(ref stopRequested);
+        if (stop != 0)
         {
-            Finish(RecordingEnd.Stopped);
+            Finish((RecordingEnd)stop);
             return false;
         }
         float dt = float.IsFinite(dtSeconds) && dtSeconds > 0 ? dtSeconds : 0;
@@ -201,11 +221,14 @@ internal sealed class AnalysisRecording
 
     /// <summary>
     /// Overlay thread: lets go of a recording that hasn't ended (the visualizer detached, or a newer recording took its
-    /// place). What it holds stays readable.
+    /// place). What it holds stays readable. One the UI stopped first (a closing window stops it, then detaches) ends
+    /// with the UI's reason.
     /// </summary>
     public void Drop()
     {
-        if (end == (int)RecordingEnd.None) Finish(RecordingEnd.Dropped);
+        if (end != (int)RecordingEnd.None) return;
+        int stop = Volatile.Read(ref stopRequested);
+        Finish(stop != 0 ? (RecordingEnd)stop : RecordingEnd.Dropped);
     }
 
     // After the last count, so a UI that sees the end also sees every frame.
