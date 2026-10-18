@@ -31,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Calm music moves like a wave.** Brightness follows how loud each moment is within the song, so a chorus is brighter than a quiet verse and a whispered line stays dim. Without drums the glow swells and eases with the phrases instead of following every syllable. Pulses follow the drums: a kick in a loud groove still gets a full bounce, soft drums bounce softly, and a voice, a guitar or a piano in a song without drums doesn't pulse. Sensitivity (Settings > Motion) now also sets how big the pulses are.
-- **The edge fades in, with no solid line.** The light is brightest right at the screen edge and fades smoothly inward, and by default it reaches further in. **Thickness** now sets how wide the brightest light along the edges is, and it always blends into the glow.
+- **The edge fades in, with no line.** There is no solid line and no thin bright rim at the screen edge: the light starts soft and flat at the edge and fades smoothly inward, and by default it reaches further in. **Thickness** now sets how wide the soft, bright part along the edges is, and it always blends into the glow.
 - **Settings says why it can't open.** If the Settings window, one of its pages or the visualizer can't open, a message says what went wrong and offers to open the logs folder (`%APPDATA%\Rimlight\logs`). Before, the welcome window could show up in its place, or nothing at all.
 
 ## [0.1.0] - YYYY-MM-DD

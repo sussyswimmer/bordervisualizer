@@ -62,15 +62,16 @@ public sealed class GlowShaderTests
     public void TheShaderDrawsGlowProfilesFormulas()
     {
         string shader = ShaderSource();
-        Assert.Contains("float bandDistance = max(-SdRoundBox(p - halfSize, halfSize, BandRadiusPx), 0);", shader);
         Assert.Contains("float glowDistance = max(-SdRoundBox(p - halfSize, halfSize, GlowRadiusPx), 0);", shader);
-        Assert.Contains("float band = saturate(BandGain * exp(-bandDistance / BandScalePx));", shader);
         Assert.Contains($"float spread = max(SpreadPx * (1 + {F(GlowProfile.BeatPush)} * Pulse), {F(GlowProfile.MinSpreadPx)});", shader);
-        Assert.Contains($"float glow = {F(GlowProfile.GlowPeak)} * exp(-glowDistance / spread);", shader);
-        Assert.Contains("float shape = 1 - (1 - glow) * (1 - band);", shader);
+        Assert.Contains($"float shoulder = ShoulderPx * (1 + {F(GlowProfile.BeatPush)} * Pulse);", shader);
+        // GlowProfile.Glow: GlowPeak exp(-EasedDistance / spread), the distance eased through the shoulder's hyperbola.
+        Assert.Contains($"float glow = {F(GlowProfile.GlowPeak)} * exp(-(sqrt(glowDistance * glowDistance + shoulder * shoulder) - shoulder) / spread);", shader);
         // The gain arrives rolled off (GlowProfile.Gain), so nothing clips the profile per pixel.
-        Assert.Contains("float a = shape * Gain * Visibility;", shader);
+        Assert.Contains("float a = glow * Gain * Visibility;", shader);
         Assert.Contains("[branch] if (a < 0.5 / 255)", shader);
+        // Round 1's band and its second field are gone: one light, one field.
+        Assert.DoesNotContain("Band", shader);
     }
 
     internal static string ShaderSource()
