@@ -17,6 +17,8 @@ internal static class WavAnalyzeCli
           wav-analyze generate <out.wav> [options]  Write a synthetic test track (kicks, noise, vocal-ish tones)
           wav-analyze selftest                      Analyze generated tracks and check the beats are found
           wav-analyze tuning [--tuning <file>]      Print the effective AudioTuning as JSON, every property
+          wav-analyze plot <recording.csv> [options]
+                                                    Plot a recording from the debug visualizer's "Record 2 min"
           wav-analyze --help
 
         Analyze options:
@@ -58,6 +60,12 @@ internal static class WavAnalyzeCli
           { "Sensitivity": 1.25, "FluxThresholdMultiplier": 1.8, "MinFlux": 0.02 }
         The debug visualizer's "Copy params as JSON" writes this format; "wav-analyze tuning" prints every key.
 
+        Plot options: --out <dir>, --plot <file>, --range <a>:<b> and --width <px>, as for a WAV file.
+          The recording is %APPDATA%\Rimlight\logs\analysis-*.csv: one row per overlay frame of what the app
+          computed from the music (no audio), with time, dt, level, bass, beat, isSilent, beatCount, flux,
+          threshold, bpm and the light state. The plot has the same panels as a WAV analysis. Its lines starting
+          with # are comments: pandas.read_csv(path, comment="#") reads the rest.
+
         Generate options (levels are peak dBFS, or "off"):
           --bpm <n> (120)  --seconds <s> (30)  --rate <Hz> (48000)  --channels <n> (1)  --seed <n> (1)
           --format pcm8|pcm16|pcm24|pcm32|float32|float64 (pcm16)  --extensible (WAVE_FORMAT_EXTENSIBLE header)
@@ -91,6 +99,7 @@ internal static class WavAnalyzeCli
                 "generate" => Generate(args[1..], output),
                 "selftest" => SelfTest(args[1..], output),
                 "tuning" => PrintTuning(args[1..], output),
+                "plot" => RecordingPlot.Run(args[1..], output),
                 "analyze" => Analyze(args[1..], output),
                 _ => Analyze(args, output),
             };
@@ -302,7 +311,7 @@ internal static class WavAnalyzeCli
         return allPassed ? 0 : 1;
     }
 
-    private static (double From, double To)? ParseRange(string? text)
+    internal static (double From, double To)? ParseRange(string? text)
     {
         if (text is null) return null;
         string[] parts = text.Split(':');

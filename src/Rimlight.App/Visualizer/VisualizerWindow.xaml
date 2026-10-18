@@ -155,10 +155,28 @@
                 <TextBlock x:Name="TimeText" Grid.Row="5" Style="{StaticResource RowDescription}" Margin="2,0,2,0" />
             </Grid>
 
-            <!-- Every AudioTuning parameter, live (doc 03 §4). -->
+            <!-- "Record 2 min", then every AudioTuning parameter, live (doc 03 §4). -->
             <DockPanel Grid.Column="2">
                 <StackPanel DockPanel.Dock="Top">
-                    <TextBlock Style="{StaticResource CardTitle}" FontSize="16" Text="Tuning" />
+                    <!-- What the app computed from the music, frame by frame, saved as a CSV for a report: numbers only, never sound. -->
+                    <TextBlock Style="{StaticResource CardTitle}" FontSize="16" Text="Recording" />
+                    <TextBlock Style="{StaticResource RowDescription}"
+                               Text="Saves what Rimlight computes from the music for every frame (loudness, bass, beats and the light) as a CSV file, for up to 2 minutes, to send with a report. It never records sound: the file holds only these numbers, nothing the audio could be rebuilt from." />
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button x:Name="RecordButton" Content="Record 2 min" Margin="0,0,8,6" Click="OnRecord" IsEnabled="False"
+                                AutomationProperties.Name="Record 2 minutes"
+                                ToolTip="Records Level, Bass, Beat, the beat detection and the light for every frame, for 2 minutes. Numbers only, no sound." />
+                        <Button x:Name="StopButton" Content="Stop" Margin="0,0,8,6" Click="OnStopRecording" IsEnabled="False"
+                                AutomationProperties.Name="Stop recording"
+                                ToolTip="Stops the recording and saves what it has." />
+                        <Button x:Name="OpenRecordingButton" Content="Open folder" Margin="0,0,8,6" Click="OnOpenRecording" Visibility="Collapsed"
+                                AutomationProperties.Name="Open the folder with the recording"
+                                ToolTip="Opens the logs folder with the saved recording selected." />
+                    </WrapPanel>
+                    <TextBlock x:Name="RecordingText" Style="{StaticResource RowDescription}" Margin="0,0,0,6" Visibility="Collapsed"
+                               AutomationProperties.LiveSetting="Polite" />
+
+                    <TextBlock Style="{StaticResource CardTitle}" FontSize="16" Text="Tuning" Margin="0,12,12,0" />
                     <TextBlock Style="{StaticResource RowDescription}"
                                Text="Edits apply at once and last until Rimlight quits. Copy them as JSON to keep them." />
                     <WrapPanel Margin="0,8,0,0">

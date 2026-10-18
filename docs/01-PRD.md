@@ -57,6 +57,7 @@ In **Music Sync**, when no audio is detected for 2 s, fade over 1.5 s to the `Wh
 ## Privacy (must be true and stated in the README)
 - Only system output audio is captured, via WASAPI loopback. The microphone is never opened.
 - Audio is analyzed in memory and immediately discarded. Nothing is recorded or saved.
+  - *Clarification (Maxwell's feedback, round 2): the debug visualizer's **Record 2 min** (`--debug-visualizer`) saves, only when clicked, the numbers the analyzer and the light computed for each frame (loudness, bass, beats, the light) to a CSV in the logs folder, for a report. It never holds audio samples, a spectrum or anything else the sound could be rebuilt from, and names neither the device nor the track (doc 03 §4).*
 - Track info and artwork are read locally from Windows' media controls and never leave the device.
 - No telemetry or analytics. The only network call is the GitHub update check.
 

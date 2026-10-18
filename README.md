@@ -131,7 +131,7 @@ flowchart LR
 Anything that listens should say exactly what it does with what it hears:
 
 - Only system output audio is captured, via WASAPI loopback. The microphone is never opened.
-- Audio is analyzed in memory and immediately discarded. Nothing is recorded or saved.
+- Audio is analyzed in memory and immediately discarded. The sound is never recorded or saved. Only the audio visualizer for developers (`--debug-visualizer`) can save the numbers it computed, like loudness and beats, to a file on your PC, when you click **Record 2 min**.
 - Track info and artwork are read locally from Windows' media controls and never leave the device.
 - No telemetry or analytics. The only network call is the GitHub update check.
 
