@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -10,6 +12,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using Rimlight.App.Logging;
 using Rimlight.App.SettingsUi;
 using Rimlight.Core;
 using Wpf.Ui.Appearance;
@@ -26,6 +29,12 @@ namespace Rimlight.App.Visualizer;
 /// never the analyzer, and runs only while it is shown and not minimized: then the analyzer gets audio and the full
 /// frame rate in every mode, and its plots are redrawn about 30 times a second into reused bitmaps. UI thread only.
 /// </summary>
+/// <remarks>
+/// "Record 2 min" saves what the app computed for every frame, numbers only and never sound, as a CSV in the logs
+/// folder (<see cref="AnalysisRecording"/>, <see cref="AnalysisRecordingCsv"/>), so a tuning round can use a real
+/// song on a real PC. A recording goes on while the window is minimized (the plots aren't drawn then), so the glow can
+/// be watched meanwhile; closing the window saves what it has.
+/// </remarks>
 internal partial class VisualizerWindow : FluentWindow
 {
     private const double FrameSeconds = 1.0 / 30;
@@ -38,6 +47,8 @@ internal partial class VisualizerWindow : FluentWindow
     // Frequency labels on the spectrum (doc 03 §4: a log axis from about 20 Hz to 20 kHz).
     private static readonly (float Hz, string Text)[] FrequencyLabels =
         [(20, "20"), (50, "50"), (100, "100"), (200, "200"), (500, "500"), (1000, "1k"), (2000, "2k"), (5000, "5k"), (10000, "10k"), (20000, "20k Hz")];
+
+    private static readonly CultureInfo C = CultureInfo.InvariantCulture; // the log's numbers
 
     private readonly AppController app;
     private readonly VisualizerFeed feed = new();
@@ -68,6 +79,13 @@ internal partial class VisualizerWindow : FluentWindow
     private string shownTime = "";
     private string shownScale = "";
     private (string?, string?, int, int, long, bool) shownDevice;
+    private AnalysisRecording? recording;      // "Record 2 min" in progress: the overlay thread fills it until it ends
+    private RecordingSource? recordingSource;  // what shaped its numbers when it started
+    private DateTime recordingStarted;         // local time, which names the file
+    private int recordingTicks;
+    private string? savedRecording;            // the file saved last, for "Open folder"
+    private bool saving;                       // a recording is being written on the thread pool
+    private bool closing;                      // from here on a recording is saved at once, on this thread
 
     /// <summary>Builds the window; <see cref="Present"/> shows it.</summary>
     /// <param name="app">The app, for the analyzer feed and the Sensitivity setting.</param>
@@ -139,8 +157,18 @@ internal partial class VisualizerWindow : FluentWindow
         ApplicationThemeManager.Changed += OnThemeChanged;
     }
 
+    /// <inheritdoc />
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        base.OnClosing(e);
+        // A recording in progress is saved while the window closes, on this thread: the app may be quitting, and a save
+        // on the thread pool might not get to finish.
+        if (!e.Cancel) closing = true;
+    }
+
     private void OnClosed(object? sender, EventArgs e)
     {
+        closing = true;
         ApplicationThemeManager.Changed -= OnThemeChanged; // a static event: it would keep the window alive
         Subscribe(false);
         StopObserving();
@@ -155,37 +183,42 @@ internal partial class VisualizerWindow : FluentWindow
     }
 
     // Runs only while it can be seen: then the overlay thread feeds it and the capture stays open; otherwise everything
-    // goes back to how it idles (doc 02).
+    // goes back to how it idles (doc 02). A recording keeps it attached while minimized, so the glow can be watched
+    // meanwhile.
     private void UpdateActivity()
     {
         bool shown = IsVisible && WindowState != WindowState.Minimized;
+        bool observe = shown || (IsVisible && recording is not null);
         Subscribe(shown);
-        if (shown && observation is null)
-        {
-            observation = app.ObserveAnalyzer(feed);
-            if (observation is null)
-            {
-                ShowStatus("The glow didn't start, so there is nothing to analyze. Open logs folder in the tray menu shows why.");
-                return;
-            }
-            clock.Restart();
-            lastSnapshotAt = 0;
-            timer.Start();
-            Tick();
-        }
-        else if (!shown && observation is not null)
-        {
-            StopObserving();
-        }
+        if (observe && observation is null) StartObserving();
+        else if (!observe && observation is not null) StopObserving();
+        ShowRecordingControls();
     }
 
-    // Detaches from the overlay thread: no more snapshots, and the analyzer and the capture go back to how they idle.
+    private void StartObserving()
+    {
+        observation = app.ObserveAnalyzer(feed);
+        if (observation is null)
+        {
+            ShowStatus("The glow didn't start, so there is nothing to analyze. Open logs folder in the tray menu shows why.");
+            return;
+        }
+        clock.Restart();
+        lastSnapshotAt = 0;
+        timer.Start();
+        Tick();
+    }
+
+    // Detaches from the overlay thread: no more snapshots, and the analyzer and the capture go back to how they idle. A
+    // recording in progress ends and is saved with what it has.
     private void StopObserving()
     {
+        FinishRecording();
         timer.Stop();
         clock.Stop();
         observation?.Dispose();
         observation = null;
+        ShowRecordingControls();
     }
 
     private void Subscribe(bool on)
@@ -219,8 +252,11 @@ internal partial class VisualizerWindow : FluentWindow
             {
                 latest = snapshot;
                 lastSnapshotAt = now;
-                Draw(snapshot);
-                if (ticks++ % TicksPerTextUpdate == 0) ShowNumbers(snapshot);
+                if (WindowState != WindowState.Minimized) // minimized, it stays attached only for a recording
+                {
+                    Draw(snapshot);
+                    if (ticks++ % TicksPerTextUpdate == 0) ShowNumbers(snapshot);
+                }
                 SyncTuning(snapshot);
                 ShowStatus("");
             }
@@ -230,6 +266,7 @@ internal partial class VisualizerWindow : FluentWindow
                     ? "Waiting for the analyzer…"
                     : "No new frames: no display shows the glow right now (Displays in Settings).");
             }
+            if (recording is not null) FollowRecording();
         }
         catch (Exception exception)
         {
@@ -322,6 +359,7 @@ internal partial class VisualizerWindow : FluentWindow
         {
             hasDraft = true;
             TuningPanel.IsEnabled = ResetButton.IsEnabled = CopyButton.IsEnabled = PasteButton.IsEnabled = true;
+            ShowRecordingControls();
             // Sensitivity from the setting (H-007): a change made just before this snapshot reaches the analyzer a
             // frame later.
             draft = snapshot.Tuning with { Sensitivity = app.SettingsService.Current.Sensitivity };
@@ -415,6 +453,173 @@ internal partial class VisualizerWindow : FluentWindow
         RefreshRows(onlySensitivity: false);
         SetMessage(TuningMessage, "");
         SetMessage(TuningInfo, "Pasted. Parameters the JSON leaves out took their defaults.");
+    }
+
+    // "Record 2 min": the overlay thread appends every frame to a buffer allocated here, so it never allocates for it.
+    // Numbers only, the analyzer's output and the light state: never sound (doc 01).
+    private void OnRecord(object sender, RoutedEventArgs e)
+    {
+        if (recording is not null || latest is null || observation is null) return;
+        recording = new AnalysisRecording();
+        recordingSource = RecordingSource.From(latest, app.SettingsService.Current);
+        recordingStarted = DateTime.Now;
+        recordingTicks = 0;
+        feed.StartRecording(recording);
+        OpenRecordingButton.Visibility = Visibility.Collapsed;
+        SetMessage(RecordingText, "Recording. It is saved after 2 minutes, or when you click Stop. You can minimize this window meanwhile.");
+        ShowRecordingControls();
+        Trace.WriteLine("[Visualizer] Recording the analysis for up to 2 minutes (numbers only, no sound).");
+    }
+
+    private void OnStopRecording(object sender, RoutedEventArgs e)
+    {
+        FinishRecording();
+        UpdateActivity();
+    }
+
+    // Every tick while recording: the time so far, and the save once the overlay thread has ended it (2 minutes in, or a
+    // full buffer).
+    private void FollowRecording()
+    {
+        if (recording is not { } running) return;
+        if (running.End != RecordingEnd.None)
+        {
+            FinishRecording();
+            UpdateActivity(); // a minimized window lets go of the overlay now
+            return;
+        }
+        if (recordingTicks++ % TicksPerTextUpdate != 0 || WindowState == WindowState.Minimized) return;
+        SetText(RecordingText, string.Create(CultureInfo.CurrentCulture,
+            $"Recording: {Clock(running.Seconds)} of {Clock(running.MaxDuration)}, {running.Count:N0} frames. Numbers only, no sound."));
+    }
+
+    // Ends the recording and saves the frames it has: on the thread pool while the window stays open, at once on this
+    // thread while it closes. The overlay thread may still be filling one more frame; that one lies past the count read
+    // here and is left out.
+    private void FinishRecording()
+    {
+        if (recording is not { } done || recordingSource is not { } atStart) return;
+        recording = null;
+        done.Stop();
+        int count = done.Count;
+        RecordingEnd end = done.End == RecordingEnd.None ? RecordingEnd.Stopped : done.End;
+        ShowRecordingControls();
+        if (count == 0)
+        {
+            Trace.WriteLine("[Visualizer] The analysis recording got no frames, so nothing was saved.");
+            if (!closing) SetMessage(RecordingText, "Nothing was recorded: no frames arrived.");
+            return;
+        }
+        RecordingSource atEnd = latest is null ? atStart : RecordingSource.From(latest, app.SettingsService.Current);
+        var info = new RecordingInfo(BuildVersion(), recordingStarted, atStart, atEnd, end);
+        ReadOnlyMemory<RecordedFrame> frames = done.Frames(count);
+        if (closing || !IsVisible) SaveNow(info, frames);
+        else SaveInBackground(info, frames);
+    }
+
+    private void SaveNow(RecordingInfo info, ReadOnlyMemory<RecordedFrame> frames)
+    {
+        try
+        {
+            Saved(AnalysisRecordingCsv.Save(AppLog.Folder, info, frames), frames.Span);
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+        {
+            NotSaved(exception);
+        }
+    }
+
+    // Formatting the rows takes a moment (up to about 3 MB at 240 frames a second), so it runs off the UI thread. The
+    // next recording can start once this one is saved, so their messages don't mix.
+    private async void SaveInBackground(RecordingInfo info, ReadOnlyMemory<RecordedFrame> frames)
+    {
+        saving = true;
+        ShowRecordingControls();
+        SetMessage(RecordingText, "Saving the recording…");
+        try
+        {
+            string path = await Task.Run(() => AnalysisRecordingCsv.Save(AppLog.Folder, info, frames));
+            Saved(path, frames.Span);
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or UnauthorizedAccessException)
+        {
+            NotSaved(exception);
+        }
+        finally
+        {
+            saving = false;
+            ShowRecordingControls();
+        }
+    }
+
+    // Where it went, in the window with "Open folder" and in the log, written as %APPDATA%\… so a screenshot names no
+    // account. A window that is minimized or closed says it with a tray notification.
+    private void Saved(string path, ReadOnlySpan<RecordedFrame> frames)
+    {
+        savedRecording = path;
+        double seconds = frames[^1].Time;
+        string shown = AnalysisRecordingCsv.DisplayPath(path);
+        Trace.WriteLine(string.Create(C, $"[Visualizer] Saved an analysis recording of {seconds:0.0} s ({frames.Length} frames) as {shown}."));
+        if (closing || !IsVisible)
+        {
+            if (!app.IsExiting) app.Tell($"Saved the analysis recording as {shown}.");
+            return;
+        }
+        SetMessage(RecordingText, string.Create(CultureInfo.CurrentCulture,
+            $"Saved {Clock(seconds)} ({frames.Length:N0} frames) as {shown}. Send it with the song's name and where in the song you started."));
+        OpenRecordingButton.Visibility = Visibility.Visible;
+        if (WindowState == WindowState.Minimized) app.Tell($"Saved the analysis recording as {shown}. The audio visualizer can open its folder.");
+    }
+
+    private void NotSaved(Exception exception)
+    {
+        Trace.WriteLine($"[Visualizer] Saving the analysis recording failed: {exception.Message}");
+        if (!closing && IsVisible) SetMessage(RecordingText, $"Couldn't save the recording: {exception.Message}");
+        else if (!app.IsExiting) app.Tell($"Couldn't save the analysis recording: {exception.Message}");
+    }
+
+    // Explorer on the logs folder with the file selected; the folder alone if Explorer can't be asked that way.
+    private void OnOpenRecording(object sender, RoutedEventArgs e)
+    {
+        if (savedRecording is not { } path) return;
+        try
+        {
+            using Process? explorer = Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{path}\"",
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or System.IO.IOException)
+        {
+            Trace.WriteLine($"[Visualizer] Showing the recording in Explorer failed: {exception.Message}");
+            if (!AppLog.OpenFolder()) SetMessage(RecordingText, $"The folder couldn't be opened. The file is {AnalysisRecordingCsv.DisplayPath(path)}.");
+        }
+    }
+
+    // Record while the analyzer feeds the window and nothing records or saves; Stop while something records.
+    private void ShowRecordingControls()
+    {
+        RecordButton.IsEnabled = recording is null && !saving && hasDraft && observation is not null && !closing;
+        StopButton.IsEnabled = recording is not null;
+    }
+
+    // The version with the build's commit, e.g. "0.1.0+6ac553b" (AppLog.Version leaves the commit out): which code
+    // computed a recording's numbers.
+    private static string BuildVersion()
+    {
+        string? version = typeof(VisualizerWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (version is null) return AppLog.Version;
+        int plus = version.IndexOf('+', StringComparison.Ordinal);
+        return plus >= 0 && version.Length > plus + 8 ? version[..(plus + 8)] : version;
+    }
+
+    // m:ss.
+    private static string Clock(double seconds)
+    {
+        int whole = (int)Math.Floor(Math.Max(seconds, 0) + 1e-6);
+        return string.Create(C, $"{whole / 60}:{whole % 60:00}");
     }
 
     private void OnSliderChanged(ParameterRow row)

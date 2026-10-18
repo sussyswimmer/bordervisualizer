@@ -153,7 +153,6 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
         audioSequence = AudioReading.Next(audioSequence);
         Volatile.Write(ref latestAudio, AudioReading.Pack(in features, audioSequence));
-        if (feed is not null) tap.Record(feed, analyzer, in features, dtSeconds, audio, sampleRate, demo);
 
         // Only music sync hears the audio; a meter in Settings or the visualizer must not change the glow. The demo
         // plays its own beat, and its palette changes before the blender steps, like any other SetTarget.
@@ -169,6 +168,8 @@ internal sealed class MusicGlowSource : IOverlayFrameSource
         bool crossfading = blender.IsAnimating;
         blender.Update(dtSeconds);
         LightState state = engine.Update(dtSeconds, heard, palette, look, paused);
+        // After the light engine, so the visualizer's recording ("Record 2 min") gets the light state with the analysis.
+        if (feed is not null) tap.Record(feed, analyzer, in features, in state, dtSeconds, count, listen, audio, sampleRate, demo);
 
         // Refill after every SetTarget, after every update that was animating before it (so the crossfade's last
         // frame is uploaded too, H-006), and when the ratio changes.

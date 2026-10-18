@@ -55,6 +55,13 @@ public sealed class OtherWindowTests : UiTest
             "the visualizer to show its plots and tuning");
         // Without the overlay (not started here, as when it fails to start) it says so instead of plotting.
         UiThread.WaitUntil(() => window.StatusText.IsVisible, "the visualizer to say the glow didn't start");
+        // "Record 2 min" waits for the analyzer's first frame: with no overlay there is nothing to record.
+        UiThread.Run(() =>
+        {
+            Assert.False(window.RecordButton.IsEnabled);
+            Assert.False(window.StopButton.IsEnabled);
+            Assert.False(window.OpenRecordingButton.IsVisible);
+        });
         AssertNoFailures();
     }
 }

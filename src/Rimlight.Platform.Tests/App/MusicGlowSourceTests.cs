@@ -18,8 +18,8 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
     public static TheoryData<string> Modes => new()
     {
         "music", "silence", "no packets", "Idle Glow", "Off", "glow off", "paused", "Hide, hidden", "Settings audio, Off",
-        "visualizer", "visualizer, Off", "visualizer, paused", "demo", "demo, glow off and Off", "demo and visualizer",
-        "album crossfades", "on battery, 144 Hz",
+        "visualizer", "visualizer, Off", "visualizer, paused", "visualizer, recording", "demo", "demo, glow off and Off",
+        "demo and visualizer", "album crossfades", "on battery, 144 Hz",
     };
 
     [Theory]
@@ -46,9 +46,13 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
             "no packets" or "Hide, hidden" => AudioProgram.NoPackets,
             _ => AudioProgram.Music,
         };
+        AnalysisRecording? recording = null;
         if (mode.Contains("visualizer", StringComparison.Ordinal))
         {
-            rig.Source.SetVisualizer(new VisualizerFeed());
+            var feed = new VisualizerFeed();
+            // "Record 2 min": the whole run is 75 s, so every frame, warm-up included, appends to the recording.
+            if (mode.Contains("recording", StringComparison.Ordinal)) feed.StartRecording(recording = new AnalysisRecording());
+            rig.Source.SetVisualizer(feed);
             rig.Source.SetAudioWanted(true);
         }
         if (mode.Contains("Settings audio", StringComparison.Ordinal)) rig.Source.SetAudioWanted(true);
@@ -85,6 +89,7 @@ public sealed class MusicGlowSourceTests(ITestOutputHelper output)
         Run(3000, editEvery: 97);
         output.WriteLine($"{mode}: {frameBytes} B over 3000 frames; at most {editBytes} B on the {edits} frames with a new snapshot");
         Assert.Equal(0, frameBytes);
+        if (recording is not null) Assert.Equal((RecordingEnd.None, 4500), (recording.End, recording.Count));
         // A new snapshot that changes neither Sensitivity nor a color costs nothing either, except in demo mode with the
         // glow off or Off: the demo's engine settings (the user's, shown on and in music sync) are made once per snapshot,
         // at most a small record (the ceiling is what counts; no allocation at all would be fine too).
