@@ -83,6 +83,67 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
     }
 
     [Fact]
+    public void EngineModeReplaysTheRenderThreadAndWritesTheLight()
+    {
+        // --engine runs Bench's FramePipeline (the app's MusicGlowSource.NextFrame) on WASAPI-like packets. Its analyzer
+        // columns must be exactly what the analyzer alone gives on the same feed, and its light what the engine makes of
+        // them; the internal dynamics columns must be filled, so a rename in Core that the reflection probe no longer
+        // finds fails here instead of leaving the columns empty.
+        string wav = Path.Combine(directory, "mix.wav");
+        Assert.Equal(0, Cli("generate", wav, "--seconds", "12", "--full-mix").Code);
+
+        (int code, string text, string error) = Cli(wav, "--engine", "--out", directory, "--no-plot", "--brightness", "0.6");
+        output.WriteLine(text);
+        Assert.Equal(0, code);
+        Assert.Equal("", error);
+        Assert.Contains("Feed: 60 fps ±10 % (seed 1), 10 ms packets; tuning: defaults; light: Brightness 0.6, Sensitivity 1", text);
+        Assert.Matches(@"Light: Intensity mean 0\.\d\d \(0\.\d\d to 0\.\d\d\); pulses >= 0\.5: \d+ \(\d+\.\d a minute\), >= 0\.2: \d+", text);
+
+        string[] rows = File.ReadAllLines(Path.Combine(directory, "mix.engine.csv"));
+        Assert.Equal(EngineCsv.Header, rows[0]);
+        string[] header = rows[0].Split(',');
+        Assert.Equal(24, header.Length);
+        double[][] cells = rows[1..].Select(r => r.Split(',').Select(c => double.Parse(c, CultureInfo.InvariantCulture)).ToArray()).ToArray();
+        int Column(string name) => Array.IndexOf(header, name);
+        Assert.InRange(cells.Length, 12 * 60 - 20, 12 * 60 + 20);
+        Assert.All(cells, c => Assert.Equal(24, c.Length));
+        Assert.All(cells, c => Assert.Equal(0, c[Column("samples")] % 480));                 // whole 10 ms packets
+        Assert.Contains(cells, c => c[Column("samples")] == 480);                            // one packet, or two:
+        Assert.Contains(cells, c => c[Column("samples")] == 960);                            // a frame is 15-18 ms
+        for (int i = 1; i < cells.Length; i++) Assert.True(cells[i][Column("beatCount")] >= cells[i - 1][Column("beatCount")]);
+        Assert.InRange(cells[^1][Column("beatCount")], 20, 26);                             // 120 BPM for 12 s
+        // Music Sync with music: the pulse is the analyzer's Beat, Intensity is Brightness × (0.35 + 0.65 × Level).
+        Assert.All(cells, c => Assert.Equal(c[Column("beat")], c[Column("pulse")]));
+        Assert.All(cells, c => Assert.Equal(0.6 * (0.35 + 0.65 * c[Column("level")]), c[Column("intensity")], tolerance: 1e-4)); // printed to 4 places
+        Assert.Equal(1, cells[^1][Column("visibility")]);                                    // the start fade is over
+        Assert.InRange(cells.Max(c => c[Column("pulse")]), 0.99, 1);
+        // The internal stages are read: a drum groove has punch, the song position and the kick-likeness move.
+        Assert.InRange(cells[^1][Column("punch")], 0.9, 1);
+        Assert.All(cells, c => Assert.InRange(c[Column("position")], 0, 1));
+        Assert.InRange(cells.Max(c => c[Column("kickLike")]), 0.9, 1);
+        Assert.InRange(cells[^1][Column("referenceDb")], -60, 0);
+
+        // The same feed through the analyzer alone gives the same analyzer columns, bit for bit as printed.
+        string plain = Path.Combine(directory, "plain.csv");
+        Assert.Equal(0, Cli(wav, "--csv", plain, "--no-plot", "--jitter", "0.1", "--packet-ms", "10").Code);
+        string[] analyzerRows = File.ReadAllLines(plain)[1..];
+        Assert.Equal(analyzerRows.Length, rows.Length - 1);
+        string[] analyzerColumns = ["time", "level", "bass", "beat", "isSilent", "flux", "threshold", "bpm"];
+        int[] shared = analyzerColumns.Select(Column).ToArray();
+        for (int i = 0; i < analyzerRows.Length; i++)
+        {
+            string[] engineCells = rows[i + 1].Split(',');
+            Assert.Equal(analyzerRows[i], string.Join(',', shared.Select(c => engineCells[c])));
+        }
+
+        // The light's settings belong to the engine replay.
+        (code, _, error) = Cli(wav, "--brightness", "0.5", "--out", directory);
+        Assert.Equal(2, code);
+        Assert.Contains("--engine", error);
+        Assert.Equal(2, Cli(wav, "--engine", "--sensitivity", "3", "--out", directory).Code);
+    }
+
+    [Fact]
     public void TuningOverridesAreAppliedAndReported()
     {
         string wav = Path.Combine(directory, "t.wav");
