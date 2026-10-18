@@ -6,12 +6,14 @@ using Xunit.Abstractions;
 
 namespace Rimlight.Tests.Audio;
 
-// Maxwell's feedback, round 1: the light must follow the character and the dynamics of the music. Calm songs move like a
-// slow wave with no bounce on a whisper, rap and EDM keep bouncing on every kick, drums entering make a song punchier,
-// soft drums bounce softly, a bass guitar or a piano is not a drum, and a chorus is brighter than a quiet verse.
-// Everything runs through CoreFactory's analyzer and light engine the way the overlay does: 60 fps, audio in 10 ms WASAPI
-// packets, default settings (Brightness 0.8). The songs are procedural (StyleTracks, no recorded music). "Before" numbers
-// in the comments are the same tracks through Core at 5b387fc, "round 1" the first version of this change.
+// Maxwell's feedback, rounds 1 and 2: the light must follow the character and the dynamics of the music. Calm songs move
+// like a slow wave with no bounce on a whisper, rap and EDM hit hard and on time on every kick, drums entering make a song
+// punchier, a bounce is as big as the moment, a bass guitar or a piano is not a drum, and a chorus is brighter than a quiet
+// verse. Everything runs through CoreFactory's analyzer and light engine the way the overlay does: 60 fps, audio in 10 ms
+// WASAPI packets, default settings (Brightness 0.8). The songs are procedural (StyleTracks, no recorded music); round 2
+// tuned on real recordings with independently annotated kicks and kept these as the regression floor. "Before" numbers in
+// the comments are the same tracks through Core at 5b387fc, "round 1" the round 1 change as measured then (its first
+// version, and 6ac553b after the review), "now" round 2.
 public sealed class MusicDynamicsTests(ITestOutputHelper output)
 {
     private const int Rate = 48000;
@@ -34,8 +36,9 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     {
         // Before: every voice syllable and low-string pluck the detector found in the whispered verses (1.1–1.8 a second)
         // was a full pulse of 1, the brightness the shader shows (Intensity × (1 + 0.25 Pulse)) had 6.6–10.2 % of its
-        // variance above 3 Hz, and its 95th-percentile slope was 1.38–1.63 per second. Measured now: no pulse at all,
-        // 0.2–0.7 % above 3 Hz and 0.15–0.30 per second; the bounds leave room on both.
+        // variance above 3 Hz (an unwindowed DFT), and its 95th-percentile slope was 1.38–1.63 per second; round 1: no
+        // pulse, 0.2–0.7 % and 0.15–0.30 per second. Measured now: no pulse, 0.00 % above 3 Hz (windowed, Measure) and
+        // 0.03–0.12 per second; the bounds leave room on both.
         List<Frame> frames = BalladRun.Value;
         foreach (string name in new[] { "intro", "verse1", "chorus1", "verse2", "chorus2" })
         {
@@ -53,9 +56,9 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     public void AChorusIsBrighterThanTheWhisperedVerse()
     {
         // The whispered verse is 15 dB under the chorus. Before, auto-gain stretched it back over the full range within
-        // about 6 s, so the second chorus was only 1.19× as bright as the verse before it. Measured now: 1.58× and 1.59×
-        // for the choruses against the second verse. The first verse comes before anything louder has been heard, so it is
-        // judged against its own opening (and SongLoudness's 4 dB prior): measured 1.11× (before 1.13×).
+        // about 6 s, so the second chorus was only 1.19× as bright as the verse before it (round 1: 1.58× and 1.59× for the
+        // choruses). Measured now: 2.05× and 2.00×. The first verse comes before anything louder has been heard, so it is
+        // judged against its own opening (and SongLoudness's 4 dB prior): measured 1.16× (before 1.13×, round 1 1.11×).
         List<Frame> frames = BalladRun.Value;
         double Mean(string name)
         {
@@ -78,10 +81,10 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     [InlineData(MusicStyle.Edm, 48000, 6)]
     public void RapAndEdmKeepAStrongPulseOnEveryKick(MusicStyle style, int rate, ulong seed)
     {
-        // Measured: every rap kick at 48 and 44.1 kHz and 73–76 of 77 EDM kicks get a pulse of at least 0.7 within
-        // 0.1 s (the few others the detector doesn't fire on, before or now: they sit next to an off-beat bass note).
-        // Tempo counts the accented kicks only: rap 90.0–90.1 BPM, EDM 127.8–128.2 at both rates and every seed (before
-        // 246–257 and round 1 128–169: the off-beat bass doubled it, BeatCharacter.TempoBeatAge).
+        // Measured now: every rap kick at 48 and 44.1 kHz and 75–76 of 77 EDM kicks get a pulse of at least 0.7 within
+        // 0.1 s, averaging 0.98–1.00 (the few others the detector doesn't fire on, before or now: they sit next to an
+        // off-beat bass note). Tempo counts the accented kicks only: rap 90.1 BPM, EDM 127.7–128.0 at both rates and every
+        // seed (before 246–257 and early round 1 128–169: the off-beat bass doubled it, BeatCharacter.TempoBeatAge).
         StyleTrack track = rate == Rate && seed == 1 ? (style == MusicStyle.Rap ? Rap.Value : Edm.Value) : StyleTracks.Render(style, rate, seed);
         List<Frame> frames = Run(track.Samples, rate: rate);
         var (kicks, strong, meanPulse) = Kicks(frames, track.KickTimes, 4);
@@ -95,9 +98,51 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void InAGrooveThePulseLandsOnTheFrameItsBeatFires()
+    {
+        // Round 1 graded each beat once its 35 ms onset window had filled the FFT, so on round 2's corpus of real music
+        // the pulse peaked 46–53 ms after the kick, a frame or two after the beat fired. The grade is now decided on the
+        // step the beat fires, from KickEnvelope's time-domain evidence: in a groove the frame that fires a kick's beat
+        // already shows its pulse. Measured: 0.9 or more on that frame for all 61 rap kicks after the first 4 s.
+        List<Frame> frames = Run(Rap.Value.Samples);
+        int beats = 0, onTime = 0;
+        foreach (double kick in Rap.Value.KickTimes.Where(k => k >= 4))
+        {
+            int i = frames.FindIndex(f => f.Time >= kick && f.Time <= kick + 0.1 && f.Fired > 0);
+            if (i < 0) continue;
+            beats++;
+            if (frames[i].Light.Pulse >= 0.9f) onTime++;
+        }
+        output.WriteLine($"{onTime}/{beats} kick beats pulse 0.9 or more on the frame they fire");
+        Assert.True(beats >= 50, $"{beats}");
+        Assert.True(onTime >= 0.9 * beats, $"{onTime}/{beats}");
+    }
+
+    [Fact]
+    public void AGroovePumpsTheLightBetweenKicks()
+    {
+        // In a groove the light dips between kicks and comes back with each pulse (AudioAnalyzer.PumpDepth). Measured on
+        // the brightness the shader shows, from 30 ms before each kick to its peak: the rap's kicks brighten it by 55 %
+        // on average and 41 % at least (round 1: 25 % at most, a full pulse's own 1.25). A calm song has no groove and no
+        // pump: its Level is the slow wave alone (ACalmBalladNeverBouncesAndMovesSlowly).
+        List<Frame> frames = Run(Rap.Value.Samples);
+        double Shown(Frame f) => f.Light.Intensity * (1 + 0.25 * f.Light.Pulse);
+        var depths = new List<double>();
+        foreach (double kick in Rap.Value.KickTimes.Where(k => k >= 4 && k + 0.15 < frames[^1].Time))
+        {
+            Frame before = frames.Last(f => f.Time <= kick - 0.03);
+            double peak = frames.Where(f => f.Time >= kick - 0.02 && f.Time <= kick + 0.15).Max(Shown);
+            depths.Add(peak / Shown(before) - 1);
+        }
+        output.WriteLine($"rap: the shown light rises {depths.Average():P0} on a kick on average (least {depths.Min():P0})");
+        Assert.True(depths.Average() >= 0.35, $"{depths.Average():P0}");
+        Assert.True(depths.Min() >= 0.2, $"{depths.Min():P0}");
+    }
+
+    [Fact]
     public void AnEdmBreakdownWithoutDrumsDoesNotPulse()
     {
-        // Pad and lead onsets in the breakdown fired 18 full pulses before; now none.
+        // Pad and lead onsets in the breakdown fired 18 full pulses before; now none over 0.06.
         List<Frame> frames = Run(Edm.Value.Samples);
         TrackSection breakdown = Edm.Value.Section("breakdown");
         Section m = Measure(frames, breakdown.Start + 0.5, breakdown.End);
@@ -109,11 +154,11 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     public void PulsesStartWhenTheDrumsComeInAndStopWhenTheyLeave()
     {
         // The verse fired 22 full pulses before, and the verse after the drums 13. Now the drumless verses give none,
-        // the chorus kicks the detector finds give full ones, and the punch (how drum-driven the music is) rises with the
-        // drums and fades once they leave. The detector misses 5 of the 23 acoustic kicks, before and now, the first at
-        // 24.08 s among them; the drive needs two kicks (the first one in a wave is no groove yet), so the first full
-        // pulse lands on the third detected kick, 3.2 s after the drums come in (round 1: 1.3 s, but a single thump
-        // in a calm song was a full pulse too).
+        // the chorus kicks give full ones (21 of 23; the detector now finds all 23, where before and in round 1 it missed
+        // 5, the first at 24.08 s among them), and the punch (how drum-driven the music is) rises with the drums (1.00 in
+        // the chorus) and fades once they leave (at most 0.11 from 8 s after). The drive needs two kicks (the first one in
+        // a wave is no groove yet), so the first full pulse lands on the third kick, 2.9 s after the drums come in
+        // (round 1: 3.2 s; before 1.3 s, but a single thump in a calm song was a full pulse too).
         StyleTrack track = DrumsEnter.Value;
         List<Frame> frames = Run(track.Samples);
         TrackSection verse = track.Section("verse"), chorus = track.Section("chorus"), verse2 = track.Section("verse2");
@@ -170,8 +215,8 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     {
         // The reviewers' cases: the folk band's guitar and voice with a bass guitar 6 dB under them (round 1: 7–9 pulses
         // of 0.5 or more per chorus, 12–17 % of the brightness above 3 Hz), and a piano ballad with left-hand octaves on every
-        // beat of its choruses (round 1 on their version: 9–12 big pulses per chorus). Measured now: no pulse, punch at
-        // most 0.03, at most 1.3 % above 3 Hz.
+        // beat of its choruses (round 1 on their version: 9–12 big pulses per chorus). 6ac553b: no pulse, punch at most
+        // 0.03, at most 1.3 % above 3 Hz (unwindowed). Measured now: no pulse, punch 0, 0.00 % above 3 Hz (windowed).
         foreach (var (name, track) in new[] { ("folk + bass", Folk(null)), ("piano ballad", StyleTracks.Render(MusicStyle.PianoBallad)) })
         {
             List<Frame> frames = Run(track.Samples);
@@ -188,33 +233,32 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void SoftDrumsBounceSoftly()
+    public void ASoftKitIsTheBeatAndBouncesWithTheMoment()
     {
-        // The blocker: a soft brush kit 12 dB under the folk band (and its bass 6 dB under) bounced like rap in round 1
-        // (12–14 pulses of 0.5 or more per chorus, 14–21 % of the brightness above 3 Hz). The pulse now follows how far
-        // the kick stands out of the music above it: under the strummed choruses it barely does (two pulses of at most
-        // 0.18 in the first chorus, none in the second, punch about 0.06, 2.3–3.8 % above 3 Hz), except for one full
-        // pulse where each chorus comes in (its first kick lands with the strum and a bass note, measured against the
-        // quiet verse before it); in the sparse verse after the chorus it stands out but the moment is quiet within the
-        // song (pulses averaging 0.25). With the kit 20 dB under, one pulse over 0.3 in the whole song: 0.63 where the
-        // first chorus comes in. (The first verse of the first song after the app starts has no louder music to be
-        // judged against yet: its kicks stand out of it and bounce, see TheOpeningOfTheNextSongIsJudgedAgainstTheLastOne.)
+        // Round 1's "soft drums bounce softly" (the reviewers' blocker: a brush kit 12 dB under the folk band bounced like
+        // rap) made this kit's chorus pulses at most 0.25 by grading each kick on how far it stood out of the music above
+        // it. Round 2's corpus of real recordings showed that measure cutting real rap and EDM kicks too, which is
+        // Maxwell's round 2 complaint, and no measure of the kick separates them: against the song's loud parts this
+        // kit's kicks peak at a median of −6.6 dB in the kick band, a rap recording's at −7.3 dB, an EDM one's at −6.5 dB
+        // and a pop one's at −10.0 dB (KickEnvelope's peak at each detected kick against SongLoudness.ReferenceDb), and
+        // their prominence over the music above overlaps as fully. So a kit that is heard is the beat, however soft: its
+        // kicks pulse fully in the choruses (measured: mean 0.99–1.00), and the bounce follows the moment instead: in
+        // the whispered verse after the chorus the same kicks sit at the groove's floor (LoudFloor × punch: 0.30). A kit
+        // 20 dB under the band, which the ear barely picks out, doesn't make a groove: no pulse at all (round 1: one).
         StyleTrack soft = Folk(-12);
         List<Frame> frames = Run(soft.Samples);
         foreach (string name in new[] { "chorus1", "chorus2" })
         {
             TrackSection s = soft.Section(name);
-            Section m = Measure(frames, s.Start + 1, s.End);
-            double punch = frames.Where(f => f.Time >= s.Start + 4 && f.Time < s.End).Average(f => f.Punch);
-            output.WriteLine($"-12 dB {name}: {m.Pulses} pulses, max {m.MaxPulse:F3}, punch {punch:F2}, above 3 Hz {m.HighShare:P2}");
-            Assert.InRange(m.MaxPulse, 0, 0.25f);
-            Assert.InRange(punch, 0, 0.4);
-            Assert.InRange(m.HighShare, 0, 0.05);
+            var (kicks, strong, mean) = Kicks(frames, soft.KickTimes.Where(k => k >= s.Start + 1 && k < s.End).ToList(), 0);
+            output.WriteLine($"-12 dB {name}: {strong}/{kicks} kicks strong, mean pulse {mean:F2}");
+            Assert.True(strong >= 0.9 * kicks, $"{strong}/{kicks}");
+            Assert.True(mean >= 0.9, $"{mean:F2}");
         }
         TrackSection verse2 = soft.Section("verse2");
-        Section v = Measure(frames, verse2.Start + 1, verse2.End);
-        output.WriteLine($"-12 dB verse2: {v.Pulses} pulses, mean {v.MeanPulse:F3}, max {v.MaxPulse:F3}");
-        Assert.InRange(v.MeanPulse, 0, 0.5);
+        var (verseKicks, _, verseMean) = Kicks(frames, soft.KickTimes.Where(k => k >= verse2.Start + 1 && k < verse2.End - 0.25).ToList(), 0);
+        output.WriteLine($"-12 dB verse2: mean pulse {verseMean:F2} over {verseKicks} kicks");
+        Assert.InRange(verseMean, 0.2, 0.4);
 
         StyleTrack softer = Folk(-20);
         List<Frame> quiet = Run(softer.Samples);
@@ -232,16 +276,21 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     public void AWhisperedVerseNeverBouncesBigEvenWithLoudDrums()
     {
         // The folk band's kit at the music's own level: full pulses on the chorus kicks, and in the whispered verse after
-        // the chorus (15 dB under it) about the groove's floor, LoudFloor × punch: measured 0.30 on average and 0.35 at
-        // most (round 1 measured nothing like it: its style tracks had no drums under a whisper).
+        // the chorus (15 dB under it) the kicks sit at the groove's floor, LoudFloor × punch (measured 0.30 on each). The
+        // verse's loudest strums, where it swells to 11 dB under the chorus, reach 0.42 and 0.50; round 1 measured 0.35
+        // at most with SongLoudness.RangeDb 24, where those strums sat lower in the song. The verse is measured up to
+        // 0.25 s before the second chorus: the chorus's pickup strum and bass at 71.9 s are the chorus arriving, at full
+        // loudness, and pulse fully as round 1's chorus entrances did.
         StyleTrack band = Folk(0);
         List<Frame> frames = Run(band.Samples);
         TrackSection chorus = band.Section("chorus1"), verse2 = band.Section("verse2");
         var (kicks, strong, _) = Kicks(frames, band.KickTimes.Where(k => k >= chorus.Start + 1 && k < chorus.End).ToList(), 0);
-        Section v = Measure(frames, verse2.Start + 1, verse2.End);
-        output.WriteLine($"chorus: {strong}/{kicks} kicks strong; verse2: {v.Pulses} pulses, mean {v.MeanPulse:F3}, max {v.MaxPulse:F3}");
+        Section v = Measure(frames, verse2.Start + 1, verse2.End - 0.25);
+        var (verseKicks, _, verseMean) = Kicks(frames, band.KickTimes.Where(k => k >= verse2.Start + 1 && k < verse2.End - 0.25).ToList(), 0);
+        output.WriteLine($"chorus: {strong}/{kicks} kicks strong; verse2: {v.Pulses} pulses, max {v.MaxPulse:F3}, {verseKicks} kicks at {verseMean:F3} on average");
         Assert.True(strong >= 0.9 * kicks, $"{strong}/{kicks}");
-        Assert.InRange(v.MaxPulse, 0, 0.45f);
+        Assert.InRange(verseMean, 0, 0.35);
+        Assert.InRange(v.MaxPulse, 0, 0.55f);
     }
 
     [Fact]
@@ -250,8 +299,8 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
         // The folk band with its soft kit, played after itself and a 2 s gap: the session floor (the last song's loud
         // parts, falling 0.2 dB/s) keeps its whispered first verse quiet within the listening session, so its kicks,
         // which stand out of the sparse verse, bounce less than when it is the first song after launch (measured mean
-        // pulse 0.57 against 0.82). A quieter master after a gap keeps its bounce: the same rap 10 dB down gives full
-        // pulses from 5 s in.
+        // pulse 0.53 against 0.97; round 1 0.57 against 0.82). A quieter master after a gap keeps its bounce: the same rap
+        // 10 dB down gives full pulses from 5 s in (23 of its 25 kicks to 20 s, mean 0.91).
         StyleTrack soft = Folk(-12);
         TrackSection verse1 = soft.Section("verse1");
         double first = Measure(Run(soft.Samples), verse1.Start + 1, verse1.End).MeanPulse;
@@ -275,7 +324,8 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     {
         // Doc 03 §5's volume invariance through the whole chain: the same song at −20 dB and at −35 dB gives the same
         // light after 2 s. Every window above near-silence counts as music (a whisper at −35 dB volume dips under the
-        // −60 dBFS IsSilent level between phrases; round 1 differed by 0.16 there).
+        // −60 dBFS IsSilent level between phrases; an early round 1 differed by 0.16 there). Measured now: 0.0000 at
+        // −20 dB, 0.0003 at −35 dB.
         List<Frame> loud = BalladRun.Value;
         foreach (float gain in new[] { 0.1f, 0.0178f })
         {
@@ -293,10 +343,13 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     {
         // A volume change shifts every loudness by the same dB, and within a second a song's own band balance moves by
         // more than that (SongLoudness), so the song reference has to turn over its memory before the light looks as it
-        // did. Measured, |ΔIntensity| last above 0.1 after the step: three rap tracks in a row 23.5 s after −20 dB
-        // (before: 5.2 s), 6.0 s after +20 dB (before: 15.3 s); two ballads in a row 16.9 s after −6 dB (before 0.7 s)
-        // and 13.6 s after +6 dB (before 1.5 s). Meanwhile a groove keeps its kicks: in the 10 s after −10 dB the rap's
-        // kicks average a pulse of 0.73 (round 1: 0.59), and after −20 dB the groove's floor (round 1: none).
+        // did. Measured, |ΔIntensity| last above 0.1 after the step: three rap tracks in a row 24.1 s after −20 dB
+        // (5b387fc: 5.2 s), at once after +20 dB (5b387fc: 15.3 s); two ballads in a row 23.1 s after −6 dB (5b387fc:
+        // 0.7 s) and 15.0 s after +6 dB (5b387fc: 1.5 s). Meanwhile a groove keeps its kicks: in the 10 s after −10 dB
+        // the rap's kicks average a pulse of 0.60, and after −20 dB the groove's floor (0.26). (Round 1 measured 0.73 after
+        // −10 dB: with SongLoudness.RangeDb 24 instead of 18, 10 dB moved the song position by 0.42 instead of 0.56, so
+        // the kicks looked less like a quiet passage. Round 2 narrowed the range for the calm songs' wave; the bound
+        // went from 0.6 to 0.5 with it.)
         foreach (var (song, copies, step, gainBefore, gainAfter, settle) in new[]
         {
             (Rap.Value, 3, 40.0, 1f, 0.1f, 30.0), (Rap.Value, 3, 40.0, 0.1f, 1f, 10.0),
@@ -315,7 +368,7 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
         }
         float[] three = Enumerable.Repeat(Rap.Value.Samples, 3).SelectMany(v => v).ToArray();
         var kickTimes = Enumerable.Range(0, 3).SelectMany(c => Rap.Value.KickTimes.Select(k => k + c * Rap.Value.Seconds)).Where(k => k >= 40 && k < 50).ToList();
-        foreach (var (gain, least) in new[] { (0.316f, 0.6), (0.1f, 0.15) })
+        foreach (var (gain, least) in new[] { (0.316f, 0.5), (0.1f, 0.15) })
         {
             List<Frame> frames = Run(three.Select((v, i) => i < 40 * Rate ? v : v * gain).ToArray());
             var (kicks, _, mean) = Kicks(frames, kickTimes, 0);
@@ -325,18 +378,33 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void ASmallVolumeNudgeLeavesTheLoudPartsAsBright()
+    public void ASmallVolumeNudgeKeepsTheBounceAndSettles()
     {
-        // Level keeps the top fifth of the song position at full height (AudioAnalyzer.LevelKnee), so turning the rap down
-        // 4 dB (its loud parts sit at a position of about 0.9) leaves the light within 0.05 of what it was. Measured 0.03.
-        float[] two = Enumerable.Repeat(Rap.Value.Samples, 2).SelectMany(v => v).ToArray();
-        List<Frame> reference = Run(two);
-        List<Frame> frames = Run(two.Select((v, i) => i < 40 * Rate ? v : v * 0.631f).ToArray());
+        // Round 1 kept the top fifth of the song position at full height (AudioAnalyzer.LevelKnee), so a 4 dB nudge left
+        // the rap's light within 0.05 of what it was. Round 2 dropped the knee: with it a calm song's Intensity stayed
+        // within 0.57–0.74 (Brightness 0.8) for 80 % of the song in round 2's corpus, the static light Maxwell saw. A
+        // nudge now moves the light like the music getting 4 dB quieter (the two can't be told apart, SongLoudness) until
+        // the song reference has turned over: measured, the largest Intensity difference is 0.115 and it stays under 0.05
+        // from 22.7 s after the step. The bounce doesn't care: the kicks of the next 10 s keep a mean pulse of 1.00 (full
+        // size reaches 8 dB under the song's loud parts).
+        float[] three = Enumerable.Repeat(Rap.Value.Samples, 3).SelectMany(v => v).ToArray();
+        List<Frame> reference = Run(three);
+        List<Frame> frames = Run(three.Select((v, i) => i < 40 * Rate ? v : v * 0.631f).ToArray());
         float worst = 0;
+        double settled = 0;
         for (int i = 0; i < frames.Count; i++)
-            if (frames[i].Time >= 42) worst = MathF.Max(worst, MathF.Abs(frames[i].Light.Intensity - reference[i].Light.Intensity));
-        output.WriteLine($"−4 dB: largest Intensity difference from 2 s after the step: {worst:F3}");
-        Assert.InRange(worst, 0, 0.05f);
+        {
+            if (frames[i].Time < 40) continue;
+            float difference = MathF.Abs(frames[i].Light.Intensity - reference[i].Light.Intensity);
+            worst = MathF.Max(worst, difference);
+            if (difference > 0.05f) settled = frames[i].Time - 40;
+        }
+        var kickTimes = Enumerable.Range(0, 3).SelectMany(c => Rap.Value.KickTimes.Select(k => k + c * Rap.Value.Seconds)).Where(k => k >= 40 && k < 50).ToList();
+        var (kicks, _, mean) = Kicks(frames, kickTimes, 0);
+        output.WriteLine($"−4 dB: largest Intensity difference {worst:F3}, under 0.05 from +{settled:F1} s; mean pulse {mean:F2} over the {kicks} kicks of the next 10 s");
+        Assert.InRange(worst, 0, 0.13f);
+        Assert.InRange(settled, 0, 30);
+        Assert.True(mean >= 0.9, $"{mean:F2}");
     }
 
     [Theory]
@@ -361,6 +429,7 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     public void SensitivityScalesThePulse()
     {
         // The Sensitivity setting still scales everything: the beat threshold and Level (doc 03 §2) and now each pulse.
+        // Measured now: a mean pulse of 0.50 at 0.5 and 1.00 at 2.
         foreach (var (sensitivity, low, high) in new[] { (0.5f, 0.4, 0.6), (2f, 0.95, 1.0) })
         {
             List<Frame> frames = Run(Rap.Value.Samples, sensitivity);
@@ -425,7 +494,10 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
 
     // Beats, the pulses (local peaks of Pulse above 0.05) and the largest, and the brightness the shader shows
     // (Intensity × (1 + 0.25 Pulse), Glow.hlsl): its mean, the share of its variance above 3 Hz, and the 95th percentile
-    // of its slope per second.
+    // of its slope per second. The share comes from a Hann-windowed DFT of the section, as the corpus metrics' Welch
+    // estimate does: a rectangular one treats the section as a loop, so a light that ends the section higher than it
+    // started (the wave rising into a chorus) shows a jump at the seam whose spectrum reaches far above 3 Hz (round 2:
+    // 3 % "above 3 Hz" on a section whose steepest frame-to-frame step was 0.003).
     private static Section Measure(List<Frame> frames, double from, double to)
     {
         var f = frames.Where(x => x.Time >= from && x.Time < to).ToList();
@@ -435,13 +507,14 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
         double[] shown = f.Select(x => (double)x.Light.Intensity * (1 + 0.25 * x.Light.Pulse)).ToArray();
         double mean = shown.Average(), total = 0, high = 0;
         int n = shown.Length;
+        double[] windowed = shown.Select((v, i) => (v - mean) * (0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (n - 1)))).ToArray();
         for (int k = 1; k <= n / 2; k++)
         {
             double re = 0, im = 0, w = 2 * Math.PI * k / n;
             for (int i = 0; i < n; i++)
             {
-                re += (shown[i] - mean) * Math.Cos(w * i);
-                im -= (shown[i] - mean) * Math.Sin(w * i);
+                re += windowed[i] * Math.Cos(w * i);
+                im -= windowed[i] * Math.Sin(w * i);
             }
             total += re * re + im * im;
             if (k * 60.0 / n > 3) high += re * re + im * im;

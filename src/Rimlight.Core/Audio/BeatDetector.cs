@@ -23,6 +23,28 @@ internal sealed class BeatDetector
     // over 5 minutes.
     internal const float MedianOnsetRatio = 10f;
 
+    // Maxwell's feedback, round 2: on real rap and EDM the detector fired on only 69–72 % of the kicks (a corpus of real
+    // recordings with independently annotated kicks). 11–38 % stayed under the threshold at 60–90 % of it, and there
+    // the median guard set it: an 808's sustain, the bass and the rapper's voice all move the 30–150 Hz flux, so ten times
+    // its median is above the kicks. Another 3–14 % fell inside the refractory time, after a double kick or a weaker onset.
+    // So, internal exceptions to doc 03's rule (its defaults, the contract's, are unchanged):
+    //   - With time-domain evidence of a kick (KickEnvelope: the kick band rose by at least KickEvidenceDb next to the
+    //     music above it), the median guard is LooseOnsetRatio instead. White noise has none (its kick band sits about
+    //     25 dB under the rest), so it still never fires.
+    //   - Inside BeatRefractorySeconds a beat may fire again for a new attack: RetriggerSeconds after the last beat if
+    //     the kick band fell to half its level since then and rose again with RetriggerEvidenceDb of evidence (a trap
+    //     double kick, 90–130 ms apart); or SupersedeSeconds after it if the flux is SupersedeRatio times the last beat's
+    //     after dipping under SupersedeDip of it (the kick after a weaker onset that fired just before it).
+    // Measured on the corpus: kicks the detector fires on, rap 72 → 88 %, EDM 69 → 89 %, pop 96 → 97 %, calm songs where
+    // drums come in 94 → 98 %.
+    internal const float LooseOnsetRatio = 5f;
+    internal const float KickEvidenceDb = -4f;
+    internal const float RetriggerSeconds = 0.09f;
+    internal const float RetriggerEvidenceDb = 3f;
+    internal const float SupersedeSeconds = 0.05f;
+    internal const float SupersedeRatio = 1.3f;
+    internal const float SupersedeDip = 0.5f;
+
     // The adaptive threshold needs some history before it means anything (a quarter of FluxHistorySeconds).
     private const float WarmUpFraction = 0.25f;
 
@@ -40,7 +62,7 @@ internal sealed class BeatDetector
     private readonly float[] sortedIntervals = new float[IntervalCount];
     private int fluxHead, fluxCount, intervalHead, intervalCount, seededStart, seededEnd;
     private bool hasBeat, hasTempoBeat;
-    private float sinceBeat, sinceTempoBeat, sinceFlux, lastThreshold, kickLevel;
+    private float sinceBeat, sinceTempoBeat, sinceFlux, lastThreshold, kickLevel, lastBeatFlux, lowestSinceBeat;
 
     public BeatDetector(int spectrumLength) => previous = new float[spectrumLength];
 
@@ -54,7 +76,10 @@ internal sealed class BeatDetector
     // spectrumChanged: false when no new samples arrived; such frames carry no flux information, but their time
     // still counts toward the history window, the refractory period and BPM staleness.
     // windowRms: time-domain RMS of the window the magnitudes come from.
-    public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning, float windowRms)
+    // kickEvidenceDb: KickEnvelope's prominence at this step (−∞: none). freshAttack: the kick band fell to half its level
+    // at the last beat since that beat (a new attack can follow).
+    public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning, float windowRms,
+        float kickEvidenceDb = float.NegativeInfinity, bool freshAttack = false)
     {
         sinceBeat += dtSeconds;
         sinceTempoBeat += dtSeconds;
@@ -106,15 +131,23 @@ internal sealed class BeatDetector
         float stdDev = used > 1 ? MathF.Sqrt(MathF.Max(0, sumSquares / used - mean * mean)) : 0;
         // The effective threshold, as the debug visualizer plots it: the largest of doc 03's mean + k·σ, the median
         // onset guard and the level-relative MinFlux. Quickselect keeps the median cheap (≈ 60 values per step).
-        lastThreshold = MathF.Max(
-            MathF.Max(mean + tuning.FluxThresholdMultiplier * relax * stdDev, Median(used) * (1 + (MedianOnsetRatio - 1) * relax)),
-            tuning.MinFlux * windowRms);
+        float spread = mean + tuning.FluxThresholdMultiplier * relax * stdDev, median = Median(used), floor = tuning.MinFlux * windowRms;
+        lastThreshold = MathF.Max(MathF.Max(spread, median * (1 + (MedianOnsetRatio - 1) * relax)), floor);
+        // The threshold for a step with evidence of a kick (above): the same with the lower median guard.
+        float loose = MathF.Max(MathF.Max(spread, median * (1 + (LooseOnsetRatio - 1) * relax)), floor);
 
         bool warm = covered >= tuning.FluxHistorySeconds * WarmUpFraction || fluxCount == MaxHistory;
-        bool isBeat = warm
-            && flux > lastThreshold
-            && windowRms > AudioFrontEnd.HoldRms(tuning)
-            && (!hasBeat || sinceBeat >= tuning.BeatRefractorySeconds);
+        lowestSinceBeat = MathF.Min(lowestSinceBeat, flux);
+        bool isBeat = false;
+        if (warm && windowRms > AudioFrontEnd.HoldRms(tuning))
+        {
+            if (!hasBeat || sinceBeat >= tuning.BeatRefractorySeconds)
+                isBeat = flux > lastThreshold || (flux > loose && kickEvidenceDb >= KickEvidenceDb);
+            else
+                isBeat = flux > loose
+                    && ((sinceBeat >= RetriggerSeconds && freshAttack && kickEvidenceDb >= RetriggerEvidenceDb)
+                        || (sinceBeat >= SupersedeSeconds && flux > SupersedeRatio * lastBeatFlux && lowestSinceBeat < SupersedeDip * lastBeatFlux));
+        }
 
         fluxValues[fluxHead] = flux;
         fluxDurations[fluxHead] = entryDuration;
@@ -125,6 +158,7 @@ internal sealed class BeatDetector
         {
             hasBeat = true;
             sinceBeat = 0;
+            lastBeatFlux = lowestSinceBeat = flux;
         }
         return new BeatResult(isBeat, flux, lastThreshold, kickLevel);
     }
@@ -165,7 +199,7 @@ internal sealed class BeatDetector
         Array.Clear(previous);
         fluxHead = fluxCount = intervalHead = intervalCount = seededStart = seededEnd = 0;
         hasBeat = hasTempoBeat = false;
-        sinceBeat = sinceTempoBeat = sinceFlux = lastThreshold = kickLevel = 0;
+        sinceBeat = sinceTempoBeat = sinceFlux = lastThreshold = kickLevel = lastBeatFlux = lowestSinceBeat = 0;
         EstimatedBpm = 0;
     }
 

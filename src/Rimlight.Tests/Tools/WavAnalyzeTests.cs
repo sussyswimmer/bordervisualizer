@@ -69,9 +69,13 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.InRange(rows.Length - 1, 1190, 1210);
         string[][] cells = rows[1..].Select(r => r.Split(',')).ToArray();
         Assert.All(cells, c => Assert.Equal(8, c.Length));
-        // The Beat pulse is exactly 1 on a beat frame once the groove is established: since Maxwell's feedback round 1
-        // the first second only listens and the drive needs two kicks, so the first three kicks pulse less or not at all.
-        Assert.InRange(cells.Count(c => c[3] == "1.0000"), beats - 3, beats);
+        // The Beat pulse is full on a beat frame once the groove is established: since Maxwell's feedback round 1 the first
+        // second only listens and the drive needs two kicks, so the first three kicks pulse less or not at all. Since
+        // round 2 a kick's pulse is graded as it fires from how clearly it stands out, so a clear kick under the melody
+        // reads 0.96–1 rather than exactly 1 (measured: 38 of 39 beats at 0.96 or more, 28 at exactly 1).
+        double[] pulse = cells.Select(c => double.Parse(c[3], CultureInfo.InvariantCulture)).ToArray();
+        int full = Enumerable.Range(1, pulse.Length - 1).Count(i => pulse[i] > pulse[i - 1] && pulse[i] >= 0.95);
+        Assert.InRange(full, beats - 3, beats);
         Assert.All(cells, c => Assert.Equal("0", c[4]));               // music throughout: never silent
         Assert.InRange(double.Parse(cells[^1][7], CultureInfo.InvariantCulture), 118, 122);
 
