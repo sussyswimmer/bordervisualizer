@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Rimlight.AudioTools;
 using Rimlight.Core;
+using Rimlight.Core.Audio;
 using Rimlight.WavAnalyze;
 using Xunit;
 using Xunit.Abstractions;
@@ -69,10 +70,12 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.InRange(rows.Length - 1, 1190, 1210);
         string[][] cells = rows[1..].Select(r => r.Split(',')).ToArray();
         Assert.All(cells, c => Assert.Equal(8, c.Length));
-        // The Beat pulse is full on a beat frame once the groove is established: since Maxwell's feedback round 1 the first
-        // second only listens and the drive needs two kicks, so the first three kicks pulse less or not at all. Since
-        // round 2 a kick's pulse is graded as it fires from how clearly it stands out, so a clear kick under the melody
-        // reads 0.96–1 rather than exactly 1 (measured: 38 of 39 beats at 0.96 or more, 28 at exactly 1).
+        // The Beat pulse is full on a beat frame once the groove is established: since Maxwell's feedback round 1 the
+        // first second only listens and the drive needs two kicks, so the first three kicks pulse less or not at all.
+        // Since round 2 a kick's pulse is graded as it fires from how clearly it stands out (measured then: 38 of 39
+        // beats at 0.96 or more, 28 at exactly 1). Measured now: the 36 beats after the first three, all at exactly 1.
+        // The first is in the warm-up; the next two come before the groove, where a kick grades itself only in music,
+        // and the onset contrast (BeatDetector.IsMusic) reaches music on this mix 2 s in.
         double[] pulse = cells.Select(c => double.Parse(c[3], CultureInfo.InvariantCulture)).ToArray();
         int full = Enumerable.Range(1, pulse.Length - 1).Count(i => pulse[i] > pulse[i - 1] && pulse[i] >= 0.95);
         Assert.InRange(full, beats - 3, beats);
@@ -106,11 +109,12 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         string[] rows = File.ReadAllLines(Path.Combine(directory, "mix.engine.csv"));
         Assert.Equal(EngineCsv.Header, rows[0]);
         string[] header = rows[0].Split(',');
-        Assert.Equal(24, header.Length);
+        Assert.Equal(30, header.Length);                    // round 2's fix added KickEnvelope's evidence, the onset
+                                                            // contrast, the weight, the pump and the groove's memory
         double[][] cells = rows[1..].Select(r => r.Split(',').Select(c => double.Parse(c, CultureInfo.InvariantCulture)).ToArray()).ToArray();
         int Column(string name) => Array.IndexOf(header, name);
         Assert.InRange(cells.Length, 12 * 60 - 20, 12 * 60 + 20);
-        Assert.All(cells, c => Assert.Equal(24, c.Length));
+        Assert.All(cells, c => Assert.Equal(30, c.Length));
         Assert.All(cells, c => Assert.Equal(0, c[Column("samples")] % 480));                 // whole 10 ms packets
         Assert.Contains(cells, c => c[Column("samples")] == 480);                            // one packet, or two:
         Assert.Contains(cells, c => c[Column("samples")] == 960);                            // a frame is 15-18 ms
@@ -126,6 +130,13 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.All(cells, c => Assert.InRange(c[Column("position")], 0, 1));
         Assert.InRange(cells.Max(c => c[Column("kickLike")]), 0.9, 1);
         Assert.InRange(cells[^1][Column("referenceDb")], -60, 0);
+        // Why a beat fired and how heavy the groove is (round 2's review: the replay couldn't show either).
+        Assert.Contains(cells, c => c[Column("prominenceDb")] >= BeatDetector.KickEvidenceDb && c[Column("riseDb")] >= 12);
+        Assert.InRange(cells[^1][Column("onsetContrast")], BeatDetector.MusicContrast, 10);
+        Assert.InRange(cells[^1][Column("weight")], 0.9, 1);
+        Assert.All(cells, c => Assert.InRange(c[Column("pumpDip")], 0, AudioAnalyzer.PumpDepth));
+        Assert.Contains(cells, c => c[Column("pumpDip")] > 0.1);
+        Assert.InRange(cells[^1][Column("memory")], 0.9, 1);
 
         // The same feed through the analyzer alone gives the same analyzer columns, bit for bit as printed.
         string plain = Path.Combine(directory, "plain.csv");
@@ -262,6 +273,9 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(120, BeatStats.Tempo([0, 0.5, 1, 1.5, 2.01, 2.5]), 6);
         Assert.Equal(120, BeatStats.Tempo([0, 0.5, 1, 6, 6.5, 7]), 6);   // the 5 s pause is not tempo
         Assert.Equal(0, BeatStats.Tempo([1]));
+        // Intervals split far apart leave none near their median (1.05 s): the median it is, as in the analyzer. Before,
+        // this threw, and --engine wrote no CSV for beats at random (pink noise at −30 dBFS).
+        Assert.Equal(60 / 1.05, BeatStats.Tempo([0, 0.3, 0.6, 2.4, 4.2]), 6);
 
         // Beats seen at steady 60 fps frame times: 126 BPM intervals are 28 or 29 frames. A plain median reads 124.1;
         // the mean of the intervals near it reads the true tempo. Missed and extra beats are left out of the mean.

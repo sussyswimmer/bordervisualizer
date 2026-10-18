@@ -31,10 +31,20 @@ internal readonly record struct EngineFrame(double Time, int Samples, AudioFeatu
 /// <param name="KickLike">BeatCharacter.LastKickLike: the latest onset's kick-likeness.</param>
 /// <param name="Grade">BeatCharacter.LastGrade: the latest onset's grade so far.</param>
 /// <param name="LevelTarget">AudioFrontEnd.LevelTarget: doc 03's weighted auto-gain bands, before any envelope.</param>
+/// <param name="ProminenceDb">KickEnvelope's prominence at the frame's last step: the kick band's rise over the music
+/// above the bass band (BeatDetector's looser median guard needs −4 dB).</param>
+/// <param name="RiseDb">KickEnvelope's rise at the frame's last step: the kick band over its own level just
+/// before.</param>
+/// <param name="OnsetContrast">BeatDetector.OnsetContrast: music (MusicContrast, 0.23, and up) or a steady noise.</param>
+/// <param name="Weight">BeatCharacter.Weight: 0 a light groove (a folk or rock kit) .. 1 a heavy one (rap, EDM).</param>
+/// <param name="PumpDip">How much of Level the groove's pump takes away (0 .. AudioAnalyzer.PumpDepth).</param>
+/// <param name="Memory">BeatCharacter.Memory: the groove the song had, which comes back after a breakdown.</param>
 internal readonly record struct DynamicsValues(float Position, float LoudnessDb, float ReferenceDb, float Punch, float Drive,
-    float KickLike, float Grade, float LevelTarget)
+    float KickLike, float Grade, float LevelTarget, float ProminenceDb, float RiseDb, float OnsetContrast, float Weight, float PumpDip,
+    float Memory)
 {
-    public static readonly DynamicsValues None = new(float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN);
+    public static readonly DynamicsValues None = new(float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN,
+        float.NaN, float.NaN, float.NaN, float.NaN, float.NaN, float.NaN);
 }
 
 /// <summary>
@@ -105,6 +115,7 @@ internal static class EngineReplay
     {
         private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private readonly Func<float>? position, loudnessDb, referenceDb, punch, drive, kickLike, grade, levelTarget;
+        private readonly Func<float>? prominenceDb, riseDb, onsetContrast, weight, pumpDip, memory;
 
         public DynamicsProbe(IAudioAnalyzer analyzer)
         {
@@ -119,10 +130,17 @@ internal static class EngineReplay
             kickLike = Getter(character, "LastKickLike");
             grade = Getter(character, "LastGrade");
             levelTarget = Getter(frontEnd, "LevelTarget");
+            prominenceDb = Getter(analyzer, "KickProminenceDb");
+            riseDb = Getter(analyzer, "KickRiseDb");
+            onsetContrast = Getter(analyzer, "OnsetContrast");
+            weight = Getter(character, "Weight");
+            pumpDip = Getter(analyzer, "PumpDepthNow");
+            memory = Getter(character, "Memory");
         }
 
         public DynamicsValues Read() => new(Value(position), Value(loudnessDb), Value(referenceDb), Value(punch), Value(drive),
-            Value(kickLike), Value(grade), Value(levelTarget));
+            Value(kickLike), Value(grade), Value(levelTarget), Value(prominenceDb), Value(riseDb), Value(onsetContrast), Value(weight),
+            Value(pumpDip), Value(memory));
 
         private static float Value(Func<float>? getter) => getter is null ? float.NaN : getter();
 
@@ -193,9 +211,9 @@ internal sealed class LightSummary
 /// <summary>Writes an engine replay as CSV, one row per render frame.</summary>
 internal static class EngineCsv
 {
-    /// <summary>The header row. The last eight columns are the internal dynamics stages, empty where the build has none.</summary>
+    /// <summary>The header row. The last fourteen columns are the internal dynamics stages, empty where the build has none.</summary>
     public const string Header = "time,samples,level,bass,beat,isSilent,beatCount,fired,flux,threshold,bpm,intensity,pulse,spread,visibility,phase," +
-        "position,loudnessDb,referenceDb,punch,drive,kickLike,grade,levelTarget";
+        "position,loudnessDb,referenceDb,punch,drive,kickLike,grade,levelTarget,prominenceDb,riseDb,onsetContrast,weight,pumpDip,memory";
 
     /// <summary>Writes the frames as they come, with invariant-culture numbers.</summary>
     /// <param name="writer">The destination.</param>
@@ -234,6 +252,12 @@ internal static class EngineCsv
             Optional(writer, d.KickLike, "F4");
             Optional(writer, d.Grade, "F4");
             Optional(writer, d.LevelTarget, "F4");
+            Optional(writer, d.ProminenceDb, "F2");
+            Optional(writer, d.RiseDb, "F2");
+            Optional(writer, d.OnsetContrast, "F4");
+            Optional(writer, d.Weight, "F4");
+            Optional(writer, d.PumpDip, "F4");
+            Optional(writer, d.Memory, "F4");
             writer.WriteLine();
             onFrame?.Invoke(f);
         }

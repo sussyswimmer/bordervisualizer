@@ -52,6 +52,57 @@ internal static class SyntheticAudio
         return samples;
     }
 
+    // Brown noise at an RMS of rms: its power falls 6 dB an octave above cornerHz (a leaky integrator of white noise, as
+    // noise generators make it). With swellSeconds it swells and ebbs like waves on a shore, between 0.1 and 1 of that
+    // level over that period.
+    public static float[] BrownNoise(int sampleRate, float seconds, float rms, float cornerHz, int seed = 15, float swellSeconds = 0)
+    {
+        var random = new Random(seed);
+        var samples = new float[(int)(sampleRate * seconds)];
+        double keep = Math.Exp(-2 * Math.PI * cornerHz / sampleRate), y = 0, squares = 0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            y = keep * y + (1 - keep) * (random.NextDouble() * 2 - 1);
+            samples[i] = (float)y;
+            squares += y * y;
+        }
+        return Scaled(samples, rms, squares, sampleRate, swellSeconds);
+    }
+
+    // Pink noise at an RMS of rms: power falling 3 dB an octave from about 10 Hz up (Paul Kellet's filter of white noise).
+    public static float[] PinkNoise(int sampleRate, float seconds, float rms, int seed = 16)
+    {
+        var random = new Random(seed);
+        var samples = new float[(int)(sampleRate * seconds)];
+        double b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, squares = 0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            double white = random.NextDouble() * 2 - 1;
+            b0 = 0.99886 * b0 + white * 0.0555179;
+            b1 = 0.99332 * b1 + white * 0.0750759;
+            b2 = 0.96900 * b2 + white * 0.1538520;
+            b3 = 0.86650 * b3 + white * 0.3104856;
+            b4 = 0.55000 * b4 + white * 0.5329522;
+            b5 = -0.7616 * b5 - white * 0.0168980;
+            double pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+            b6 = white * 0.115926;
+            samples[i] = (float)pink;
+            squares += pink * pink;
+        }
+        return Scaled(samples, rms, squares, sampleRate, 0);
+    }
+
+    private static float[] Scaled(float[] samples, float rms, double squares, int sampleRate, float swellSeconds)
+    {
+        float scale = rms / (float)Math.Sqrt(squares / samples.Length);
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float swell = swellSeconds > 0 ? 0.55f + 0.45f * MathF.Sin(2 * MathF.PI * i / sampleRate / swellSeconds) : 1;
+            samples[i] *= scale * swell;
+        }
+        return samples;
+    }
+
     // Feeds a buffer through an analyzer like the render loop does and returns beat times (seconds, frame end).
     // Frame times jitter by ±jitter. Audio arrives continuously, or in whole packets of packetSeconds (WASAPI
     // delivers 10–20 ms packets; Bluetooth and some drivers deliver larger ones), so frames can be empty.

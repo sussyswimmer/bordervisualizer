@@ -49,6 +49,11 @@ internal static class BandAnalyzer
         return (bin, bin + 1);
     }
 
+    // The music above the bass band, [start, end) over the fixed loudness bands (150 Hz to 12 kHz inclusive), for the beat
+    // detector's onset contrast.
+    internal static (int Start, int End) UpperBins(int spectrumLength, float binHz) =>
+        (Bins(spectrumLength, binHz, LoudnessBassMaxHz, LoudnessMidMaxHz, false).Start, Bins(spectrumLength, binHz, LoudnessMidMaxHz, LoudnessHighMaxHz, true).End);
+
     // Bass bins [start, end), shared with the beat detector. A bass band narrower than one bin (a small WindowSize,
     // or narrow live-tuned edges) would contain no bin and silence Bass and beats, so it falls back to the bin just
     // below its center: never DC, and never the Mid band's first bin. A band above Nyquist stays empty.

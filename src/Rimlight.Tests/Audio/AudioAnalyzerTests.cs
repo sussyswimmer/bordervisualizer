@@ -133,6 +133,94 @@ public sealed class AudioAnalyzerTests(ITestOutputHelper output)
         Assert.Empty(beats);
     }
 
+    [Theory]
+    [InlineData("pink", -20f)]
+    [InlineData("pink", -30f)]
+    [InlineData("brown", -12f)]
+    [InlineData("brown", -20f)]
+    [InlineData("brown", -30f)]
+    [InlineData("brown40", -20f)]
+    public void NoBeatsOnPinkOrBrownNoise(string noise, float dbfs)
+    {
+        // Sleep and focus sounds. In brown noise (6 dB less power an octave above a 20 Hz or 40 Hz corner) the kick band
+        // carries most of the power and its envelope swings by itself; round 2 fired 24–37 beats a minute on it and 12–22
+        // on pink noise, through the looser median guard (round 2's review; round 1: none). That guard now needs music
+        // (BeatDetector.OnsetContrast), and doc 03's own median guard never fires on them either.
+        float rms = MathF.Pow(10, dbfs / 20);
+        float[] samples = noise switch
+        {
+            "pink" => SyntheticAudio.PinkNoise(48000, 60, rms),
+            "brown" => SyntheticAudio.BrownNoise(48000, 60, rms, 20),
+            _ => SyntheticAudio.BrownNoise(48000, 60, rms, 40),
+        };
+        var analyzer = new AudioAnalyzer();
+        float contrast = 0;
+        var beats = SyntheticAudio.Run(analyzer, samples, 48000, jitter: 0.1f, packetSeconds: 0.01f, afterFrame: _ => contrast = MathF.Max(contrast, analyzer.OnsetContrast));
+        output.WriteLine($"{noise} at {dbfs} dBFS: {beats.Count} beats, onset contrast at most {contrast:F3}");
+        Assert.Empty(beats);
+        Assert.InRange(contrast, 0, BeatDetector.MusicContrast - 0.05f);
+    }
+
+    [Theory]
+    [InlineData(0.18f)]
+    [InlineData(0.4f)]
+    public void TheTunedBeatSpacingHoldsOnMusic(float spacing)
+    {
+        // AudioTuning.BeatRefractorySeconds, the debug visualizer's "Beat spacing": the shortest time between two
+        // beats. Round 2 let a beat fire again inside it, and a spacing of 0.4 s still let beats 51 ms apart through
+        // (its review). Kicks 0.3 s apart (200 BPM): every one fires at the default spacing, every other one at 0.4 s.
+        // Beat times here are frame times, so two beats can look up to a frame closer than the steps they fired on.
+        var analyzer = new AudioAnalyzer(new AudioTuning { BeatRefractorySeconds = spacing });
+        var beats = SyntheticAudio.Run(analyzer, SyntheticAudio.KickTrack(48000, 20, 200, 0.8f, 0.2f), 48000, packetSeconds: 0.01f);
+        float closest = beats.Zip(beats.Skip(1), (a, b) => b - a).Min();
+        int expected = (int)(20 / (0.3f * MathF.Ceiling(spacing / 0.3f)));
+        output.WriteLine($"spacing {spacing} s: {beats.Count} beats (about {expected} expected), the closest {closest:F3} s apart");
+        Assert.InRange(beats.Count, expected - 3, expected + 1);
+        Assert.True(closest >= spacing - 1f / 60 - 1e-3f, $"{closest:F3}");
+    }
+
+    [Fact]
+    public void TheWaveIsSlowWithoutDrumsAndQuickInAGroove()
+    {
+        // Level follows the song position through an envelope run twice: with no drums at 1 s / 1.6 s (from doc 03's
+        // 0.03 s / 0.25 s), the second pass at half of that, so the light swells and eases with the phrases; in a heavy
+        // groove at 0.15 s / 0.8 s. Round 2's review: setting the wave's factors to 1, the groove's to 1, or dropping the
+        // second pass left every test green. Measured on a 6 dB step down at 20 s and back up at 40 s (AudioAnalyzer.Wave,
+        // Level before the pump), 10 → 90 % of the way, and how far it got in the first half second: white noise
+        // 4.1 s down (2 % in 0.5 s) and 2.5 s up (9 %); a kick groove 1.7 s down and 0.6 s up. Each bound fails one of
+        // those changes: the wave at the groove's speed comes down in about 1.6 s, one pass alone covers 16–24 % in half a
+        // second, and the groove at doc 03's own time constants comes down in about 0.9 s.
+        static (double Down, double EarlyDown, double Up, double EarlyUp) Step(float[] samples)
+        {
+            const int rate = 48000;
+            for (int i = 20 * rate; i < 40 * rate; i++) samples[i] *= 0.5f;
+            var analyzer = new AudioAnalyzer();
+            var wave = new List<(double T, float V)>();
+            SyntheticAudio.Run(analyzer, samples, rate, packetSeconds: 0.01f, afterFrame: t => wave.Add((t, analyzer.Wave)));
+            float At(double t) => wave.Last(x => x.T <= t).V;
+            double Crossing(double after, float from, float to, float share)
+            {
+                float level = from + share * (to - from);
+                return wave.First(x => x.T > after && (to < from ? x.V <= level : x.V >= level)).T;
+            }
+            // The step's far end: where the light settles, before the song reference starts to follow the new level.
+            float high = At(20), low = wave.Where(x => x.T > 20 && x.T < 32).Min(x => x.V);
+            float start = At(40), top = wave.Where(x => x.T > 40 && x.T < 52).Max(x => x.V);
+            return (Crossing(20, high, low, 0.9f) - Crossing(20, high, low, 0.1f), (high - At(20.5)) / (high - low),
+                Crossing(40, start, top, 0.9f) - Crossing(40, start, top, 0.1f), (At(40.5) - start) / (top - start));
+        }
+        var calm = Step(SyntheticAudio.WhiteNoise(48000, 60, 0.2f));
+        var groove = Step(SyntheticAudio.KickTrack(48000, 60, 120, 0.8f, 0.2f));
+        output.WriteLine($"no drums: down {calm.Down:F2} s ({calm.EarlyDown:P0} in 0.5 s), up {calm.Up:F2} s ({calm.EarlyUp:P0}); " +
+            $"a groove: down {groove.Down:F2} s, up {groove.Up:F2} s");
+        Assert.InRange(calm.Down, 2.8, 6);
+        Assert.InRange(calm.EarlyDown, 0, 0.08);
+        Assert.InRange(calm.Up, 1.8, 4);
+        Assert.InRange(calm.EarlyUp, 0, 0.15);
+        Assert.InRange(groove.Down, 1.2, 3);
+        Assert.InRange(groove.Up, 0.1, 0.8);
+    }
+
     // Render loops from 30 to 240 fps, and packets from continuous to 50 ms (Bluetooth, some drivers). Frames can be
     // empty between packets. New audio is analyzed in steps of at most one 60 fps frame, so flux stays comparable.
     [Theory]

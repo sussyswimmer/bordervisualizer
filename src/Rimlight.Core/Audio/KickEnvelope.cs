@@ -15,9 +15,10 @@ namespace Rimlight.Core.Audio;
 // level just before (Rise) and how large that rise is next to the music above the bass band (Prominence). Both are
 // ratios, so they don't depend on the playback volume. Measured on the corpus at the step a beat fires (kicks against the
 // other bass-band onsets the detector fires on): Prominence separates the kicks of rap, EDM and folk kits (AUC 0.66–0.93
-// per class), where the FFT kick band at the same step reads 0.62–0.84. Filters run in double precision (the poles of a
-// 30 Hz high-pass at 48 kHz sit 0.004 from the unit circle) and flush to zero once nothing is left (no subnormal
-// numbers in long silences). About 25 multiply-adds a sample; all storage is allocated up front.
+// per class), where the FFT kick band at the same step reads 0.62–0.84. Each Process call also reports the mean power of
+// both bands over its samples (BeatCharacter's weight: how heavy the music's low end is). Filters run in double precision
+// (the poles of a 30 Hz high-pass at 48 kHz sit 0.004 from the unit circle) and flush to zero once nothing is left (no
+// subnormal numbers in long silences). About 25 multiply-adds a sample; all storage is allocated up front.
 internal sealed class KickEnvelope
 {
     internal const float KickLowHz = 30f;
@@ -38,6 +39,7 @@ internal sealed class KickEnvelope
     private double subPower, upperPower, subKeep, upperKeep;
     private int blockLength, blockFill, head, stored;
     private float partialMax, partialMin = float.MaxValue;
+    private float stepSub, stepUpper;              // the bands' mean powers over the latest Process call's samples
 
     public KickEnvelope(int sampleRate = 48000) => Configure(sampleRate);
 
@@ -59,11 +61,14 @@ internal sealed class KickEnvelope
     // here they count as 0.
     public void Process(ReadOnlySpan<float> samples)
     {
+        double subSum = 0, upperSum = 0;
         for (int i = 0; i < samples.Length; i++)
         {
             double x = float.IsFinite(samples[i]) ? Math.Clamp(samples[i], -16f, 16f) : 0;
             double sub = high.Next(low2.Next(low1.Next(x)));
             double up = upper.Next(x);
+            subSum += sub * sub;
+            upperSum += up * up;
             subPower = sub * sub + (subPower - sub * sub) * subKeep;
             upperPower = up * up + (upperPower - up * up) * upperKeep;
             float p = (float)subPower;
@@ -71,6 +76,8 @@ internal sealed class KickEnvelope
             if (p < partialMin) partialMin = p;
             if (++blockFill == blockLength) Push();
         }
+        stepSub = samples.Length > 0 && subSum / samples.Length >= Flush ? (float)(subSum / samples.Length) : 0;
+        stepUpper = samples.Length > 0 && upperSum / samples.Length >= Flush ? (float)(upperSum / samples.Length) : 0;
         low1.Flush(Flush);
         low2.Flush(Flush);
         high.Flush(Flush);
@@ -94,7 +101,7 @@ internal sealed class KickEnvelope
         {
             float peak = Peak, floor = Base;
             float rise = MathF.Max(peak - floor, 1e-12f);
-            return new KickEvidence(20 * MathF.Log10(rise / Upper), 20 * MathF.Log10(peak / floor), peak);
+            return new KickEvidence(20 * MathF.Log10(rise / Upper), 20 * MathF.Log10(peak / floor), peak, stepSub, stepUpper);
         }
     }
 
@@ -110,6 +117,7 @@ internal sealed class KickEnvelope
         head = stored = blockFill = 0;
         partialMax = 0;
         partialMin = float.MaxValue;
+        stepSub = stepUpper = 0;
     }
 
     private const int PeakBlocks = (int)(PeakSeconds * BlocksPerSecond + 0.5f);
@@ -191,7 +199,9 @@ internal sealed class KickEnvelope
 
 // KickEnvelope's reading at one analysis step. ProminenceDb: the kick band's rise over the music above the bass band.
 // RiseDb: over its own level just before. SubPeak: the kick band's amplitude now (BeatCharacter's pulse size).
-internal readonly record struct KickEvidence(float ProminenceDb, float RiseDb, float SubPeak)
+// SubPower, UpperPower: the mean power of the kick band and of the music above the bass band over the step's samples
+// (BeatCharacter's weight), 0 before any.
+internal readonly record struct KickEvidence(float ProminenceDb, float RiseDb, float SubPeak, float SubPower = 0, float UpperPower = 0)
 {
     // No evidence of anything (a property, not a static field: Core keeps no static state, InstanceIndependenceTests).
     public static KickEvidence None => new(float.NegativeInfinity, 0, 0);

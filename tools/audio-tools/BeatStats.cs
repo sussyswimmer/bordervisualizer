@@ -39,7 +39,10 @@ public static class BeatStats
         }
         if (intervals.Count == 0) return 0;
         double median = Median(intervals);
-        return 60 / intervals.Where(i => Math.Abs(i - median) <= InlierTolerance * median).Average();
+        // An even count split far apart (beats at random, as on noise) can leave no interval near the median: keep the
+        // median, as the analyzer does (BeatDetector.AddInterval), instead of averaging nothing.
+        double[] inliers = intervals.Where(i => Math.Abs(i - median) <= InlierTolerance * median).ToArray();
+        return 60 / (inliers.Length > 0 ? inliers.Average() : median);
     }
 
     /// <summary>Matches detected beats to the kicks that caused them.</summary>
