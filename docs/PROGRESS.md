@@ -695,7 +695,7 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with NativeAOT. Milestones M0–M8 are in 10-MACOS §7.
 
 - [x] Design: docs/10-MACOS.md, researched against Apple's and Microsoft's documentation on 2026-10-19; HANDOFF H-029 (Lane A items) and H-030 (Maxwell's decisions) — branch `claude/mac-m0-design` — effort: M
-- [ ] M0 skeleton + macOS CI job
+- [x] M0 skeleton + macOS CI job: `src/Rimlight.Native` (C ABI: ABI version, name, version, settings load and save), its tests, the Swift package (`mac/`), `mac/build.sh` (universal, ad-hoc signed, zipped), the `macos` job in ci.yml — branch `claude/mac-m0-skeleton` — effort: M (notes below; Mac manual test pending)
 - [ ] M1 glow on every display with the demo beat
 - [ ] M2 system audio → Core → glow
 - [ ] M3 menu bar, Settings, saved settings
@@ -704,6 +704,21 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [ ] M6 hotkey, login item, single instance
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M0 notes
+
+- **Answers:** Maxwell said "Just build it, no app developer": Swift (Q0) and no Apple Developer account (Q2). The app is signed ad hoc: no hardened runtime yet, since that needs a Developer ID to be useful.
+- **Verified on Linux:**
+  - `dotnet test src/Rimlight.Native.Tests -c Release`: 11 passed.
+  - A NativeAOT publish for linux-x64: no trimming or AOT warnings, a 2.7 MB library exporting the five `rl_*` functions.
+  - A C program compiled against `rimlight_core.h` with `-Wall -Wextra -Werror` called every export through the published library.
+  - The Swift code, the bundle and the Mac publish can only be checked on the macOS job.
+- **Bug found by the C smoke test, fixed before the PR:** saving settings JSON that left a field out turned it off. `{"glow":0.7}` saved `"enabled": false`, because the JSON source generator sets every init-only property of a record and gives a missing one its type's default. The transport now lays the given fields over the serialized defaults first (`FieldsLeftOutKeepTheirDefaults`).
+- **Choices** (simplest, per CLAUDE.md):
+  - Settings cross the ABI as JSON in the file's own format, not a struct (10-MACOS §1.3, changed from the design's sketch). Core's JSON and validator are internal, and a struct can't carry the monitor-ID list simply.
+  - The Swift package links libRimlightCore at build time. `build.sh` builds it first into `mac/.build-core`.
+  - The bundle ID is `io.github.sussyswimmer.` followed by the lower-case `<AppName>`.
+- **CI:** the `macos` job runs on pull requests and `workflow_dispatch` only (not on pushes to main), on `macos-26`.
 
 ## K0 notes
 

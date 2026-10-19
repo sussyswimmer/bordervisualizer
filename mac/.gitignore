@@ -1,0 +1,4 @@
+# SwiftPM's build folder, and libRimlightCore.dylib as build.sh publishes it for the Swift build to link.
+.build/
+.build-core/
+.swiftpm/

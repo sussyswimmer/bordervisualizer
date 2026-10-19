@@ -61,7 +61,7 @@ All functions are on `libRimlightCore`. The functions with a handle take the pip
 |---|---|---|
 | `rl_app_name`, `rl_version` | any | `AppInfo.Name`, and the assembly's informational version, which comes from `<Version>`, so Swift never spells "Rimlight" |
 | `rl_create(settingsDir)` / `rl_destroy` | main | the pipeline: analyzer, engine, blender, pacer, settings store |
-| `rl_settings_load` / `rl_settings_apply` / `rl_settings_save` | main | Settings cross as a blittable `RlSettings` struct, with enums as ints, plus string getters and setters for the two hex colours, the hotkey and the monitor IDs. Load and save go through Core's `ISettingsStore`, which validates the file. Apply builds a new immutable `Settings` and publishes it to the render thread (`Interlocked.Exchange`, doc 02). Core's JSON and validator are internal, so no JSON crosses the boundary. The Settings UI keeps every control within the ranges in CORE-API §7.1, and Core's consumers clamp what they read anyway |
+| `rl_settings_load` / `rl_settings_save` (M0), `rl_settings_apply` (M1) | main | Settings cross as JSON with the settings file's field names (camelCase, enums as names). It's a transport only: Native has a source-generated context of its own over the public `Settings` record, because Core's JSON is internal. Fields the JSON leaves out keep their defaults: the source generator would otherwise set them to false or 0. Load and save go through Core's `ISettingsStore`, which validates the file. Apply builds a new immutable `Settings` and publishes it to the render thread (`Interlocked.Exchange`, doc 02). The Settings UI keeps every control within the ranges in CORE-API §7.1, and Core's consumers clamp what they read anyway |
 | `rl_presets_*` | any | names and `Apply` |
 | `rl_set_album_art(bgra, w, h, trackId)` | a background queue | `IPaletteExtractor.Extract`, then publishes the palette with `Volatile.Write` (doc 02) |
 | `rl_set_demo`, `rl_set_paused`, `rl_set_audio_wanted` | any | the same switches as `MusicGlowSource` |
@@ -306,7 +306,7 @@ Doc 05's quirks carry over: debounce 250 ms, retry once after 750 ms when the ar
 
 - **The app and disk image.** `build.sh` makes a universal `Rimlight.app` and a DMG (`hdiutil`, with an Applications shortcut), named `RimlightSetup.dmg` to match the Windows download.
   - Both go on the same GitHub Release as the Windows assets, so the README's Mac button links to `releases/latest/download/RimlightSetup.dmg`.
-- **Signing and notarization** (if Maxwell has a Developer ID, Q2).
+- **Signing and notarization**, if a Developer ID is ever added. Maxwell has decided against an Apple Developer account for now (Q2), so the app is signed ad hoc and this stays ready but unused.
   - Hardened runtime, a secure timestamp, the Apple-events entitlement, then `notarytool submit --wait` and `stapler staple` on the app and the DMG [Apple: "Notarizing macOS software before distribution"].
   - The release workflow does it with secrets (certificate `.p12`, its password, and an App Store Connect API key), gated as Windows signing is.
 - **Without a Developer ID**, two problems:
@@ -343,13 +343,13 @@ One milestone is one branch (`claude/mac-<m>-<slug>`), one PR into PR #32's bran
 
 ## 8. Decisions for Maxwell
 
-Each has a recommendation. They're also HANDOFF H-030. **Q0 blocks M0:** no app code starts until Maxwell confirms the stack. Q1, Q3 and Q5 follow the recommendation until he answers. Q4 stays **No** (the one-network-call rule) until he says yes, and Q2 is needed only by M7.
+They're also HANDOFF H-030. **Maxwell's answer (2026-10-19): "Just build it, no app developer."** So Q0 is yes (Swift) and Q2 is no (ad-hoc signing; §6 "Without a Developer ID" applies). Q1, Q3 and Q5 follow the recommendation. Q4 stays **No** (the one-network-call rule) until he says yes.
 
 | | Decision | Recommended |
 |---|---|---|
-| **Q0** | Build the Mac app in **Swift**, over the shared C# Core (§1). CLAUDE.md asks before a stack change. | **Yes** |
+| **Q0** | Build the Mac app in **Swift**, over the shared C# Core (§1). CLAUDE.md asks before a stack change. | **Yes** (Maxwell: yes) |
 | **Q1** | Minimum macOS | **14.4 Sonoma.** System-audio taps need 14.2, and 14.4 is the tested floor. Covers every Mac that runs Sonoma or later. |
-| **Q2** | An Apple Developer account ($99 a year) for signing and notarization | **Yes, before the first public Mac release.** Without it users must click "Open Anyway" in System Settings, and macOS asks for the audio permission again after every update. M0–M6 don't need it. |
+| **Q2** | An Apple Developer account ($99 a year) for signing and notarization | **Yes, before the first public Mac release.** Without it users must click "Open Anyway" in System Settings, and macOS asks for the audio permission again after every update. M0–M6 don't need it. (Maxwell: no account.) |
 | **Q3** | Universal (Apple silicon + Intel) or Apple silicon only | **Universal.** Costs a few MB and a CI step. But no Intel Mac will test it unless you have one, and Intel Macs stop at macOS 26. |
 | **Q4** | Fetch Spotify's album art from Spotify's image server: a second network call, stated in the README's privacy section | **Yes**, only on a track change, only Spotify's own URL. Until you say yes, Spotify gets the manual colours. |
 | **Q5** | Album colours from browsers and other players through the `mediaremote-adapter` loophole | **No for v1.** It's a private-API workaround Apple can close in any update. Revisit later. |

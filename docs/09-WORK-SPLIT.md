@@ -26,6 +26,8 @@ build/**                                src/Rimlight.App.Tests/** (WPF smoke tes
 CONTRIBUTING.md, SECURITY.md,           docs/08 visual items
 CODE_OF_CONDUCT.md, CHANGELOG.md        Phase 0 scaffold (one-time, see §4)
 
+LANE B, the Mac app (docs/10-MACOS.md): src/Rimlight.Native/**, src/Rimlight.Native.Tests/**, mac/**
+                                        (and the macos job in ci.yml, H-029)
 SHARED (append-only, both may edit):    docs/PROGRESS.md, docs/HANDOFF.md
 FROZEN after Step 0:                    src/Rimlight.Core/Contracts/**
 ```
