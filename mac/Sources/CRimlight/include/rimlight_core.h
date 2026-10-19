@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 4
+#define RL_ABI_VERSION 5
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -170,6 +170,8 @@ void rl_preview_destroy(RlPreview preview);
 int32_t rl_preview_frame(RlPreview preview, double nowSeconds, int32_t widthPx, int32_t heightPx,
                          RlGlowConstants *constants);
 const float *rl_preview_gradient(RlPreview preview);
+/// Starts the preview's clock over when it is shown again: older audio counts as stale.
+int32_t rl_preview_restart(RlPreview preview);
 
 /// GlowConstants.Create alone, for tests: the constants for a light state on a surface.
 int32_t rl_glow_constants(const RlLightState *state, int32_t widthPx, int32_t heightPx, float pixelsPerPoint,

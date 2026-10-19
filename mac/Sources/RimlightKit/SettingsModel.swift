@@ -13,7 +13,7 @@ struct PresetChoice: Identifiable {
 }
 
 /// The settings as the Settings window and the menu edit them (doc 06 §3): every change applies to the glow at once
-/// and is saved 500 ms after the last one, through Core's store. Also runs the Motion page's level meter. Main thread.
+/// and is saved 500 ms after the last one, through Core's store. Main thread.
 @MainActor
 final class SettingsModel: ObservableObject {
     static let saveDelay: TimeInterval = 0.5
@@ -21,19 +21,18 @@ final class SettingsModel: ObservableObject {
     @Published var settings: AppSettings {
         didSet { if settings != oldValue && !reloading { changed() } }
     }
-    @Published private(set) var level: Double = 0
-    @Published private(set) var beat: Double = 0
-    @Published private(set) var cantHear = false
 
     let loop: CoreLoop
     let device: MTLDevice
     let presets: [PresetChoice]
+    /// The Motion page's level meter, observed by the meter alone so its 30 Hz updates redraw nothing else.
+    let meter: MeterModel
     private let tap: SystemAudioTap?
     private let onChange: () -> Void
     private var reloading = false
     private var saveWork: DispatchWorkItem?
-    private var meter: Timer?
-    private var meterUsers = 0
+    private var audioUsers = 0
+    private var previewGlow: MetalGlow?
 
     init(loop: CoreLoop, device: MTLDevice, tap: SystemAudioTap?, onChange: @escaping () -> Void) {
         self.loop = loop
@@ -42,6 +41,24 @@ final class SettingsModel: ObservableObject {
         self.onChange = onChange
         settings = loop.settings ?? AppSettings.fallback
         presets = Self.loadPresets(from: loop.settings)
+        meter = MeterModel(loop: loop, tap: tap)
+        meter.audio = self
+    }
+
+    /// A binding to one field. `$model.settings.animation` would find SwiftUI's `Binding.animation(_:)` instead.
+    func binding<Value>(_ key: WritableKeyPath<AppSettings, Value>) -> Binding<Value> {
+        Binding(get: { self.settings[keyPath: key] }, set: { self.settings[keyPath: key] = $0 })
+    }
+
+    /// The preview's GPU side, made once and kept, so switching pages doesn't compile the shader again.
+    var previewMetal: MetalGlow? {
+        if previewGlow == nil { previewGlow = try? MetalGlow(device: device) }
+        return previewGlow
+    }
+
+    /// The window's visibility, from its occlusion state: the meter runs only while it is on screen.
+    func setWindowVisible(_ visible: Bool) {
+        meter.windowVisible = visible
     }
 
     /// Applies a preset's look (doc 06 §1: its appearance fields only).
@@ -60,40 +77,27 @@ final class SettingsModel: ObservableObject {
         save()
     }
 
-    /// The level meter and the preview want the audio; the capture stays open while anything shows them.
-    func startMeter() {
-        meterUsers += 1
-        guard meterUsers == 1 else { return }
+    /// The meter and the preview want the audio: the capture stays open while either shows it. Calls pair up.
+    func acquireAudio() {
+        audioUsers += 1
+        guard audioUsers == 1 else { return }
         loop.setAudioWanted(true)
-        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.readMeter() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        meter = timer
-        onChange()
+        onChange() // wakes a stopped render loop
     }
 
-    func stopMeter() {
-        guard meterUsers > 0 else { return }
-        meterUsers -= 1
-        guard meterUsers == 0 else { return }
-        meter?.invalidate()
-        meter = nil
+    func releaseAudio() {
+        guard audioUsers > 0 else { return }
+        audioUsers -= 1
+        guard audioUsers == 0 else { return }
         loop.setAudioWanted(false)
         onChange()
     }
 
-    /// Lets the audio tap open once the first-run banner has been read.
+    /// Lets the audio tap open once the first-run banner has been read (or the window closed).
     func finishFirstRun() {
-        if !settings.firstRunComplete { settings.firstRunComplete = true }
+        guard !settings.firstRunComplete else { return }
+        settings.firstRunComplete = true
         tap?.setAllowed(true)
-    }
-
-    private func readMeter() {
-        let reading = loop.audio
-        level = reading.sequence >= 0 ? Double(reading.level) : 0
-        beat = reading.sequence >= 0 ? Double(reading.beat) : 0
-        cantHear = tap?.cantHear == true
     }
 
     private func changed() {
@@ -115,6 +119,7 @@ final class SettingsModel: ObservableObject {
             reloading = true
             settings = saved
             reloading = false
+            onChange() // the corrected values reach the overlays too
         }
     }
 
@@ -133,8 +138,9 @@ final class SettingsModel: ObservableObject {
 extension Color {
     /// An sRGB colour from "#RRGGBB" (grey for anything else).
     init(hex: String) {
-        let digits = hex.trimmingCharacters(in: .whitespaces).dropFirst(hex.hasPrefix("#") ? 1 : 0)
-        guard digits.count == 6, let value = UInt32(digits, radix: 16) else {
+        let trimmed = hex.trimmingCharacters(in: .whitespaces)
+        let digits = trimmed.dropFirst(trimmed.hasPrefix("#") ? 1 : 0)
+        guard digits.count == 6, digits.allSatisfy(\.isHexDigit), let value = UInt32(digits, radix: 16) else {
             self = .gray
             return
         }
@@ -142,9 +148,9 @@ extension Color {
                   blue: Double(value & 0xFF) / 255)
     }
 
-    /// "#RRGGBB" in sRGB, as the settings file stores colours.
-    var hex: String {
-        guard let color = NSColor(self).usingColorSpace(.sRGB) else { return "#7C5CFF" }
+    /// "#RRGGBB" in sRGB, as the settings file stores colours; nil if it has no sRGB form.
+    var hex: String? {
+        guard let color = NSColor(self).usingColorSpace(.sRGB) else { return nil }
         func byte(_ c: CGFloat) -> Int { Int((min(max(c, 0), 1) * 255).rounded()) }
         return String(format: "#%02X%02X%02X", byte(color.redComponent), byte(color.greenComponent),
                       byte(color.blueComponent))
@@ -160,4 +166,54 @@ extension AppSettings {
         monitors: "All", customMonitorIds: [], fpsCap: 60, pauseInFullscreen: true, onBattery: "Reduce",
         hideFromScreenCapture: false, launchAtStartup: true, toggleHotkey: "Ctrl+Alt+L", autoUpdate: true,
         firstRunComplete: false)
+}
+
+/// The Motion page's level meter (doc 06 §3.3): the analyzer's latest loudness and beat, read 30 times a second only
+/// while the page is shown and the window is on screen. SwiftUI doesn't report a window closing as the page
+/// disappearing, so the window's occlusion state is the other half of the rule.
+@MainActor
+final class MeterModel: ObservableObject {
+    @Published private(set) var level: Double = 0
+    @Published private(set) var beat: Double = 0
+    @Published private(set) var cantHear = false
+
+    weak var audio: SettingsModel?
+    var pageShown = false { didSet { follow() } }
+    var windowVisible = false { didSet { follow() } }
+    private let loop: CoreLoop
+    private let tap: SystemAudioTap?
+    private var timer: Timer?
+
+    init(loop: CoreLoop, tap: SystemAudioTap?) {
+        self.loop = loop
+        self.tap = tap
+    }
+
+    private func follow() {
+        let run = pageShown && windowVisible
+        if run && timer == nil {
+            audio?.acquireAudio()
+            let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.read() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+            read()
+        } else if !run, let timer {
+            timer.invalidate()
+            self.timer = nil
+            audio?.releaseAudio()
+        }
+    }
+
+    // Publishes only what changed, so an idle meter redraws nothing.
+    private func read() {
+        let reading = loop.audio
+        let newLevel = reading.sequence >= 0 ? (Double(reading.level) * 100).rounded() / 100 : 0
+        let newBeat = reading.sequence >= 0 ? (Double(reading.beat) * 20).rounded() / 20 : 0
+        let newCantHear = tap?.cantHear == true
+        if newLevel != level { level = newLevel }
+        if newBeat != beat { beat = newBeat }
+        if newCantHear != cantHear { cantHear = newCantHear }
+    }
 }

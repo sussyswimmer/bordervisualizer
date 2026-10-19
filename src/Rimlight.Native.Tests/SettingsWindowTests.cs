@@ -51,6 +51,48 @@ public sealed unsafe class SettingsWindowTests
     }
 
     [Fact]
+    public void TheMeterWakesAStoppedLoop()
+    {
+        var loop = new MacOverlayLoop(new Settings { Animation = AnimationMode.Off });
+        loop.SetSurfaces([new SurfaceInfo { WidthPx = 1920, HeightPx = 1080, PixelsPerPoint = 1 }], 0);
+        double now = 0;
+        PaceInfo pace = default;
+        for (int i = 0; i < 120 && pace.Pace != 2; i++, now += 1 / 60.0)
+        {
+            loop.ApplyInputs(now);
+            loop.BeginFrame(1 / 60f, [], 0);
+            if (loop.PlanSurface(0, out _) != SurfaceAction.None) loop.SurfaceDone(0, true, 0);
+            pace = loop.EndFrame(now);
+        }
+        Assert.Equal(2, pace.Pace); // Off: nothing to draw, no frames
+        loop.Source.SetAudioWanted(true);
+        Assert.True(loop.ApplyInputs(now));
+        Assert.Equal(1, loop.BeginFrame(1 / 60f, [], 0).Listening);
+    }
+
+    [Fact]
+    public void TheMeterNeverChangesTheGlow()
+    {
+        // The same music through two frame sources, one with Settings' meter open: the glow is identical, only the
+        // pacing knows the audio is wanted (MusicGlowSource: "a meter in Settings must not change the glow").
+        var settings = new Settings { Animation = AnimationMode.IdleGlow };
+        var plain = new MacGlowSource(settings);
+        var metered = new MacGlowSource(settings);
+        metered.SetAudioWanted(true);
+        float[] a = new float[256], b = new float[256], samples = new float[800];
+        for (int i = 0; i < 600; i++)
+        {
+            for (int s = 0; s < samples.Length; s++)
+                samples[s] = (float)(Math.Exp(-(i * 800 + s) % 24000 / 4000.0) * Math.Sin(s * 0.007));
+            var x = plain.NextFrame(1 / 60f, settings, false, a, [], 0, 0);
+            var y = metered.NextFrame(1 / 60f, settings, false, b, samples, 48000, 1);
+            Assert.True(x.State == y.State, $"frame {i}: {x.State} vs {y.State}");
+            Assert.True(a.AsSpan().SequenceEqual(b));
+        }
+        Assert.True(metered.LatestAudio.Features.Level > 0 || metered.LatestAudio.Features.Bass > 0);
+    }
+
+    [Fact]
     public void ThePreviewDrawsTheGlowAsAScreenOf1280Points()
     {
         var loop = new MacOverlayLoop(new Settings { Enabled = false, CoreThicknessDip = 20 });

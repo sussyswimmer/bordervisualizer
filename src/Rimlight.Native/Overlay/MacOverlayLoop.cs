@@ -73,6 +73,7 @@ internal sealed class MacOverlayLoop
     private Settings applied;       // the render thread's
     private bool paused;
     private bool appliedDemo;
+    private bool appliedAudioWanted;
     private double refreshHz = FramePacer.DefaultRefreshHz;
     private bool onBattery;
     private bool configured;
@@ -170,6 +171,14 @@ internal sealed class MacOverlayLoop
         if (demoNow != appliedDemo)
         {
             appliedDemo = demoNow;
+            changed = true;
+        }
+        // So is Settings wanting the audio: the meter must wake a stopped loop, as Windows asks for a frame after
+        // SetAudioWanted.
+        bool wantedNow = source.AudioWanted;
+        if (wantedNow != appliedAudioWanted)
+        {
+            appliedAudioWanted = wantedNow;
             changed = true;
         }
         bool pause = Volatile.Read(ref pausedWanted) != 0;

@@ -726,8 +726,21 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - **First run (PRD §7, 10-MACOS §2.1):**
   - Settings opens with a welcome banner that says why macOS will ask for System Audio Recording.
   - The audio tap stays closed until **Start** is clicked or the window is closed, so the prompt comes after the explanation.
+- **First macOS run:** one compile error. `$model.settings.animation` resolved to SwiftUI's `Binding.animation(_:)`, not the field. `SettingsModel.binding(\.animation)` fixes it.
+- **Independent review**, three blockers fixed:
+  - **The preview stopped for good** when it first appeared before layout, because a 0×0 surface returned an error that stopped its timer. It now waits for layout and stops only on an internal error. It also follows a change of backing scale.
+  - **The meter didn't wake a stopped loop**, so it stayed at zero with the glow Off. Settings wanting the audio is now an input, like demo mode (`TheMeterWakesAStoppedLoop`).
+  - **Closing or minimizing the window on the Motion page left the meter, the tap and the loop running**, because SwiftUI doesn't fire `onDisappear` there. The meter is now its own `MeterModel`. It runs only while the page is shown and the window is visible (occlusion state), and publishes only changed values, so nothing else redraws at 30 Hz.
+  - **Also fixed:**
+    - a reload after save now reaches the overlays;
+    - the preview restarts its audio clock when shown again (`rl_preview_restart`, as GlowPreview.Start does);
+    - a new test, `TheMeterNeverChangesTheGlow`;
+    - stricter hex parsing, and a colour with no sRGB form keeps the old value;
+    - Sensitivity shows two decimals;
+    - one preview Metal pipeline instead of one per page switch;
+    - the first run finishes only once.
 - **Tests:**
-  - C#: 27, including presets through the C ABI, the meter keeping the capture open, and the preview's scale and fade-in.
+  - C#: 29, including presets through the C ABI, the meter keeping the capture open and waking a stopped loop, the meter never changing the glow, and the preview's scale and fade-in.
   - Swift: the settings round trip, sRGB hex colours and presets.
   - The Mac frame source still matches the Windows one bit for bit, since the meter is off in that script.
 

@@ -74,6 +74,9 @@ internal sealed class MacGlowSource
     /// </summary>
     public void SetAudioWanted(bool wanted) => Volatile.Write(ref audioWanted, wanted ? 1 : 0);
 
+    /// <summary>Whether the meter or the preview wants the audio. Any thread.</summary>
+    public bool AudioWanted => Volatile.Read(ref audioWanted) != 0;
+
     /// <summary>The album palette last published (M4), or null. Any thread.</summary>
     public Palette? PublishedAlbum => Volatile.Read(ref publishedAlbum);
 

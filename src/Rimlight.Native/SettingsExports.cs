@@ -145,6 +145,21 @@ internal static unsafe partial class Exports
         }
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "rl_preview_restart")]
+    public static int PreviewRestart(nint preview)
+    {
+        try
+        {
+            if (Preview(preview) is not { } p) return NativeStatus.InvalidArgument;
+            p.Restart();
+            return NativeStatus.Ok;
+        }
+        catch (Exception)
+        {
+            return NativeStatus.Internal;
+        }
+    }
+
     [UnmanagedCallersOnly(EntryPoint = "rl_preview_gradient")]
     public static float* PreviewGradient(nint preview)
     {

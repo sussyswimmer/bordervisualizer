@@ -28,7 +28,7 @@ final class PreviewNSView: NSView {
 
     init(model: SettingsModel) {
         self.model = model
-        metal = try? MetalGlow(device: model.device)
+        metal = model.previewMetal
         preview = rl_preview_create(model.loop.handle)
         super.init(frame: .zero)
         metal?.configure(metalLayer)
@@ -65,9 +65,19 @@ final class PreviewNSView: NSView {
 
     override func layout() {
         super.layout()
+        updateDrawableSize()
+    }
+
+    // A move to a screen with another scale changes no layout, only the backing properties.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateDrawableSize()
+    }
+
+    private func updateDrawableSize() {
         let scale = window?.backingScaleFactor ?? 2
         metalLayer.contentsScale = scale
-        metalLayer.drawableSize = CGSize(width: max(bounds.width * scale, 2), height: max(bounds.height * scale, 2))
+        metalLayer.drawableSize = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
     }
 
     /// Draws only while the window is on screen: closed, minimized or covered, the preview costs nothing.
@@ -77,7 +87,8 @@ final class PreviewNSView: NSView {
 
     private func start() {
         guard timer == nil, metal != nil, preview != 0 else { return }
-        model.startMeter() // the preview follows the music too
+        model.acquireAudio() // the preview follows the music too
+        rl_preview_restart(preview) // readings from before count as stale (GlowPreview.Start)
         let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -90,15 +101,17 @@ final class PreviewNSView: NSView {
         guard let timer else { return }
         timer.invalidate()
         self.timer = nil
-        model.stopMeter()
+        model.releaseAudio()
     }
 
     private func tick() {
         guard let metal else { return }
         let size = metalLayer.drawableSize
+        guard size.width >= 2, size.height >= 2 else { return } // not laid out yet
         var constants = RlGlowConstants()
         let result = rl_preview_frame(preview, CACurrentMediaTime(), Int32(size.width), Int32(size.height), &constants)
-        if result < 0 { return stop() }
+        if result == RL_INTERNAL { return stop() } // something broke inside: the card stays as it is
+        if result < 0 { return }
         if result == 1, let texels = rl_preview_gradient(preview) { metal.upload(gradient: texels) }
         _ = metal.draw(constants, on: metalLayer, inFlight: inFlight, now: CACurrentMediaTime())
     }

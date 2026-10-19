@@ -45,7 +45,18 @@ internal sealed class MacPreview
         palette = manual;
         blender = CoreFactory.CreatePaletteBlender(palette);
         engine = CoreFactory.CreateLightEngine();
-        lastSequence = loop.Source.LatestAudio.Sequence; // older readings count as stale
+        Restart();
+    }
+
+    /// <summary>
+    /// Starts the clock over (the window was shown again, GlowPreview.Start): the reading from before counts as stale
+    /// until a newer one arrives, and the first frame steps no time.
+    /// </summary>
+    public void Restart()
+    {
+        lastSequence = loop.Source.LatestAudio.Sequence;
+        lastSequenceAt = double.NegativeInfinity;
+        lastTick = double.NaN;
     }
 
     /// <summary>The 64 RGBA texels of the preview's gradient: a pinned buffer whose address never changes.</summary>

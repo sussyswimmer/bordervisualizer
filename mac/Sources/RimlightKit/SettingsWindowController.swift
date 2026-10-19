@@ -26,6 +26,13 @@ final class SettingsWindowController {
                                                    queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.model.finishFirstRun() }
             }
+            // The meter runs only while the window is on screen (closed, minimized or covered: nothing runs).
+            NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification,
+                                                   object: window, queue: .main) { [weak self, weak window] _ in
+                MainActor.assumeIsolated {
+                    self?.model.setWindowVisible(window?.occlusionState.contains(.visible) == true)
+                }
+            }
             self.window = window
         }
         NSApp.activate()

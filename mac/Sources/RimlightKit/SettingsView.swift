@@ -149,7 +149,7 @@ struct ColorPage: View {
 
     private func hexBinding(_ key: WritableKeyPath<AppSettings, String>) -> Binding<Color> {
         Binding(get: { Color(hex: model.settings[keyPath: key]) },
-                set: { model.settings[keyPath: key] = $0.hex })
+                set: { if let hex = $0.hex { model.settings[keyPath: key] = hex } })
     }
 }
 
@@ -159,7 +159,7 @@ struct MotionPage: View {
     var body: some View {
         Form {
             Section {
-                Picker("Mode", selection: $model.settings.animation) {
+                Picker("Mode", selection: model.binding(\.animation)) {
                     Text("Music Sync").tag("MusicSync")
                     Text("Idle Glow").tag("IdleGlow")
                     Text("Off").tag("Off")
@@ -170,24 +170,33 @@ struct MotionPage: View {
                 }
                 .disabled(model.settings.animation != "MusicSync")
                 PercentSlider("Sensitivity", value: $model.settings.sensitivity, range: 0.25...2,
-                              format: { String(format: "%.2g×", $0) })
+                              format: { String(format: "%.2f×", $0) })
             }
             Section("Sound") {
-                LevelMeter(level: model.level, beat: model.beat)
-                    .frame(height: 10)
-                    .accessibilityLabel("Sound level")
-                    .accessibilityValue("\(Int(model.level * 100)) percent")
-                if model.cantHear {
-                    Label("\(Core.appName) can't hear your Mac. Allow it under System Audio Recording Only.",
-                          systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                    Button("Open Privacy & Security") { AudioPrivacy.open() }
-                }
+                MeterSection(meter: model.meter)
             }
         }
         .formStyle(.grouped)
-        .onAppear { model.startMeter() }
-        .onDisappear { model.stopMeter() }
+        .onAppear { model.meter.pageShown = true }
+        .onDisappear { model.meter.pageShown = false }
+    }
+}
+
+/// The level meter and the "can't hear" warning: the only views that follow the 30 Hz meter.
+struct MeterSection: View {
+    @ObservedObject var meter: MeterModel
+
+    var body: some View {
+        LevelMeter(level: meter.level, beat: meter.beat)
+            .frame(height: 10)
+            .accessibilityLabel("Sound level")
+            .accessibilityValue("\(Int(meter.level * 100)) percent")
+        if meter.cantHear {
+            Label("\(Core.appName) can't hear your Mac. Allow it under System Audio Recording Only.",
+                  systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+            Button("Open Privacy & Security") { AudioPrivacy.open() }
+        }
     }
 }
 
