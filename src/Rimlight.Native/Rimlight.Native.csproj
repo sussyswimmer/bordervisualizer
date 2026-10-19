@@ -6,7 +6,6 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Trim and AOT analysis at build time, so an AOT-unsafe call fails the build like any other warning. -->
     <IsAotCompatible>true</IsAotCompatible>
     <PublishAot>true</PublishAot>
@@ -19,5 +18,14 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup Label="The Windows app's Windows-free per-frame code, compiled as it is (10-MACOS §1.1)">
+    <Compile Include="../Rimlight.Platform/Overlay/GlowProfile.cs" Link="Shared/GlowProfile.cs" />
+    <Compile Include="../Rimlight.Platform/Overlay/GlowConstants.cs" Link="Shared/GlowConstants.cs" />
+    <Compile Include="../Rimlight.Platform/Overlay/FramePacer.cs" Link="Shared/FramePacer.cs" />
+    <Compile Include="../Rimlight.Platform/Overlay/OverlayRules.cs" Link="Shared/OverlayRules.cs" />
+    <Compile Include="../Rimlight.Platform/Overlay/IOverlayFrameSource.cs" Link="Shared/IOverlayFrameSource.cs" />
+    <Compile Include="../Rimlight.App/Overlay/SrgbHex.cs" Link="Shared/SrgbHex.cs" />
+    <Compile Include="../Rimlight.App/Overlay/DemoBeat.cs" Link="Shared/DemoBeat.cs" />
   </ItemGroup>
 </Project>

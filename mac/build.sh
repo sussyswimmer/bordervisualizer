@@ -69,6 +69,15 @@ sed -e "s|@APP_NAME@|$app_name|g" -e "s|@BUNDLE_ID@|$bundle_id|g" -e "s|@VERSION
   "$mac/Resources/Info.plist.in" > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 
+# The glow shader, with glow_math.h in place of its include line (runtime compilation can't resolve includes).
+awk -v header="$mac/Sources/CRimlight/include/glow_math.h" \
+  '$0 == "#include \"glow_math.h\"" { while ((getline line < header) > 0) print line; next } { print }' \
+  "$mac/Resources/Shaders/Glow.metal" > "$app/Contents/Resources/Glow.metal"
+if grep -q '#include "glow_math.h"' "$app/Contents/Resources/Glow.metal"; then
+  echo "error: glow_math.h wasn't joined into Glow.metal" >&2
+  exit 1
+fi
+
 # The app icon, from the repo's 512 px icon.
 iconset="$out/AppIcon.iconset"
 mkdir -p "$iconset"

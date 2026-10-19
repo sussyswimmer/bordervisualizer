@@ -10,7 +10,7 @@ namespace Rimlight.Native;
 internal static class NativeApi
 {
     /// <summary>The C ABI's version: the Swift app refuses a library whose version differs from its header's.</summary>
-    public const int AbiVersion = 1;
+    public const int AbiVersion = 2;
 
     /// <summary>The app's display name, <see cref="AppInfo.Name"/>: the Swift app never spells it.</summary>
     public static string AppName => AppInfo.Name;

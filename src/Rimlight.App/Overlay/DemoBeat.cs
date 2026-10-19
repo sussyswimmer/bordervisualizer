@@ -17,8 +17,11 @@ internal sealed class DemoBeat
     /// <summary>How long each palette shows: 12 beats, so every change lands on a bar's downbeat.</summary>
     public const double PaletteSeconds = 6;
 
-    /// <summary>Palette changes crossfade like an album change (doc 05 §3).</summary>
-    public static readonly TimeSpan PaletteFade = MusicGlowSource.AlbumFade;
+    /// <summary>
+    /// Palette changes crossfade like an album change (doc 05 §3): 800 ms, <c>MusicGlowSource.AlbumFade</c>. Written
+    /// out rather than read from it so the Mac app can compile this file without the Windows frame source.
+    /// </summary>
+    public static readonly TimeSpan PaletteFade = TimeSpan.FromMilliseconds(800);
 
     /// <summary>
     /// The four looks, in turn: the brand violet into cyan (doc 08), then sunset orange into pink, aurora teal into
