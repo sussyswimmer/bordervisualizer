@@ -55,7 +55,7 @@ final class Updater {
 
 /// A menu bar app has no Dock icon or window to show a scheduled update's alert behind, so Sparkle is told it may
 /// remind gently: it then shows its alert in front, and doesn't warn about background apps.
-@MainActor
+/// Nonisolated, like the protocol: it holds only a constant.
 private final class GentleReminders: NSObject, SPUStandardUserDriverDelegate {
     var supportsGentleScheduledUpdateReminders: Bool { true }
 }
