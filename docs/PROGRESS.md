@@ -701,9 +701,30 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M3 menu bar, Settings, saved settings: the menu bar menu (doc 06 §2), the Settings window's six pages with a live preview drawn by the overlay's shader, presets, the level meter, live edits saved through Core's store 500 ms after the last, the first-run welcome — branch `claude/mac-m3-settings` — effort: L (notes below; Mac manual test pending)
 - [x] M4 album-art colors: Music and Spotify through their distributed notifications; Music's cover by Apple event (only while Music runs), decoded to 64 × 64 BGRA and handed to Core's extractor; doc 05 §1's debounce and retry; the Windows tooltip text; the Color page's Now playing — branch `claude/mac-m4-album` — effort: M (notes below; Mac manual test pending)
 - [x] M5 system watchers: sleep and wake, displays asleep, lock, fast user switching, battery and Low Power Mode (Reduce at half scale and 30 fps, or Pause), the per-display full-screen pause, the Dock's room re-read, the tap rebuilt on wake — branch `claude/mac-m5-watchers` — effort: M (notes below; Mac manual test pending)
-- [ ] M6 hotkey, login item, single instance
+- [x] M6 hotkey, login item, single instance: the global shortcut through Carbon (no Accessibility), parsed and formatted by the Windows `HotkeyGesture`; a recorder on the Behavior page; launch at login through SMAppService; one copy at a time (a lock file; a second launch opens Settings or starts the demo in the first) — branch `claude/mac-m6-shell` — effort: M (notes below; Mac manual test pending)
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M6 notes
+
+- **Shortcut (doc 06 §4):**
+  - The setting keeps the Windows format, "Ctrl+Alt+L". `HotkeyGesture.cs` is compiled into the native library (`rl_hotkey_parse`, `rl_hotkey_format`), so both apps read and write it the same way. "Win" stands for ⌘ on the Mac.
+  - Swift maps Windows virtual-key codes to Carbon key codes (US positions) and registers with `RegisterEventHotKey`, which needs no Accessibility or Input Monitoring permission.
+  - On top of the Windows rules, the Mac asks for ⌃ or ⌘ (or a function key), since macOS 15 refuses Option- and Shift-only shortcuts.
+  - A shortcut another app holds shows a warning on the Behavior page, as on Windows.
+  - **Glow On** in the menu shows the shortcut.
+- **Recorder:** Behavior › "Glow on and off" with Record, Cancel (or ⎋) and Remove. It takes the next key pressed in the window.
+- **Open at login:**
+  - `SMAppService.mainApp`, registered at every start while the setting is on, so an update (a new ad-hoc signature) keeps the login item pointing at this copy.
+  - When macOS wants approval, the Behavior page says so, with a button to Login Items.
+  - On by default, as on Windows.
+- **One copy:**
+  - An exclusive `flock` on `~/Library/Application Support/Rimlight/instance.lock`, held for the app's life.
+  - A second launch posts a distributed notification (`<bundle id>.show-settings`, or `.demo` with `--demo`) and quits, and the first copy opens Settings or starts the demo.
+  - Anyone can post those notifications, but all they can do is open Settings or start the demo.
+- **Tests:**
+  - C#: 38, including the shortcut text through the C ABI.
+  - Swift: ⌃⌥L, a pressed key becoming "Shift+Win+K", Option-only refused, and the key code map both ways.
 
 ### M5 notes
 

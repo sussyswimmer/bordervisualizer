@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var settingsWindow: SettingsWindowController?
     private var media: NowPlayingService?
     private var watcher: SystemWatcher?
+    private var hotkey: GlobalHotkey?
+    private var appliedHotkey: String?
+    private var appliedLogin: Bool?
 
     // Menu items whose state follows the settings (menuNeedsUpdate).
     private var glowItem: NSMenuItem?
@@ -94,6 +97,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watcher.start()
         self.watcher = watcher
 
+        // The shortcut, the login item, and a second launch's requests (M6).
+        hotkey = GlobalHotkey { [weak self] in self?.toggleGlow() }
+        let distributed = DistributedNotificationCenter.default()
+        distributed.addObserver(forName: SingleInstance.showSettingsName, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showSettings() }
+        }
+        distributed.addObserver(forName: SingleInstance.demoName, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let loop = self.loop, !loop.demo else { return }
+                loop.demo = true
+                self.overlays?.settingsChanged()
+            }
+        }
+
         NSApp.mainMenu = Self.makeMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = StatusIcon.make()
@@ -101,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = makeMenu()
         statusItem = item
         updateStatusItem()
+        applyShell() // after the menu exists: Glow On shows the shortcut
         log.info("\(Core.appName, privacy: .public) \(Core.version, privacy: .public) started (demo: \(demo))")
 
         if firstRun { settingsWindow?.show() } // PRD §7: the first launch shows Settings with a welcome
@@ -173,6 +191,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleGlow() { model?.settings.enabled.toggle() }
 
+    /// The shortcut and the login item follow their settings (on change, and once at start).
+    private func applyShell() {
+        guard let model else { return }
+        let settings = model.settings
+        if settings.toggleHotkey != appliedHotkey {
+            appliedHotkey = settings.toggleHotkey
+            model.hotkeyFailed = hotkey?.register(settings.toggleHotkey) == false
+            if let equivalent = Shortcut(setting: settings.toggleHotkey)?.menuEquivalent {
+                glowItem?.keyEquivalent = equivalent.key
+                glowItem?.keyEquivalentModifierMask = equivalent.mask
+            } else {
+                glowItem?.keyEquivalent = ""
+            }
+        }
+        if settings.launchAtStartup != appliedLogin {
+            appliedLogin = settings.launchAtStartup
+            LoginItem.apply(settings.launchAtStartup)
+        }
+        model.loginNeedsApproval = LoginItem.needsApproval
+    }
+
     @objc private func chooseMode(_ sender: NSMenuItem) {
         if let value = sender.representedObject as? String { model?.settings.animation = value }
     }
@@ -203,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlays?.settingsChanged()
         if let model { media?.setAlbumColorsWanted(model.usesAlbumColors) }
         watcher?.recheck() // "Pause in full-screen apps" applies at once
+        applyShell()
         updateStatusItem()
     }
 

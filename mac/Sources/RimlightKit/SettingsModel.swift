@@ -27,6 +27,10 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var automationDenied = false
     /// The album colours the glow has (sRGB), or nil.
     @Published private(set) var albumColors: (Color, Color)?
+    /// The shortcut couldn't be registered (another app holds it): the Behavior page warns, as on Windows.
+    @Published var hotkeyFailed = false
+    /// macOS wants the login item allowed in System Settings.
+    @Published var loginNeedsApproval = false
 
     let loop: CoreLoop
     let device: MTLDevice
