@@ -120,12 +120,12 @@ Settings follows your Windows light or dark theme, and every change applies live
 
 ### Mac (preview)
 
-The Mac app is new: it's built and tested by CI on every change, but hasn't had much use on real Macs yet. [Bug reports](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) are very welcome.
+The Mac app is new: it's built and tested by CI on every pull request, but hasn't had much use on real Macs yet. [Bug reports](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) are very welcome.
 
 1. **Download [RimlightSetup.dmg](https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/RimlightSetup.dmg)**, open it, and drag **Rimlight** onto **Applications**.
 2. **Open Rimlight from Applications.** macOS says it can't check the app, because it isn't notarized by Apple yet.
-   > On macOS 15 or later, click **Done**, then open **System Settings > Privacy & Security**, scroll down to the message about Rimlight, and click **Open Anyway**. On macOS 14, Control-click the app and choose **Open** instead.
-3. **Allow system audio** when macOS asks. Rimlight appears under **System Audio Recording Only** in **Privacy & Security > Screen & System Audio Recording**. It hears only what your Mac plays, never the microphone.
+   > On macOS 15 or later, click **Done**, then open **System Settings > Privacy & Security**, scroll down to the message about Rimlight, and click **Open Anyway**, then confirm with **Open Anyway** and your password. On macOS 14, Control-click the app and choose **Open** instead.
+3. **Allow system audio** when macOS asks. On macOS 15 or later, Rimlight then appears under **System Audio Recording Only** in **Privacy & Security > Screen & System Audio Recording**. It hears only what your Mac plays, never the microphone.
 4. **Play some music**, then look at the edges of your screen.
 
 **⌃⌥L** turns the glow on and off. Rimlight lives in the menu bar: click its icon for modes, colors, presets and **Settings…**. It opens at login and keeps itself up to date; you can turn off both in **Settings**.
@@ -158,7 +158,7 @@ Anything that listens should say exactly what it does with what it hears:
 - Track info and artwork are read locally, from Windows' media controls or the Mac's Music app, and never leave the device.
 - No telemetry or analytics. The only network call is the GitHub update check.
 
-You can turn off the update check in **Settings > Behavior > Update automatically** (on a Mac, **Settings > About**). The same promise is in **Settings > About**, and all the code is here to check.
+You can turn off the update check in **Settings > Behavior > Update automatically** (on a Mac, **Settings > About > Check for updates automatically**). The same promise is in **Settings > About**, and all the code is here to check.
 
 ## FAQ
 
@@ -217,7 +217,7 @@ On a Mac, choose **Quit Rimlight** from its menu bar icon and drag **Rimlight** 
 <details>
 <summary><b>Why does my Mac say it can't open Rimlight?</b></summary>
 
-The Mac app is signed, but not with an Apple Developer ID or notarized, so Gatekeeper asks first. The first time you open it on macOS 15 or later, click **Done**, then **Open Anyway** in **System Settings > Privacy & Security**. On macOS 14, Control-click the app and choose **Open**. Either way you only do it once. Every release is built from this repository by [GitHub Actions](https://github.com/sussyswimmer/bordervisualizer/actions/workflows/release.yml), so you can check what went into it.
+The Mac app is signed ad hoc, not with an Apple Developer ID, and isn't notarized, so Gatekeeper asks first. The first time you open it on macOS 15 or later, click **Done**, then **Open Anyway** in **System Settings > Privacy & Security**, and confirm with your password. On macOS 14, Control-click the app and choose **Open**. Either way you only do it once. Every release is built from this repository by [GitHub Actions](https://github.com/sussyswimmer/bordervisualizer/actions/workflows/release.yml), so you can check what went into it.
 
 </details>
 
@@ -226,10 +226,10 @@ The Mac app is signed, but not with an Apple Developer ID or notarized, so Gatek
 
 Right-click the tray icon and choose **Open logs folder**, zip the files in it, and attach the zip to a [bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml). If Rimlight won't start, paste `%APPDATA%\Rimlight\logs` into File Explorer's address bar instead. [Reporting a bug with logs](CONTRIBUTING.md#reporting-a-bug-with-logs) walks through every step.
 
-On a Mac, run this in Terminal and attach `rimlight-log.txt`:
+On a Mac, run this in Terminal, then attach `rimlight-log.txt` from your Desktop:
 
 ```sh
-log show --last 1h --predicate 'subsystem == "io.github.sussyswimmer.rimlight"' > ~/Desktop/rimlight-log.txt
+log show --last 1h --info --predicate 'subsystem == "io.github.sussyswimmer.rimlight"' > ~/Desktop/rimlight-log.txt
 ```
 
 Logs never contain audio, but have a quick look before you upload them. For a security problem, please follow [SECURITY.md](SECURITY.md) instead of opening an issue.
@@ -257,7 +257,7 @@ mac/build.sh --native
 open artifacts/mac/Rimlight.app
 ```
 
-`mac/build.sh` without `--native` builds the universal app and `RimlightSetup.dmg`, as CI does; `swift test --package-path mac` runs the Mac tests. [docs/10-MACOS.md](docs/10-MACOS.md) explains how it's put together.
+`mac/build.sh` without `--native` builds a universal app (arm64 and x86_64) instead of just your Mac's architecture, as CI does; both make `artifacts/mac/RimlightSetup.dmg`. After a build, `swift test --package-path mac` runs the Mac tests. [docs/10-MACOS.md](docs/10-MACOS.md) explains how it's put together.
 
 ## Roadmap
 
@@ -277,7 +277,7 @@ Bug reports with logs, ideas and pull requests are all welcome. Rimlight is spli
 
 ## Credits
 
-Rimlight is built on these open-source projects, all MIT licensed:
+Rimlight is built on these open-source projects, all under the MIT License or, for Sparkle, an MIT-style one:
 
 - [NAudio](https://github.com/naudio/NAudio): WASAPI loopback capture
 - [Vortice.Windows](https://github.com/amerkoleci/Vortice.Windows): Direct3D 11, DXGI and DirectComposition

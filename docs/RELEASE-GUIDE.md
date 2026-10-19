@@ -148,12 +148,13 @@ The release workflow builds the Mac app next to the Windows one and attaches it 
 
 1. **Set up the update key (once, before the first release with the Mac app).** Without it, every Mac copy is built with no updater.
    1. On your Mac, download `Sparkle-2.10.0.tar.xz` from [Sparkle's 2.10.0 release](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0) and double-click it to unpack it.
-   2. In Terminal, in the unpacked folder, run `./bin/generate_keys`. It keeps the key in your login keychain and prints the public key, a line ending in `=`.
+   2. In Terminal, run `cd ~/Downloads/Sparkle-2.10.0`, then `./bin/generate_keys`. It keeps the key in your login keychain and prints two lines. The public key is the text between `<string>` and `</string>`: 44 characters, ending in `=`. Copy only that.
    3. Run `./bin/generate_keys -x private-key.txt`.
    4. On GitHub, open **Settings > Secrets and variables > Actions**:
       - **Variables > New repository variable:** name `SPARKLE_PUBLIC_KEY`, with the public key as the value.
-      - **Secrets > New repository secret:** name `SPARKLE_PRIVATE_KEY`, with the contents of `private-key.txt` as the value.
+      - **Secrets > New repository secret:** name `SPARKLE_PRIVATE_KEY`, with the contents of `private-key.txt` as the value (in Terminal, `pbcopy < private-key.txt` copies them; then paste).
    5. Delete `private-key.txt`. The keychain copy is your backup: if the key is lost, installed Macs can't update again.
+
    The release checks that the two halves match before it ships the Mac files.
 2. **After the release:** check the Mac links in Terminal:
    ```sh
@@ -161,11 +162,11 @@ The release workflow builds the Mac app next to the Windows one and attaches it 
      curl -sL -r 0-0 -o /dev/null -w "%{http_code}  $name\n" "https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/$name"
    done
    ```
-   Each line should start with 206 (or 200).
+   Each line should start with 206 (or 200). `appcast.xml` is 404 if you skipped step 1. If `RimlightSetup.dmg` is 404, the Mac build failed: open the Release run in the Actions tab and look at the **Build and pack (macOS)** job.
 3. **Try it on a Mac** (macOS 14.4 or later), ideally a user account that has never run it:
    1. Click **Download for Mac** in the README, open the DMG, and drag Rimlight to Applications.
-   2. Open it. On macOS 15 or later, macOS refuses at first: click **Done**, then **Open Anyway** in **System Settings > Privacy & Security**. The README's Install section says the same.
-   3. The menu bar icon and the welcome window appear. Allow system audio when asked, play music in the Music app, and the edges glow in the cover's colors (Music asks once whether Rimlight may read it).
+   2. Open it. On macOS 15 or later, macOS refuses at first: click **Done**, then **Open Anyway** in **System Settings > Privacy & Security**, and confirm with **Open Anyway** and your password. The README's Install section says the same.
+   3. The menu bar icon appears and Settings opens with a welcome message. Click **Start**, allow system audio when macOS asks, play music in the Music app, and the edges glow in the cover's colors (Music asks once whether Rimlight may read it).
    4. Bugs: no glow, a prompt for the **microphone** (it must never ask for one), the glow catching clicks, or a second icon after opening the app again.
    5. When the next version ships, check **Settings > About > Check for Updates…** finds it, and that the new version is running after you quit and reopen Rimlight.
-4. **Optional, a Mac demo recording.** The demo runs on a Mac too: quit Rimlight, then run `/Applications/Rimlight.app/Contents/MacOS/Rimlight --demo` in Terminal. Press **⌘⇧5**, choose **Record Entire Screen**, and record 15 seconds. Keep **Hide the glow from screen recordings** off (**Settings > Behavior**). Trim and export it as in section 1. The README has no Mac slot yet, so hand the file to Claude Code if you want one.
+4. **Optional, a Mac demo recording.** The demo runs on a Mac too: quit Rimlight, then run `/Applications/Rimlight.app/Contents/MacOS/Rimlight --demo` in Terminal. Press **⌘⇧5**, choose **Record Entire Screen**, and record 15 seconds; macOS saves a .mov on your Desktop. Keep **Hide the glow from screen recordings** off (**Settings > Behavior**). Copy the file to your PC, and trim and export it as in section 1 (ScreenToGif: **File > Load**). The README has no Mac slot yet, so hand the file to Claude Code if you want one.
