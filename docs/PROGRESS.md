@@ -689,6 +689,7 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] K12 `assets/icon.svg`, `assets/banner.svg/png`, README, repo settings text for Maxwell, recording instructions — this branch (claude/confident-mccarthy-gt8tif) — effort: M (`assets/icon.svg` came with C10; notes below; Windows manual test pending: the recordings and the repo settings)
 - [x] Feedback round 1: dynamics, soft edge, Settings failure message + WPF smoke tests — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 - [x] Feedback round 2: real-music corpus (`tools/corpus/`), dynamics retuned on it, an edge with no rim, Record 2 min — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
+- [x] README cut to a short landing page at Maxwell's request ("no one wants to read this much"): an animated header with a wave bar (`assets/header.svg`, `footer.svg`), an 8 s preview and four looks rendered by the real beat engine through a port of `Glow.hlsl` (`tools/readme-art/`), and the FAQ collapsed. Replaces doc 08's longer layout. — effort: S
 
 ## K0 notes
 
