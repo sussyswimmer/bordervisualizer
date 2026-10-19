@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.updateStatusItem()
         }
         media.start()
+        media.setAlbumColorsWanted(model.usesAlbumColors)
         self.media = media
 
         NSApp.mainMenu = Self.makeMainMenu()
@@ -166,12 +167,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlays?.settingsChanged()
     }
 
-    @objc private func showSettings() { settingsWindow?.show() }
+    @objc private func showSettings() {
+        settingsWindow?.show()
+        media?.recheck() // Automation may have been allowed meanwhile
+    }
 
     @objc private func openAudioPrivacy() { AudioPrivacy.open() }
 
     private func settingsChanged() {
         overlays?.settingsChanged()
+        if let model { media?.setAlbumColorsWanted(model.usesAlbumColors) }
         updateStatusItem()
     }
 

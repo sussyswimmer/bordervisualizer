@@ -135,7 +135,7 @@ struct ColorPage: View {
                 Toggle("Use my colors even when there's album art", isOn: $model.settings.overrideAlbumColor)
                     .disabled(model.settings.colorMode != "AlbumArt")
             }
-            Section("Now playing") {
+            Section {
                 if let track = model.nowPlaying, let title = track.title {
                     HStack {
                         VStack(alignment: .leading) {
@@ -144,7 +144,7 @@ struct ColorPage: View {
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer()
-                        if let colors = model.albumColors {
+                        if model.usesAlbumColors, let colors = model.albumColors {
                             Circle().fill(colors.0).frame(width: 18, height: 18).accessibilityLabel("Primary album color")
                             Circle().fill(colors.1).frame(width: 18, height: 18)
                                 .accessibilityLabel("Secondary album color")
@@ -158,6 +158,8 @@ struct ColorPage: View {
                           systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                     Button("Open Privacy & Security") { AudioPrivacy.openAutomation() }
                 }
+            } header: {
+                Text("Now playing")
             } footer: {
                 Text("Album colors come from Apple Music. Spotify and other players use your colors.")
                     .font(.caption).foregroundStyle(.secondary)

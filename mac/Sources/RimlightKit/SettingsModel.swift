@@ -62,6 +62,11 @@ final class SettingsModel: ObservableObject {
         return previewGlow
     }
 
+    /// Whether the glow uses album colours, for the media service (covers are read only then).
+    var usesAlbumColors: Bool {
+        settings.colorMode == "AlbumArt" && !settings.overrideAlbumColor
+    }
+
     /// A new track or cover from the media service.
     func mediaChanged(_ track: NowPlayingService.Track?, automationDenied denied: Bool) {
         nowPlaying = track

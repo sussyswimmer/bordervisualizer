@@ -722,6 +722,15 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - **Tests:**
   - C#: 32, including a cover becoming the palette (blue primary from a 70/30 blue and orange cover), a flat grey icon being "no art", and the tooltip.
   - Swift: decoding a cover to 64 px BGRA, and linear colours shown as sRGB.
+- **Independent review**, two blockers fixed:
+  - **Apple events could stall the media queue** for up to 2 minutes (AppleScript's default timeout), or until the Automation prompt was answered. They now run on a queue of their own with a 3 s timeout, so notifications and quits never wait behind them.
+  - **A window where an Apple event could launch Music.** Both scripts first ask `application id "com.apple.Music" is running`, which never launches it.
+  - **Also fixed:**
+    - covers are read only while album colours are in use, so a user on manual colours is never asked about Automation;
+    - a refused cover is read again when Settings opens, in case Automation was allowed meanwhile;
+    - the Automation warning clears when Music isn't the source;
+    - a cover read during a skip is dropped unless its track name matches;
+    - the swatches show only in album mode.
 - **Unverified until Maxwell's run:**
   - the Music notification's keys on macOS 26 and 27 (`Name`, `Artist`, `Player State`);
   - `raw data` of the artwork;

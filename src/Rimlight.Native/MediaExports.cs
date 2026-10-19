@@ -62,6 +62,8 @@ internal static unsafe partial class Exports
         }
     }
 
+    // The Windows tooltip's own text (TrayToolTip.Build). Its two Windows details, the 127-unit limit and "&" shown as
+    // a full-width ampersand, are harmless in a Mac tooltip and keep both apps' text the same.
     [UnmanagedCallersOnly(EntryPoint = "rl_tooltip")]
     public static int ToolTip(byte* title, byte* artist, byte* sourceApp, int isPlaying, byte* buffer, int capacity)
     {

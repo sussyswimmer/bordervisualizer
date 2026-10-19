@@ -10,8 +10,10 @@ import os
 /// which Maxwell hasn't allowed (Q4), so Spotify and every other player get the manual colours.
 ///
 /// Doc 05 §1's rules: a change is read 250 ms after the last event; a missing cover keeps the previous colours and is
-/// read once more after 750 ms, then the manual colours show. Everything runs on one serial queue; `onChange` is
-/// called on the main thread.
+/// read once more after 750 ms, then the manual colours show. The state lives on one serial queue; the Apple events run
+/// on a second one (they can wait on Music, or on the user answering the Automation prompt) with a 3 s timeout, so
+/// notifications never queue up behind them. Covers are read only while album colours are in use, so a user on manual
+/// colours is never asked about Automation. `onChange` is called on the main thread.
 final class NowPlayingService: @unchecked Sendable {
     struct Track: Equatable {
         let title: String?
@@ -28,6 +30,7 @@ final class NowPlayingService: @unchecked Sendable {
 
     private let loop: CoreLoop
     private let queue = DispatchQueue(label: "media", qos: .utility)
+    private let events = DispatchQueue(label: "media.appleevents", qos: .utility) // one NSAppleScript at a time
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "media")
     private let onChange: @MainActor (Track?, Bool) -> Void
     private var observers: [NSObjectProtocol] = []
@@ -38,6 +41,7 @@ final class NowPlayingService: @unchecked Sendable {
     private var coverFor: String?           // the track whose cover was last read
     private var pending = 0
     private var automationDenied = false
+    private var albumColorsWanted = false
 
     /// `onChange(track, automationDenied)`: the track to show (nil: none) and whether Music refused the cover.
     init(loop: CoreLoop, onChange: @escaping @MainActor (Track?, Bool) -> Void) {
@@ -59,15 +63,41 @@ final class NowPlayingService: @unchecked Sendable {
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: nil
         ) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            guard let id = app?.bundleIdentifier else { return }
-            self?.queue.async { self?.playerQuit(id) }
+            guard let self, let id = app?.bundleIdentifier else { return }
+            queue.async { self.playerQuit(id) }
         })
-        // What Music plays already (Spotify announces itself on its next change).
+    }
+
+    /// Whether the glow uses album colours (Color mode "From album art" without "Use my colors"). Covers are read only
+    /// then; turning it on reads the current one. Any thread.
+    func setAlbumColorsWanted(_ wanted: Bool) {
         queue.async { [self] in
-            if Self.isRunning(Self.musicID), let track = Self.musicNowPlaying() {
-                tracks[Self.musicID] = track
+            guard wanted != albumColorsWanted else { return }
+            albumColorsWanted = wanted
+            guard wanted else { return }
+            if tracks[Self.musicID] == nil {
+                // What Music plays already (Spotify announces itself on its next change).
+                events.async { [self] in
+                    let track = Self.musicNowPlaying()
+                    queue.async { [self] in
+                        if let track, tracks[Self.musicID] == nil { tracks[Self.musicID] = track }
+                        coverFor = nil
+                        schedule()
+                    }
+                }
+            } else {
+                coverFor = nil
                 schedule()
             }
+        }
+    }
+
+    /// Reads the cover again (after the user may have allowed Automation in System Settings). Any thread.
+    func recheck() {
+        queue.async { [self] in
+            guard automationDenied else { return }
+            coverFor = nil
+            schedule()
         }
     }
 
@@ -100,10 +130,13 @@ final class NowPlayingService: @unchecked Sendable {
     private func refresh() {
         let candidates = [Self.musicID, Self.spotifyID].compactMap { id in tracks[id].map { (id, $0) } }
         let pick = candidates.first { $0.1.isPlaying } ?? candidates.first
-        if pick?.1 != shown {
-            shown = pick?.1
-            publish()
+        var changed = pick?.1 != shown
+        shown = pick?.1
+        if automationDenied && pick?.0 != Self.musicID {
+            automationDenied = false // only Music's covers need Automation
+            changed = true
         }
+        if changed { publish() }
         guard let pick else {
             coverFor = nil
             clearColors()
@@ -111,19 +144,30 @@ final class NowPlayingService: @unchecked Sendable {
         }
         let (bundleID, track) = pick
         guard track.id != coverFor else { return }
-        coverFor = track.id
         if bundleID == Self.musicID {
+            guard albumColorsWanted else { return }
+            coverFor = track.id
             readCover(of: track, retry: true)
         } else {
+            coverFor = track.id
             clearColors() // Spotify: no cover without a network fetch (10-MACOS Q4)
         }
     }
 
     private func readCover(of track: Track, retry: Bool) {
-        guard coverFor == track.id, Self.isRunning(Self.musicID) else { return }
-        switch Self.musicCover() {
+        guard coverFor == track.id, albumColorsWanted, Self.isRunning(Self.musicID) else { return }
+        events.async { [self] in
+            let cover = Self.musicCover(title: track.title)
+            queue.async { [self] in useCover(cover, of: track, retry: retry) }
+        }
+    }
+
+    private func useCover(_ cover: Cover, of track: Track, retry: Bool) {
+        guard coverFor == track.id else { return } // another track meanwhile
+        switch cover {
         case .denied:
             automationDenied = true
+            coverFor = nil // read again once allowed (recheck)
             clearColors()
         case .data(let data):
             automationDenied = false
@@ -169,29 +213,39 @@ final class NowPlayingService: @unchecked Sendable {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
+    // Both scripts first ask whether Music runs, which never launches it (a `tell` would, if it quit meanwhile), and
+    // give up after 3 s rather than AppleScript's default 2 minutes.
     private static let coverScript = NSAppleScript(source: """
-        tell application id "com.apple.Music"
-            if player state is stopped then return missing value
-            if (count of artworks of current track) is 0 then return missing value
-            return raw data of artwork 1 of current track
-        end tell
+        if application id "com.apple.Music" is not running then return missing value
+        with timeout of 3 seconds
+            tell application id "com.apple.Music"
+                if player state is stopped then return missing value
+                if (count of artworks of current track) is 0 then return missing value
+                return {name of current track, raw data of artwork 1 of current track}
+            end tell
+        end timeout
         """)
 
     private static let trackScript = NSAppleScript(source: """
-        tell application id "com.apple.Music"
-            if player state is stopped then return {"", "", "stopped"}
-            return {name of current track, artist of current track, player state as text}
-        end tell
+        if application id "com.apple.Music" is not running then return missing value
+        with timeout of 3 seconds
+            tell application id "com.apple.Music"
+                if player state is stopped then return {"", "", "stopped"}
+                return {name of current track, artist of current track, player state as text}
+            end tell
+        end timeout
         """)
 
-    private static func musicCover() -> Cover {
+    /// Music's current cover, if it still plays `title` (a skip during the read would give the next song's).
+    private static func musicCover(title: String?) -> Cover {
         var error: NSDictionary?
         guard let result = coverScript?.executeAndReturnError(&error) else {
             let code = error?[NSAppleScript.errorNumber] as? Int
             return code == -1743 ? .denied : .missing // errAEEventNotPermitted: Automation refused
         }
-        let data = result.data
-        return result.descriptorType == typeNull || data.isEmpty ? .missing : .data(data)
+        guard result.numberOfItems == 2, let data = result.atIndex(2)?.data, !data.isEmpty else { return .missing }
+        if let title, let playing = result.atIndex(1)?.stringValue, playing != title { return .missing }
+        return .data(data)
     }
 
     private static func musicNowPlaying() -> Track? {
