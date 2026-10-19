@@ -31,7 +31,8 @@ Research date: **2026-10-19**. Each decision lists what was checked and where. *
 
 - **Rimlight.Core is compiled as it is**, through a new `src/Rimlight.Native` class library that references it and exports a small C ABI with `[UnmanagedCallersOnly]`.
   - Publishing with `PublishAot` gives one self-contained `.dylib` for each architecture, with no .NET runtime to install.
-  - The library also compiles the Windows app's Windows-free per-frame code as linked source files, unchanged: `GlowProfile.cs`, `GlowConstants.cs`, `FramePacer.cs` and the `FrameMotion` enum.
+  - The library also compiles the Windows app's Windows-free per-frame code as linked source files, unchanged: `GlowProfile.cs`, `GlowConstants.cs`, `FramePacer.cs`, `IOverlayFrameSource.cs` (for `FrameMotion`), `SrgbHex.cs` and `DemoBeat.cs`. These use only `Rimlight.Core` and `System`.
+    - `DemoBeat.PaletteFade` reads `MusicGlowSource.AlbumFade`. M1 changes it to its own `TimeSpan.FromMilliseconds(800)`: the same value, so Windows behaves the same.
   - Its frame pipeline mirrors `MusicGlowSource`, and a test replays the same input through it and Bench's `FramePipeline` (§1.4).
   - **The analysis, the light engine, the palette, the edge profile and the frame pacing are therefore the same compiled C# on both platforms.**
 - **Everything that talks to macOS is Swift**: windows, Metal, the Core Audio tap, now-playing, the menu bar, Settings (SwiftUI), the system watchers, the hotkey, the login item and Sparkle.
@@ -51,13 +52,16 @@ Option B wins on every point except "one language". The seam is small: the C ABI
 
 ### 1.3 The C ABI (sketch; M1 fixes the details)
 
-All functions are on `libRimlightCore`. The functions with a handle take the pipeline handle. Every struct is blittable and versioned by its size. Strings are UTF-8.
+All functions are on `libRimlightCore`. The functions with a handle take the pipeline handle. Every struct is blittable and versioned by its size. Strings are UTF-8, written into a buffer the caller passes with its length, so no memory crosses the boundary to be freed.
+
+- **Every export catches every exception** and returns a status code, logging the exception. An exception escaping an `[UnmanagedCallersOnly]` method ends the process.
+- `Rimlight.Native` sets `IsAotCompatible`, so trimming and AOT warnings fail the build under `TreatWarningsAsErrors`.
 
 | Function | Thread | What it does |
 |---|---|---|
-| `rl_app_name`, `rl_version` | any | `AppInfo.Name`, and the version (so Swift never spells "Rimlight") |
+| `rl_app_name`, `rl_version` | any | `AppInfo.Name`, and the assembly's informational version, which comes from `<Version>`, so Swift never spells "Rimlight" |
 | `rl_create(settingsDir)` / `rl_destroy` | main | the pipeline: analyzer, engine, blender, pacer, settings store |
-| `rl_settings_load` / `rl_settings_apply(json)` / `rl_settings_save` | main | Core's `ISettingsStore` and its validation; apply publishes a new immutable `Settings` snapshot to the render thread (`Interlocked.Exchange`, doc 02) |
+| `rl_settings_load` / `rl_settings_apply` / `rl_settings_save` | main | Settings cross as a blittable `RlSettings` struct, with enums as ints, plus string getters and setters for the two hex colours, the hotkey and the monitor IDs. Load and save go through Core's `ISettingsStore`, which validates the file. Apply builds a new immutable `Settings` and publishes it to the render thread (`Interlocked.Exchange`, doc 02). Core's JSON and validator are internal, so no JSON crosses the boundary. The Settings UI keeps every control within the ranges in CORE-API §7.1, and Core's consumers clamp what they read anyway |
 | `rl_presets_*` | any | names and `Apply` |
 | `rl_set_album_art(bgra, w, h, trackId)` | a background queue | `IPaletteExtractor.Extract`, then publishes the palette with `Volatile.Write` (doc 02) |
 | `rl_set_demo`, `rl_set_paused`, `rl_set_audio_wanted` | any | the same switches as `MusicGlowSource` |
@@ -74,9 +78,12 @@ All functions are on `libRimlightCore`. The functions with a handle take the pip
   - the C ABI round trips (settings JSON, presets, struct sizes);
   - a replay that feeds the same samples and settings through `rl_frame` and Bench's `FramePipeline` and requires identical `LightState`s;
   - a zero-allocation check on `rl_frame`.
+  - These run the JIT build. A Swift test also links the published AOT dylib and calls `rl_create`, `rl_frame` and `rl_surface`, so the shipped binary is exercised too.
+  - Bench and the linked Platform code each define a `FrameMotion`, so the tests import one through an alias.
 - **The shader matches `GlowProfile` exactly.** The Metal shader is a line-by-line port of `Glow.hlsl`. Its math (rounded-box depth, eased distance, profile, perimeter coordinate) lives in `GlowMath.h`, which is valid both as Metal Shading Language and as C with `<simd/simd.h>`. Two checks use it:
   1. **CPU parity.** A C# test writes a golden table (`mac/Tests/Fixtures/glow-golden.json`): `GlowProfile` and `GlowConstants` for a grid of distances, sizes, thicknesses, glows, pulses and corner radii. A Swift test (`swift test`) compiles `GlowMath.h` as C and must match it within 1e-5.
      - A second C# test fails if the committed table is stale, so the profile can't change on one side alone.
+     - `GlowMath.h` declares the uniform struct with `static_assert(sizeof(GlowConstants) == 64)`, mirroring `GlowConstants.SizeInBytes`.
   2. **GPU parity.** A Swift test renders the shader offscreen at known constants and compares the pixels with the same table (within one 8-bit code value, dither excluded).
      - It skips itself when no Metal device exists. Whether GitHub's arm64 macOS runners expose Metal is **unverified**, and M1 finds out. If they don't, it runs on Maxwell's Mac through `swift test`.
 
@@ -91,15 +98,19 @@ mac/Resources/                Info.plist template, Glow.metal, entitlements, ico
 mac/build.sh                  AOT-publish both architectures + lipo → swift build (universal) → assemble Rimlight.app → sign → DMG
 ```
 
+- **Ownership:** `src/Rimlight.Native*` and `mac/` are Lane B, Claude Code's (doc 09 §2 gets a line saying so in M0).
 - **Neither new project goes into `Rimlight.sln` or `Rimlight.Core.slnf`**, so the Linux and Windows jobs build exactly what they build today.
   - `Rimlight.Core` stays `net8.0` and is referenced from net10.0, which .NET allows.
   - Moving Core itself to net10.0 before .NET 8's end of support is Codex's lane and Maxwell's call (HANDOFF H-029). It doesn't block the Mac.
 - **SwiftPM plus a script, not an `.xcodeproj`.** A package is plain text that both agents can edit and review. The script assembles the bundle with `Info.plist`, `Contents/Frameworks/libRimlightCore.dylib`, the shader source and the icon, then signs it.
+  - The dylib's install name is set to `@rpath/libRimlightCore.dylib` (`install_name_tool -id`), and the executable gets an `@executable_path/../Frameworks` rpath.
+  - Signing goes inside out: the dylib first (and Sparkle's parts, M7), then the app. No `--deep`.
 - **The name and version come only from the two sources.**
   - `build.sh` reads `<AppName>` and `<Version>` from `src/Directory.Build.props` into the `Info.plist` keys `CFBundleName`, `CFBundleExecutable` and `CFBundleShortVersionString`, the DMG name and the bundle ID `io.github.sussyswimmer.<appname-lowercase>`.
   - At runtime Swift reads the name from `rl_app_name()`, which is `AppInfo.Name`.
   - A rename stays one find-and-replace.
 - **The shader is compiled at runtime from source** (`MTLDevice.makeLibrary(source:)`), as `Glow.hlsl` is on Windows. This avoids the Metal toolchain download, which Xcode 26 made a separate component [**unverified**]. The cost is a few milliseconds at startup.
+  - Runtime compilation can't resolve `#include`, so `build.sh` joins `GlowMath.h` and `Glow.metal` into the single source file the bundle carries.
 
 ### 1.6 CI: a `macos` job in `ci.yml`
 
@@ -110,7 +121,7 @@ mac/build.sh                  AOT-publish both architectures + lipo → swift bu
   2. `dotnet test src/Rimlight.Native.Tests -c Release`.
   3. NativeAOT publish for osx-arm64 and osx-x64.
   4. `swift build -c release -Xswiftc -warnings-as-errors` and `swift test`.
-  5. `mac/build.sh` for an ad-hoc-signed universal `Rimlight.app`, uploaded as a zip artifact. Maxwell can download and run that exact build.
+  5. `mac/build.sh` for an ad-hoc-signed universal `Rimlight.app`, zipped with `ditto -c -k --keepParent` (so the binaries keep their permissions) and uploaded as an artifact. Maxwell can download and run that exact build. A downloaded build is quarantined, so his checklist includes "Open Anyway" (or `xattr -dr com.apple.quarantine Rimlight.app`).
 - The C# projects keep `TreatWarningsAsErrors` from `Directory.Build.props`, so zero warnings is enforced on both sides.
 - The `core` and `windows` jobs and `Rimlight.Core.slnf` stay unchanged. `.github/` is Lane A's (doc 09), so this one job is added with a note in HANDOFF (H-029), as the brief asks.
 
@@ -127,6 +138,7 @@ A global stereo tap that excludes Rimlight's own process, read through a private
   - `CATapDescription(stereoGlobalTapButExcludeProcesses:)` takes our own process's audio object [Apple: …/coreaudio/catapdescription].
   - Read the tap's UID with `kAudioTapPropertyUID`, create a private aggregate device whose tap list holds it, and read it with an IO proc "just like a microphone" [Apple: "Capturing system audio with Core Audio taps"; 3P: insidegui/AudioCap].
   - The tap leaves other apps audible: `muteBehavior` stays unmuted.
+  - The aggregate device is private (`kAudioAggregateDeviceIsPrivateKey`), has the tap auto-start, and has the default output device as its main sub-device. Rimlight's own process object, which the tap excludes, comes from `kAudioHardwarePropertyTranslatePIDToProcessObject`.
 - **The IO proc only converts to mono float and writes the C ring** (doc 02's rule). The render thread drains it.
   - The tap's format comes from the stream: usually 48 kHz float. Core gets the sample rate per frame as on Windows (`CoreFactory.AnalysisSampleRate`).
   - "No data for 100 ms means silence" carries over from doc 03 §1.
@@ -137,7 +149,8 @@ A global stereo tap that excludes Rimlight's own process, read through a private
   - Our usage text: *"Rimlight listens to your Mac's sound output to light your screen to the beat. Nothing is recorded or saved."*
 - **No public API checks or requests this permission** [Apple engineer, same thread]. Denied access gives buffers of exact zeros. So:
   - the first-run window explains the prompt **before** the tap starts, so the prompt has context;
-  - after 10 s of exact digital zeros while the system says audio is playing (`kAudioDevicePropertyDeviceIsRunningSomewhere` on the default output), Settings › Motion shows "Rimlight can't hear your Mac" with a button that opens that Settings pane.
+  - after 10 s of exact digital zeros while another process is playing sound, Settings › Motion shows "Rimlight can't hear your Mac" with a button that opens that Settings pane.
+    - "Playing" is the per-process `kAudioProcessPropertyIsRunningOutput` (macOS 14.2) on any process but our own. The device-wide `DeviceIsRunningSomewhere` isn't used: browsers and call apps keep the output open while sending silence, so it would misfire.
     - A quiet song is never exact zeros for 10 s, so this doesn't misfire on quiet music.
     - The private TCC preflight call that AudioCap uses is unreliable by its author's account [3P], so we don't use it.
 - **Device changes.**
@@ -167,8 +180,10 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
   - `level = .screenSaver`. `.floating` and `.statusBar` sit **under** other apps' full-screen content.
   - `collectionBehavior = [.canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle]`.
   - `ignoresMouseEvents = true` (click-through), `isOpaque = false`, `backgroundColor = .clear`, `hasShadow = false`.
+  - `hidesOnDeactivate = false` (an NSPanel's default is true, which would hide the glow whenever another app is active), and `canBecomeKey` and `canBecomeMain` return false.
   - Shown with `orderFrontRegardless()`.
 - **Frame:** `NSScreen.frame` when **Cover taskbar** is on (the Mac's label: "Cover the menu bar and Dock"), and `visibleFrame` when it's off. The settings field keeps its name, so the file format is the same (doc 06 §1).
+  - `visibleFrame` changes when the Dock moves, resizes or auto-hides, and `didChangeScreenParameters` doesn't reliably report that. With Cover taskbar off, the overlay re-reads `visibleFrame` every 2 s along with the full-screen check (§5).
 - **Hide from screen capture:** `sharingType = .none`. Users report that ScreenCaptureKit and full-screen captures still show such windows [3P: forums 808016], so the Settings text says "may not hide it from every recorder". The default stays off (PRD §5).
 - **To test by hand [unverified]:** Mission Control, Stage Manager, App Exposé and moving between Spaces. No documented regressions were found for macOS 26 or 27.
 
@@ -180,7 +195,7 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
   - The menu bar is above the overlay only when Cover taskbar is off.
   - A notch-hugging outline is out of v1 (roadmap).
 - **Rounded display corners.** NSScreen has **no public corner-radius API**; `_displayCornerRadius` is a private iOS selector [Apple's NSScreen symbol list; 3P].
-  - Doesn't matter much here: the light's distance field already rounds its corners to at least two spreads plus the shoulder (`GlowProfile.GlowRadius`, about 80 px at the defaults), well beyond a MacBook's corner. The hardware corner just crops a soft glow.
+  - Doesn't matter much here: the light's distance field already rounds its corners to at least two spreads plus the shoulder (`GlowProfile.GlowRadius`: about 80 px at the defaults on a 1080p screen, and more on a Retina one), well beyond a MacBook's corner. The hardware corner just crops a soft glow.
   - `CornerRadiusDip` stays the user's setting (default 0), as on Windows. No private API.
 
 ### 3.3 Drawing: Metal
@@ -193,7 +208,7 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
 - `drawableSize` = frame size × the screen's `backingScaleFactor` × render scale.
   - Half render scale (on battery with Reduce) draws at half size, and the layer stretches it.
   - Pixels per DIP are `backingScaleFactor × render scale`: one macOS point stands for the DIP, and both `GlowConstants.Create` and the Thickness and corner settings take it as their scale.
-  - Thickness 6 is therefore 6 pt: 12 px on a Retina screen, which is the same physical size as 6 DIP at 200 % on Windows.
+  - Thickness 6 is therefore 6 pt: 12 px on a Retina screen, the same pixel count as 6 DIP at 200 % on Windows.
 - **`Glow.metal` is a line-by-line port of `Glow.hlsl`:** the same uniform block (`GlowConstants`, 64 bytes), a full-screen triangle from `vertex_id`, the 64-texel gradient as a 64 × 1 `rgba32Float` texture with linear filtering and repeat addressing, the same perimeter coordinate, mean-colour blend, sRGB encode and dither, and premultiplied output.
   - The profile functions sit in `GlowMath.h` and are tested against `GlowProfile` (§1.4).
 
@@ -203,6 +218,7 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
 - **The replacement is `NSScreen.displayLink(target:selector:)`** (macOS 14), which returns a `CADisplayLink` [Apple].
   - Use NSScreen's rather than a view's: per the docs, a view's link doesn't fire while the view is hidden [Apple: NSView.displayLink], and a hidden overlay still has to keep listening for music.
 - **The link is added to a dedicated render thread's run loop**, not the main thread, so Settings or a busy menu never steps the glow. This thread owns Metal and calls `rl_frame` (doc 02).
+- **One slow screen can't hold up the others.** `nextDrawable` can block for up to a second on a sleeping or slower screen. Each screen's layer therefore sets a short drawable timeout, and a screen without a free drawable skips that frame and reports it as not presented. `FramePacer`'s `AllPresented` and `Stalled` handle that as they do on Windows (a stalled screen keeps the slow rate, not the full one).
 - **`FramePacer` is the policy**, compiled from the same C# file. It returns `Full`, `Slow` or `Block` after each frame, which maps to:
 
   | Pace | Mac |
@@ -211,7 +227,7 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
   | `Slow` | The link is paused, and a 100 ms run-loop timer drives frames (Idle Glow breathing, listening for music). |
   | `Block` | The link is paused and there's no timer. The thread sleeps in its run loop until an input change (settings, pause, battery, displays) signals a run-loop source. **0 % CPU.** |
 
-  - Pacing follows the main screen's refresh, as Windows follows the primary monitor's.
+  - Pacing follows the primary screen's refresh (`NSScreen.screens[0]`, the one with the menu bar; `NSScreen.main` is the key window's screen), as Windows follows the primary monitor's. The link is recreated when that screen changes.
   - Low Power Mode, thermal state and accessibility settings may lower the link's rate on their own [Apple], which is fine.
 - **Mixed scaling.** Each screen gets its own `backingScaleFactor` and its own `GlowConstants`. `NSApplication.didChangeScreenParametersNotification` rebuilds the overlays, debounced by 300 ms as on Windows (doc 02). Displays are identified by `CGDisplayCreateUUIDFromDisplayID`, which stays stable across reboots and replugging, and those IDs are what `CustomMonitorIds` stores on the Mac.
 
@@ -327,7 +343,7 @@ One milestone is one branch (`claude/mac-<m>-<slug>`), one PR into PR #32's bran
 
 ## 8. Decisions for Maxwell
 
-Each has a recommended default, which the build follows until he answers. They're also HANDOFF H-030.
+Each has a recommendation. They're also HANDOFF H-030. **Q0 blocks M0:** no app code starts until Maxwell confirms the stack. Q1, Q3 and Q5 follow the recommendation until he answers. Q4 stays **No** (the one-network-call rule) until he says yes, and Q2 is needed only by M7.
 
 | | Decision | Recommended |
 |---|---|---|
@@ -335,5 +351,5 @@ Each has a recommended default, which the build follows until he answers. They'r
 | **Q1** | Minimum macOS | **14.4 Sonoma.** System-audio taps need 14.2, and 14.4 is the tested floor. Covers every Mac that runs Sonoma or later. |
 | **Q2** | An Apple Developer account ($99 a year) for signing and notarization | **Yes, before the first public Mac release.** Without it users must click "Open Anyway" in System Settings, and macOS asks for the audio permission again after every update. M0–M6 don't need it. |
 | **Q3** | Universal (Apple silicon + Intel) or Apple silicon only | **Universal.** Costs a few MB and a CI step. But no Intel Mac will test it unless you have one, and Intel Macs stop at macOS 26. |
-| **Q4** | Fetch Spotify's album art from Spotify's image server: a second network call, stated in the README's privacy section | **Yes**, only on a track change, only Spotify's own URL. Otherwise Spotify gets the manual colours. |
+| **Q4** | Fetch Spotify's album art from Spotify's image server: a second network call, stated in the README's privacy section | **Yes**, only on a track change, only Spotify's own URL. Until you say yes, Spotify gets the manual colours. |
 | **Q5** | Album colours from browsers and other players through the `mediaremote-adapter` loophole | **No for v1.** It's a private-API workaround Apple can close in any update. Revisit later. |

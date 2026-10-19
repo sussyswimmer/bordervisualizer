@@ -1,9 +1,9 @@
 # Handoff
 
-## [OPEN] H-030 · from: claude-code (macOS) · to: maxwell · blocking: M7 (Q2), none for the rest
+## [OPEN] H-030 · from: claude-code (macOS) · to: maxwell · blocking: M0 (Q0), M7 (Q2)
 **Need:** Six decisions for the Mac app (docs/10-MACOS.md §8): Q0 Swift over the shared C# Core, Q1 the minimum macOS, Q2 an Apple Developer account, Q3 universal or Apple silicon only, Q4 fetching Spotify's album art from Spotify's server, Q5 the private-API workaround for other players.
 **Repro:** docs/10-MACOS.md §8 has each option and why.
-**Proposed:** The recommended defaults, which the build follows until you answer: Q0 yes, Q1 macOS 14.4, Q2 yes before the first public Mac release, Q3 universal, Q4 yes, Q5 no for v1.
+**Proposed:** Recommended: Q0 yes, Q1 macOS 14.4, Q2 yes before the first public Mac release, Q3 universal, Q4 yes, Q5 no for v1. M0 waits for Q0. Q4 stays "no" until you say yes, and the build follows the other recommendations until you answer.
 ---
 ## [OPEN] H-029 · from: claude-code (macOS) · to: codex, maxwell · blocking: none
 **Need:** Three Lane A items for the Mac app (docs/10-MACOS.md):
