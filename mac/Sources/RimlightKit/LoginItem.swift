@@ -5,13 +5,15 @@ import os
 enum LoginItem {
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "login")
 
-    /// Registers or unregisters to match the setting. Done at every start too, so an update (a new ad-hoc signature)
-    /// keeps the login item pointing at this copy.
+    /// Registers or unregisters to match the setting (on change, and once at start). Registers only when not yet
+    /// registered: once the user has turned it off in System Settings (requiresApproval), registering again would
+    /// override their choice, so Settings shows the approval note instead.
     @MainActor
     static func apply(_ enabled: Bool) {
         let service = SMAppService.mainApp
         do {
             if enabled {
+                guard service.status == .notRegistered || service.status == .notFound else { return }
                 try service.register()
             } else if service.status == .enabled || service.status == .requiresApproval {
                 try service.unregister()

@@ -711,20 +711,26 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - The setting keeps the Windows format, "Ctrl+Alt+L". `HotkeyGesture.cs` is compiled into the native library (`rl_hotkey_parse`, `rl_hotkey_format`), so both apps read and write it the same way. "Win" stands for ⌘ on the Mac.
   - Swift maps Windows virtual-key codes to Carbon key codes (US positions) and registers with `RegisterEventHotKey`, which needs no Accessibility or Input Monitoring permission.
   - On top of the Windows rules, the Mac asks for ⌃ or ⌘ (or a function key), since macOS 15 refuses Option- and Shift-only shortcuts.
-  - A shortcut another app holds shows a warning on the Behavior page, as on Windows.
-  - **Glow On** in the menu shows the shortcut.
+  - It also refuses ⌘Q, ⌘W, ⌘H, ⌘M, ⌘Tab and ⌘Space, which a global shortcut would take from every app (the Mac's version of Windows' `IsSystemKey`).
+  - Insert maps to the Help key and Oem102 to § (ISO). Pause, PrintScreen, ScrollLock and F21–F24 have no Mac key.
+  - The Behavior page tells the two failures apart: "Another app uses this shortcut" or "This shortcut doesn't work on a Mac" (for example Alt+L from a Windows file).
+  - **Glow On** in the menu shows the shortcut, only while it is registered.
 - **Recorder:** Behavior › "Glow on and off" with Record, Cancel (or ⎋) and Remove. It takes the next key pressed in the window.
+  - While it records, the current shortcut is let go, so it can be pressed into the recorder.
+  - It stops when the page goes away or the window loses focus, so its key monitor can't keep swallowing keys.
 - **Open at login:**
-  - `SMAppService.mainApp`, registered at every start while the setting is on, so an update (a new ad-hoc signature) keeps the login item pointing at this copy.
+  - `SMAppService.mainApp`, registered only while not yet registered. If the user turns it off in System Settings › Login Items, the app doesn't register again over their choice; the Behavior page shows the approval note instead.
   - When macOS wants approval, the Behavior page says so, with a button to Login Items.
   - On by default, as on Windows.
 - **One copy:**
   - An exclusive `flock` on `~/Library/Application Support/Rimlight/instance.lock`, held for the app's life.
   - A second launch posts a distributed notification (`<bundle id>.show-settings`, or `.demo` with `--demo`) and quits, and the first copy opens Settings or starts the demo.
   - Anyone can post those notifications, but all they can do is open Settings or start the demo.
+  - Opening the app from Finder or Launchpad while it runs starts no second process. macOS sends the running copy a reopen event, which opens Settings too.
 - **Tests:**
   - C#: 38, including the shortcut text through the C ABI.
-  - Swift: ⌃⌥L, a pressed key becoming "Shift+Win+K", Option-only refused, and the key code map both ways.
+  - Swift: ⌃⌥L, a pressed key becoming "Shift+Win+K", Option-only refused, macOS's own ⌘ keys refused, Insert and Oem102, and the key code map both ways.
+- **Review:** an independent review found that the recorder's monitor could outlive the page, and that a reopen from Finder did nothing. Both are fixed, along with the login item re-registering over the user's choice, the wrong warning, and the menu showing an unregistered shortcut.
 
 ### M5 notes
 

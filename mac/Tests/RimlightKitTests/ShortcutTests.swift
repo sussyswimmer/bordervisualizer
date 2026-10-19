@@ -37,4 +37,18 @@ final class ShortcutTests: XCTestCase {
             XCTAssertEqual(carbon.flatMap(KeyCodes.virtualKey(forCarbon:)), vk)
         }
     }
+
+    func testMacOSKeepsItsOwnCommandShortcuts() {
+        XCTAssertNil(Shortcut(keyCode: UInt16(kVK_ANSI_Q), flags: [.command]))      // ⌘Q would quit nothing else
+        XCTAssertNil(Shortcut(keyCode: UInt16(kVK_ANSI_W), flags: [.command]))
+        XCTAssertNil(Shortcut(keyCode: UInt16(kVK_Tab), flags: [.command, .shift]))
+        XCTAssertNil(Shortcut(keyCode: UInt16(kVK_Space), flags: [.command]))
+        XCTAssertNotNil(Shortcut(keyCode: UInt16(kVK_ANSI_Q), flags: [.command, .control])) // ⌃⌘Q is the user's
+    }
+
+    func testWindowsOnlyKeysHaveMacPlaces() {
+        XCTAssertEqual(Shortcut(setting: "Ctrl+Insert")?.carbonKeyCode, kVK_Help)
+        XCTAssertEqual(Shortcut(setting: "Ctrl+Oem102")?.carbonKeyCode, kVK_ISO_Section)
+        XCTAssertNil(Shortcut(setting: "Ctrl+Pause")?.carbonKeyCode) // no Mac key: Settings says so
+    }
 }

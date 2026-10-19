@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import os
 
 /// One copy at a time (doc 06 §4): an exclusive lock on a file in Application Support, held while the app runs. A
 /// second launch tells the running copy what it was asked for (show Settings, or start the demo) and quits.
@@ -15,7 +16,10 @@ enum SingleInstance {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let path = directory.appendingPathComponent("instance.lock").path
         let file = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard file >= 0 else { return true } // can't tell: run rather than refuse
+        guard file >= 0 else { // can't tell: run rather than refuse
+            Logger(subsystem: bundleID, category: "instance").error("The instance lock couldn't be opened (errno \(errno))")
+            return true
+        }
         if flock(file, LOCK_EX | LOCK_NB) != 0 {
             close(file)
             return false

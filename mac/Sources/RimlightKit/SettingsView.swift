@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 import SwiftUI
 
 /// The Settings window (doc 06 §3): the same six pages as on Windows. Every change applies live, with no Save button.
@@ -433,11 +432,16 @@ struct ShortcutRecorder: View {
                 }
             }
         }
+        // A monitor left running would swallow every key in the app, so recording ends with the view or the focus.
+        .onDisappear { stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in stop() }
         if refused {
-            Text("Use ⌃ or ⌘ with a key, or a function key.").font(.caption).foregroundStyle(.secondary)
+            Text("Use ⌃ or ⌘ with a key, or a function key. ⌘Q, ⌘W, ⌘H, ⌘M, ⌘Tab and ⌘Space stay with macOS.").font(.caption).foregroundStyle(.secondary)
         }
-        if model.hotkeyFailed {
-            Label("Another app uses this shortcut. Choose another.", systemImage: "exclamationmark.triangle")
+        if !recording, let problem = model.hotkeyProblem {
+            Label(problem == .taken ? "Another app uses this shortcut. Choose another."
+                                    : "This shortcut doesn't work on a Mac. Record another.",
+                  systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.orange)
         }
     }
@@ -449,10 +453,12 @@ struct ShortcutRecorder: View {
     }
 
     private func start() {
+        guard monitor == nil else { return }
         refused = false
         recording = true
+        model.recordingShortcut(true)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == UInt16(kVK_Escape) && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+            if event.keyCode == 53 /* kVK_Escape */ && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
                 stop()
                 return nil
             }
@@ -467,8 +473,10 @@ struct ShortcutRecorder: View {
     }
 
     private func stop() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
         recording = false
+        model.recordingShortcut(false)
     }
 }

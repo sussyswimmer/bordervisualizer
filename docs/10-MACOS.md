@@ -287,7 +287,7 @@ Doc 05's quirks carry over: debounce 250 ms, retry once after 750 ms when the ar
 - **Launch at login.** `SMAppService.mainApp.register()` (macOS 13) [Apple: SMAppService].
   - When the status is `.requiresApproval`, Behavior shows a button that opens Login Items (`openSystemSettingsLoginItems()`).
   - The first run turns it on (the `LaunchAtStartup` default), as on Windows.
-- **Single instance.** An exclusive `flock` on `…/Application Support/Rimlight/instance.lock`; `NSRunningApplication` alone has a start-up race [3P]. A second launch posts a distributed notification (`<bundle id>.show-settings`) and exits, and the running copy opens Settings. `--demo` and `--debug-visualizer` are forwarded the same way.
+- **Single instance.** An exclusive `flock` on `…/Application Support/Rimlight/instance.lock`; `NSRunningApplication` alone has a start-up race [3P]. A second launch posts a distributed notification (`<bundle id>.show-settings`) and exits, and the running copy opens Settings. `--demo` is forwarded the same way (the Mac has no debug visualizer yet, so there is no `--debug-visualizer` to forward). Opening the app from Finder while it runs starts no second process: LaunchServices sends the running copy a reopen event, which also opens Settings.
 - **System watchers** (doc 02 lifetime events):
 
   | Event | Mac source | Action |

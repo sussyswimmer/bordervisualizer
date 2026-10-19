@@ -99,6 +99,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // The shortcut, the login item, and a second launch's requests (M6).
         hotkey = GlobalHotkey { [weak self] in self?.toggleGlow() }
+        model.recordingShortcut = { [weak self] recording in
+            guard let self else { return }
+            if recording {
+                self.hotkey?.register("") // so the current shortcut can be pressed into the recorder
+                self.appliedHotkey = nil
+            } else {
+                self.applyShell()
+            }
+        }
         let distributed = DistributedNotificationCenter.default()
         distributed.addObserver(forName: SingleInstance.showSettingsName, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.showSettings() }
@@ -122,6 +131,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         log.info("\(Core.appName, privacy: .public) \(Core.version, privacy: .public) started (demo: \(demo))")
 
         if firstRun { settingsWindow?.show() } // PRD §7: the first launch shows Settings with a welcome
+    }
+
+    /// Opening the app again from Finder or Launchpad reaches the running copy as a reopen (LaunchServices starts no
+    /// second process), and shows Settings, as a second launch does on Windows (doc 06 §4).
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSettings()
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -197,8 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let settings = model.settings
         if settings.toggleHotkey != appliedHotkey {
             appliedHotkey = settings.toggleHotkey
-            model.hotkeyFailed = hotkey?.register(settings.toggleHotkey) == false
-            if let equivalent = Shortcut(setting: settings.toggleHotkey)?.menuEquivalent {
+            model.hotkeyProblem = hotkey?.register(settings.toggleHotkey)
+            // The menu names the shortcut only when it works.
+            if model.hotkeyProblem == nil, let equivalent = Shortcut(setting: settings.toggleHotkey)?.menuEquivalent {
                 glowItem?.keyEquivalent = equivalent.key
                 glowItem?.keyEquivalentModifierMask = equivalent.mask
             } else {

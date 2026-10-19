@@ -25,7 +25,15 @@ struct Shortcut: Equatable {
         if flags.contains(.command) { modifiers |= RL_HOTKEY_WIN }
         self.modifiers = modifiers
         virtualKey = Int32(key)
-        guard setting != nil, macAllows else { return nil }
+        guard setting != nil, macAllows, !takesFromTheSystem else { return nil }
+    }
+
+    /// ⌘Q, ⌘W, ⌘H, ⌘Tab, ⌘Space and the like: a global shortcut would take them from every app (the Windows
+    /// recorder refuses Windows' own keys the same way).
+    var takesFromTheSystem: Bool {
+        guard modifiers & RL_HOTKEY_WIN != 0 else { return false }
+        if virtualKey == 0x09 || virtualKey == 0x20 { return true } // Tab, Space
+        return modifiers == RL_HOTKEY_WIN && [0x51, 0x57, 0x48, 0x4D].contains(virtualKey) // Q, W, H, M
     }
 
     /// The text the settings file stores.
@@ -93,22 +101,29 @@ final class GlobalHotkey {
         }, 1, &type, context, &handler)
     }
 
-    /// Registers the shortcut in the setting ("" for none). False when it couldn't be (another app holds it, or
-    /// macOS refuses it): Settings then shows a warning, as on Windows.
+    /// Why a shortcut isn't registered: Settings shows the matching warning, as on Windows.
+    enum Problem: Equatable {
+        /// A shortcut the Mac can't use (from a Windows settings file: Alt+L, Insert, F24…).
+        case notOnMac
+        /// Another app holds it, or macOS refused it.
+        case taken
+    }
+
+    /// Registers the shortcut in the setting ("" for none). Nil when it is registered (or there is none).
     @discardableResult
-    func register(_ setting: String) -> Bool {
+    func register(_ setting: String) -> Problem? {
         if let registered { UnregisterEventHotKey(registered) }
         registered = nil
-        guard !setting.isEmpty else { return true }
+        guard !setting.isEmpty else { return nil }
         guard let shortcut = Shortcut(setting: setting), shortcut.macAllows,
-              let keyCode = shortcut.carbonKeyCode else { return false }
+              let keyCode = shortcut.carbonKeyCode else { return .notOnMac }
         let id = EventHotKeyID(signature: OSType(0x524C_4854), id: 1) // "RLHT"
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(UInt32(keyCode), shortcut.carbonModifiers, id, GetApplicationEventTarget(),
                                          0, &ref)
-        guard status == noErr, let ref else { return false }
+        guard status == noErr, let ref else { return .taken }
         registered = ref
-        return true
+        return nil
     }
 }
 
@@ -132,7 +147,7 @@ enum KeyCodes {
         let functions = [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11,
                          kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20]
         for (index, carbon) in functions.enumerated() { list.append((0x70 + index, carbon, "F\(index + 1)")) }
-        list += [
+        let named: [(Int, Int, String)] = [
             (0x20, kVK_Space, "Space"), (0x0D, kVK_Return, "↩"), (0x09, kVK_Tab, "⇥"), (0x1B, kVK_Escape, "⎋"),
             (0x08, kVK_Delete, "⌫"), (0x2E, kVK_ForwardDelete, "⌦"), (0x24, kVK_Home, "↖"), (0x23, kVK_End, "↘"),
             (0x21, kVK_PageUp, "⇞"), (0x22, kVK_PageDown, "⇟"), (0x25, kVK_LeftArrow, "←"), (0x26, kVK_UpArrow, "↑"),
@@ -147,7 +162,10 @@ enum KeyCodes {
             (0xBD, kVK_ANSI_Minus, "-"), (0xBE, kVK_ANSI_Period, "."), (0xBF, kVK_ANSI_Slash, "/"),
             (0xC0, kVK_ANSI_Grave, "`"), (0xDB, kVK_ANSI_LeftBracket, "["), (0xDC, kVK_ANSI_Backslash, "\\"),
             (0xDD, kVK_ANSI_RightBracket, "]"), (0xDE, kVK_ANSI_Quote, "'"),
+            (0x2D, kVK_Help, "Help"),         // Insert: the Help key sits where Insert does
+            (0xE2, kVK_ISO_Section, "§"),     // Oem102: the extra key beside Shift on ISO keyboards
         ]
+        list += named
         return list.map { (vk: $0.0, carbon: $0.1, symbol: $0.2) }
     }()
 
