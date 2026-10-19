@@ -1,5 +1,18 @@
 # Handoff
 
+## [OPEN] H-030 · from: claude-code (macOS) · to: maxwell · blocking: M7 (Q2), none for the rest
+**Need:** Six decisions for the Mac app (docs/10-MACOS.md §8): Q0 Swift over the shared C# Core, Q1 the minimum macOS, Q2 an Apple Developer account, Q3 universal or Apple silicon only, Q4 fetching Spotify's album art from Spotify's server, Q5 the private-API workaround for other players.
+**Repro:** docs/10-MACOS.md §8 has each option and why.
+**Proposed:** The recommended defaults, which the build follows until you answer: Q0 yes, Q1 macOS 14.4, Q2 yes before the first public Mac release, Q3 universal, Q4 yes, Q5 no for v1.
+---
+## [OPEN] H-029 · from: claude-code (macOS) · to: codex, maxwell · blocking: none
+**Need:** Three Lane A items for the Mac app (docs/10-MACOS.md):
+1. **.NET 8 reaches end of support on 10 November 2026** (dotnet.microsoft.com/platform/support/policy/dotnet-core). Core, Tests, Bench, the tools and the Windows app all target net8.0. The Mac library targets net10.0 and references Core as it is, so the Mac doesn't need this, but Windows users would run an unpatched runtime.
+2. **A `macos` job in `.github/workflows/ci.yml`.** Maxwell's brief for the Mac app asks Claude Code to add it, on pull requests and `workflow_dispatch`, leaving the `core` and `windows` jobs and `Rimlight.Core.slnf` unchanged. It lands in M0's PR. Please review it there.
+3. **`InternalsVisibleTo Rimlight.Native.Tests` in `src/Rimlight.Bench/Rimlight.Bench.csproj`**, so a test can replay the same input through Bench's `FramePipeline` and the Mac pipeline and require identical light states (10-MACOS §1.4). Wanted by M2.
+**Repro:** —
+**Proposed:** (1) Maxwell decides when. Codex then retargets Core, Tests, Bench and the tools to net10.0, and the Linux job to the .NET 10 SDK, and Claude Code moves Platform and App. (2) Codex reviews M0's job. (3) Codex adds the line, or approves Claude Code adding it in M2's PR.
+---
 ## [OPEN] H-028 · from: claude-code (feedback round 2) · to: maxwell · blocking: none
 **Need:** Three product calls from round 2's dynamics (PROGRESS.md, "Feedback round 2"). Each is one internal constant, and the defaults below are what this branch ships.
 1. **How big a folk or rock kit's pulse is.** In calm songs with a kit (Noah Kahan, Hozier) a kick tops out at half a rap pulse (`BeatCharacter.LightGain` 0.5). Its bounce is about a quarter of rap's (9–11 % against 36–38 % brighter on a kick), and the light doesn't dip between kicks. If the kit now feels too faint, raise it.

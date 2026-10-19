@@ -690,6 +690,21 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] Feedback round 1: dynamics, soft edge, Settings failure message + WPF smoke tests — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 - [x] Feedback round 2: real-music corpus (`tools/corpus/`), dynamics retuned on it, an edge with no rim, Record 2 min — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 
+## macOS (Claude Code)
+
+The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with NativeAOT. Milestones M0–M8 are in 10-MACOS §7.
+
+- [x] Design: docs/10-MACOS.md, researched against Apple's and Microsoft's documentation on 2026-10-19; HANDOFF H-029 (Lane A items) and H-030 (Maxwell's decisions) — branch `claude/mac-m0-design` — effort: M
+- [ ] M0 skeleton + macOS CI job
+- [ ] M1 glow on every display with the demo beat
+- [ ] M2 system audio → Core → glow
+- [ ] M3 menu bar, Settings, saved settings
+- [ ] M4 album-art colors
+- [ ] M5 system watchers
+- [ ] M6 hotkey, login item, single instance
+- [ ] M7 packaging, notarization, updates
+- [ ] M8 README and docs
+
 ## K0 notes
 
 - Contracts are defined by doc 09 §3; source specs are unchanged. `AudioTuning` and `AnalyzerDiagnostics` are data containers, not DSP implementations. Doc 03 does not specify a numeric `minFlux`; K0 uses a provisional 0.01 pending C2 tuning.
