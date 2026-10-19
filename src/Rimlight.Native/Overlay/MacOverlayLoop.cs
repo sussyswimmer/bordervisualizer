@@ -192,11 +192,11 @@ internal sealed class MacOverlayLoop
     public float FrameDt(double elapsedSeconds, bool frameDue) => pacer.FrameDt(elapsedSeconds, frameDue);
 
     /// <summary>Starts a frame: runs the frame source and advances the per-screen pause fades.</summary>
-    public FrameInfo BeginFrame(float dt, ReadOnlySpan<float> samples, int sampleRate)
+    public FrameInfo BeginFrame(float dt, ReadOnlySpan<float> samples, int sampleRate, int captureGeneration = 0)
     {
         frameDt = dt;
         bool everywhere = PausedEverywhere();
-        frame = source.NextFrame(dt, applied, everywhere, gradient, samples, sampleRate);
+        frame = source.NextFrame(dt, applied, everywhere, gradient, samples, sampleRate, captureGeneration);
         if (frame.GradientChanged)
         {
             meanColor = GlowConstants.MeanOf(gradient);

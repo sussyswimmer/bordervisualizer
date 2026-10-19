@@ -2,8 +2,8 @@ import AppKit
 import Metal
 import os
 
-/// The menu bar app. M1: the glow on every chosen screen (OverlayController), Glow On, Demo Mode (`--demo` starts in
-/// it), the settings folder and Quit.
+/// The menu bar app: the glow on every chosen screen (OverlayController) driven by the Mac's sound (SystemAudioTap),
+/// Glow On, Demo Mode (`--demo` starts in it), a warning when the app can't hear the Mac, the settings folder and Quit.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "app")
@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var overlays: OverlayController?
     private var glowItem: NSMenuItem?
     private var demoItem: NSMenuItem?
+    private var cantHearItem: NSMenuItem?
+    private var tap: SystemAudioTap?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard Core.abiMatches else {
@@ -32,8 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             fail("\(Core.appName) can't draw on this Mac.", "No Metal graphics device was found.", reason: "No Metal device")
             return
         }
+        tap = SystemAudioTap()
+        if tap == nil { log.error("The audio ring couldn't be made; the glow won't hear music") }
         do {
-            overlays = OverlayController(loop: loop, metal: try MetalGlow(device: device))
+            overlays = OverlayController(loop: loop, metal: try MetalGlow(device: device), tap: tap)
         } catch {
             fail("\(Core.appName) can't draw on this Mac.", error.localizedDescription,
                  reason: "Metal setup failed: \(error)")
@@ -55,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let title = NSMenuItem(title: "\(Core.appName) \(Core.version)", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
+        let cantHear = menu.addItem(withTitle: "\(Core.appName) can't hear your Mac. Allow it…",
+                                    action: #selector(openAudioPrivacy), keyEquivalent: "")
+        cantHear.target = self
+        cantHear.isHidden = true
+        cantHearItem = cantHear
         menu.addItem(.separator())
         let glow = menu.addItem(withTitle: "Glow On", action: #selector(toggleGlow), keyEquivalent: "")
         glow.target = self
@@ -75,6 +84,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         glowItem?.state = loop?.settings?.enabled == true ? .on : .off
         demoItem?.state = loop?.demo == true ? .on : .off
         statusItem?.button?.appearsDisabled = loop?.settings?.enabled == false
+        cantHearItem?.isHidden = tap?.cantHear != true
+    }
+
+    /// Privacy & Security › Screen & System Audio Recording, where "System Audio Recording Only" lists the app.
+    @objc private func openAudioPrivacy() {
+        let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
     }
 
     @objc private func toggleGlow() {

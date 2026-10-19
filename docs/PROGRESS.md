@@ -697,13 +697,39 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] Design: docs/10-MACOS.md, researched against Apple's and Microsoft's documentation on 2026-10-19; HANDOFF H-029 (Lane A items) and H-030 (Maxwell's decisions) — branch `claude/mac-m0-design` — effort: M
 - [x] M0 skeleton + macOS CI job: `src/Rimlight.Native` (C ABI: ABI version, name, version, settings load and save), its tests, the Swift package (`mac/`), `mac/build.sh` (universal, ad-hoc signed, zipped), the `macos` job in ci.yml — branch `claude/mac-m0-skeleton` — effort: M (notes below; Mac manual test pending)
 - [x] M1 glow on every display with the demo beat: the overlay loop (`MacOverlayLoop`, `MacGlowSource`) in C# over the shared FramePacer, GlowConstants and OverlayRules; `Glow.metal` (a port of `Glow.hlsl`) over `glow_math.h`; the render thread with display-link pacing; one panel per screen — branch `claude/mac-m1-glow` — effort: L (notes below; Mac manual test pending)
-- [ ] M2 system audio → Core → glow
+- [x] M2 system audio → Core → glow: a Core Audio process tap (C IO proc into a C ring), drained by the render thread into the shared frame source; device changes, health checks, the "can't hear" warning; the Mac's frame source proven equal to the Windows one — branch `claude/mac-m2-audio` — effort: L (notes below; Mac manual test pending)
 - [ ] M3 menu bar, Settings, saved settings
 - [ ] M4 album-art colors
 - [ ] M5 system watchers
 - [ ] M6 hotkey, login item, single instance
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M2 notes
+
+- **Capture (10-MACOS §2.1):**
+  - A global stereo process tap that excludes Rimlight's own process, read through a private aggregate device whose main sub-device is the default output.
+  - The IO proc is C (`TapIO.c`): it only mixes to mono into a lock-free SPSC ring (`AudioRing.c`, a port of `AudioRingBuffer.cs`) and timestamps the last callback and the last non-zero sample. No Swift or .NET runs on the real-time thread.
+  - The render thread drains the ring each frame into a preallocated buffer.
+  - The tap opens only while the glow listens (music sync, on, not paused, not in demo), as the Windows loopback does, so nothing is captured otherwise.
+- **Permission:** `NSAudioCaptureUsageDescription` is in the Info.plist. macOS asks on the tap's first start. The microphone is never opened or asked for.
+- **Resilience:**
+  - The tap rebuilds when the default output device changes, and when the IO proc stops for 2 s.
+  - A failed open retries with 0.5 → 5 s backoff.
+  - If other processes play sound (`kAudioProcessPropertyIsRunningOutput`) but the tap hears only exact zeros for 10 s, the menu shows "Rimlight can't hear your Mac. Allow it…", which opens Privacy & Security. The tap also rebuilds at most once a minute, the mitigation for the macOS 26.5 zero-buffer bug.
+- **Same frames as Windows, proven:**
+  - `MacGlowSourceMirrorTests` runs a 45 s script (album changes, settings edits, silence, no packets, Off, pause) with synthetic 120 BPM music through `MacGlowSource` and Bench's `FramePipeline`. The light state, refill, gradient and motion match bit for bit on every frame, with more than 100 pulsing frames.
+  - Bench's file is compiled into the test as a link, so there's no Lane A edit, and H-029 item 3 isn't needed any more. Platform's `BenchMirrorTests` already holds `FramePipeline` equal to `MusicGlowSource`.
+  - To match Windows exactly, the analyzer now resets whenever the capture opens, closes or restarts (a capture generation in `rl_loop_begin_frame`, ABI 3), not on a sample-rate change.
+- **Verified on Linux:**
+  - The ring's C tests: wraparound, full ring, skipping the oldest samples, interleaved and planar mono.
+  - `TapIO.c` compiled with `-Wnullability-completeness -Werror` against stub headers.
+  - C#: 24 tests.
+  - The IO proc's nullability matches `AudioDeviceIOProc`'s, so Swift passes the C function as one.
+- **Unverified until Maxwell's run:**
+  - the exact wording of the prompt;
+  - that "Allow it…" lands on the right pane (`Privacy_ScreenCapture`, the pane that holds "System Audio Recording Only");
+  - the latency, which should be under 50 ms per doc 03 §3.
 
 ### M1 notes
 

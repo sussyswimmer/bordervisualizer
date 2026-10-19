@@ -18,6 +18,7 @@ let package = Package(
             name: "CRimlight",
             linkerSettings: [
                 .linkedLibrary("RimlightCore"),
+                .linkedFramework("CoreAudio"),
                 .unsafeFlags([
                     "-L", coreLibDirectory,
                     "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",

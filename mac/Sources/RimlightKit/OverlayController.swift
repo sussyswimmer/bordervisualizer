@@ -14,10 +14,10 @@ final class OverlayController {
     private var rebuildPending = false
     private var observer: NSObjectProtocol?
 
-    init(loop: CoreLoop, metal: MetalGlow) {
+    init(loop: CoreLoop, metal: MetalGlow, tap: SystemAudioTap?) {
         self.loop = loop
         self.metal = metal
-        render = RenderThread(loop: loop, metal: metal)
+        render = RenderThread(loop: loop, metal: metal, tap: tap)
         observer = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in

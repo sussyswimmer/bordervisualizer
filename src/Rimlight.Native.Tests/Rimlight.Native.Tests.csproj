@@ -19,4 +19,8 @@
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
+  <ItemGroup Label="Bench's mirror of the Windows frame source (Rimlight.Platform.Tests' BenchMirrorTests keeps it equal to
+                    MusicGlowSource), compiled here so the Mac's frame source can be checked against the same frames">
+    <Compile Include="../Rimlight.Bench/FramePipeline.cs" Link="Bench/FramePipeline.cs" />
+  </ItemGroup>
 </Project>

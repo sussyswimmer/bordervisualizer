@@ -84,6 +84,9 @@ final class PanelVisibility: @unchecked Sendable {
 final class RenderThread: NSObject, @unchecked Sendable {
     private let loop: CoreLoop
     private let metal: MetalGlow
+    private let tap: SystemAudioTap?
+    private let samples: UnsafeMutablePointer<Float>   // the frame's drained audio, preallocated
+    private let sampleCapacity: Int32
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "render")
     private var runLoop: CFRunLoop?
     private let started = DispatchSemaphore(value: 0)
@@ -96,10 +99,15 @@ final class RenderThread: NSObject, @unchecked Sendable {
     private var pace: Int32 = RL_PACE_FULL
     private var lastFrame: CFTimeInterval = 0
     private var uploadedGradient: Int32 = -1
+    private var capturing = false
+    private var captureGeneration: Int32 = 0
 
-    init(loop: CoreLoop, metal: MetalGlow) {
+    init(loop: CoreLoop, metal: MetalGlow, tap: SystemAudioTap?) {
         self.loop = loop
         self.metal = metal
+        self.tap = tap
+        sampleCapacity = tap.map { rlc_ring_capacity($0.ring) } ?? 1
+        samples = UnsafeMutablePointer<Float>.allocate(capacity: Int(sampleCapacity))
         super.init()
         let thread = Thread { [weak self] in self?.main() }
         thread.name = "Overlay"
@@ -186,10 +194,29 @@ final class RenderThread: NSObject, @unchecked Sendable {
             let dt = rl_loop_frame_dt(loop.handle, now - lastFrame, due ? 1 : 0)
             lastFrame = now
 
+            // The audio since the last frame (doc 02 step 1). Samples from before the tap last opened, closed or
+            // restarted are dropped with the analysis they belonged to.
+            var count: Int32 = 0
+            var rate: Int32 = 0
+            if let tap {
+                count = rlc_ring_read(tap.ring, samples, sampleCapacity)
+                let generation = tap.generation
+                if generation != captureGeneration {
+                    captureGeneration = generation
+                    count = 0
+                }
+                rate = tap.sampleRate
+            }
             var info = RlFrameInfo()
-            guard rl_loop_begin_frame(loop.handle, dt, nil, 0, 0, &info) == RL_OK else {
+            guard rl_loop_begin_frame(loop.handle, dt, samples, count, rate, captureGeneration, &info) == RL_OK else {
                 log.error("A frame failed to start")
                 return
+            }
+            // The tap runs only while the glow listens (music sync, on, not paused or in the demo).
+            let listen = info.listening == 1
+            if listen != capturing {
+                capturing = listen
+                tap?.setActive(listen)
             }
             if info.gradientVersion != uploadedGradient, let texels = rl_loop_gradient(loop.handle) {
                 metal.upload(gradient: texels)

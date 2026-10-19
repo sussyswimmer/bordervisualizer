@@ -13,6 +13,7 @@
 3. **`InternalsVisibleTo Rimlight.Native.Tests` in `src/Rimlight.Bench/Rimlight.Bench.csproj`**, so a test can replay the same input through Bench's `FramePipeline` and the Mac pipeline and require identical light states (10-MACOS §1.4). Wanted by M2.
 **Repro:** —
 **Proposed:** (1) Maxwell decides when. Codex then retargets Core, Tests, Bench and the tools to net10.0, and the Linux job to the .NET 10 SDK, and Claude Code moves Platform and App. (2) Codex reviews M0's job. (3) Codex adds the line, or approves Claude Code adding it in M2's PR.
+**Update (M2):** item 3 is no longer needed: `Rimlight.Native.Tests` compiles `src/Rimlight.Bench/FramePipeline.cs` as a linked file, with no Bench change.
 ---
 ## [OPEN] H-028 · from: claude-code (feedback round 2) · to: maxwell · blocking: none
 **Need:** Three product calls from round 2's dynamics (PROGRESS.md, "Feedback round 2"). Each is one internal constant, and the defaults below are what this branch ships.
