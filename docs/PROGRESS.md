@@ -696,7 +696,7 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 
 - [x] Design: docs/10-MACOS.md, researched against Apple's and Microsoft's documentation on 2026-10-19; HANDOFF H-029 (Lane A items) and H-030 (Maxwell's decisions) — branch `claude/mac-m0-design` — effort: M
 - [x] M0 skeleton + macOS CI job: `src/Rimlight.Native` (C ABI: ABI version, name, version, settings load and save), its tests, the Swift package (`mac/`), `mac/build.sh` (universal, ad-hoc signed, zipped), the `macos` job in ci.yml — branch `claude/mac-m0-skeleton` — effort: M (notes below; Mac manual test pending)
-- [ ] M1 glow on every display with the demo beat
+- [x] M1 glow on every display with the demo beat: the overlay loop (`MacOverlayLoop`, `MacGlowSource`) in C# over the shared FramePacer, GlowConstants and OverlayRules; `Glow.metal` (a port of `Glow.hlsl`) over `glow_math.h`; the render thread with display-link pacing; one panel per screen — branch `claude/mac-m1-glow` — effort: L (notes below; Mac manual test pending)
 - [ ] M2 system audio → Core → glow
 - [ ] M3 menu bar, Settings, saved settings
 - [ ] M4 album-art colors
@@ -704,6 +704,36 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [ ] M6 hotkey, login item, single instance
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M1 notes
+
+- **Shared with Windows, compiled as is:**
+  - `GlowProfile.cs`, `GlowConstants.cs`, `FramePacer.cs`, `OverlayRules.cs`, `IOverlayFrameSource.cs`, `SrgbHex.cs` and `DemoBeat.cs`.
+  - The one Windows file changed is `DemoBeat.cs`: `PaletteFade` is now written out as 800 ms rather than read from `MusicGlowSource.AlbumFade`, which the Mac doesn't have. It's the same value, and `DemoBeatTests` now checks the two are equal.
+  - The Mac's frame source `MacGlowSource` mirrors `MusicGlowSource`, without the Windows capture, media service and visualizer.
+  - The Mac's `MacOverlayLoop` mirrors OverlayHost's `RenderFrame`: the per-screen pause fades, the transparent frame before a window hides, a surface that has presented nothing for a second counting as stalled, and the static-frame skip (`LooksLike`). The pacing is FramePacer's.
+- **The shader:** `Glow.metal` is a port of `Glow.hlsl`. Its math lives in `glow_math.h`, which is both MSL and C.
+- **Verified:**
+  - `glow_math.h` compiled as C on Linux matches the C# golden table (`GlowGoldenTests` writes `mac/Tests/RimlightKitTests/Fixtures/glow-golden.json` from GlowProfile and GlowConstants) to 3e-8.
+  - On the macOS runner, the Swift tests check the constants through the AOT library, the per-pixel alpha through `glow_math.h`, and **the Metal shader on the runner's GPU** (it has one): alpha within 1.5 code values of the profile.
+  - C#: 23 tests, including a zero-allocation frame on three screens, and the struct sizes against the header's static asserts.
+  - A C program drove the loop through the AOT library on Linux.
+- **Pacing:**
+  - The full rate runs on the primary screen's `CADisplayLink` (`NSScreen.displayLink`), on the render thread's run loop, at the cap's rate.
+  - The slow rate and a 0.1 s fallback (Windows' `VsyncFallbackSeconds`, for a primary screen that stops refreshing) use one re-aimed timer.
+  - Blocked means no link and no timer: the thread sleeps until an input.
+- **Review (independent), fixed before the PR:**
+  - New windows after a display change were never shown on screens whose size hadn't changed: every surface now starts over.
+  - Demo mode didn't wake a stopped loop: it is now an input.
+  - The gradient texture could be rewritten while a frame still read it: it is now a ring of three.
+  - A window could be hidden before its transparent frame was on screen: the hide now waits for the presented handler, and a later show cancels it.
+  - A stuck in-flight count: it resets after 1 s.
+  - The display link had no fallback timer.
+  - Render scale: the render thread will pass halved surfaces in M5, so the constants take no render scale of their own.
+  - Sendable annotations.
+  - Shader math in `.safe` mode on macOS 15+.
+  - Per-screen pause is now its own call (`rl_loop_set_surface_paused`) and keeps the window.
+- **Known limits until later milestones:** no audio (M2: the glow shows Idle Glow, or the demo), the settings only through Glow On and the file (M3), no watchers (M5: battery, sleep, full-screen pause), and no single instance (M6: quit before starting `--demo` from Terminal).
 
 ### M0 notes
 

@@ -60,7 +60,7 @@ typedef struct RlSurface {
 /// What a frame needs from the render thread (FrameInfo).
 typedef struct RlFrameInfo {
     int32_t gradientVersion; // upload rl_loop_gradient again when this changes
-    float renderScale;       // 1, or 0.5 with "Reduce on battery"
+    float renderScale;       // 1, or 0.5 with "Reduce on battery": resize the drawables and set the surfaces again
     int32_t listening;       // 1 when the glow wants audio
     int32_t demo;            // 1 while demo mode is on
 } RlFrameInfo;
@@ -113,7 +113,10 @@ int32_t rl_loop_demo(RlLoop loop);
 int32_t rl_loop_set_paused(RlLoop loop, int32_t paused);
 
 // Render thread:
-int32_t rl_loop_set_surfaces(RlLoop loop, const RlSurface *surfaces, int32_t count);
+/// Replaces the screens' surfaces; each starts hidden. For half render scale, pass the halved size and pixels per point.
+int32_t rl_loop_set_surfaces(RlLoop loop, const RlSurface *surfaces, int32_t count, double nowSeconds);
+/// Pauses (1) or resumes (0) the glow on one screen; it fades over 300 ms and keeps its window.
+int32_t rl_loop_set_surface_paused(RlLoop loop, int32_t index, int32_t paused, double nowSeconds);
 int32_t rl_loop_set_display(RlLoop loop, double refreshHz, int32_t onBattery);
 /// Takes the inputs published since the last call: 1 when one changed (a frame may be due early), else 0.
 int32_t rl_loop_apply_inputs(RlLoop loop, double nowSeconds);
@@ -145,5 +148,6 @@ RlcCounter *rlc_counter_create(void);
 void rlc_counter_destroy(RlcCounter *counter);
 int32_t rlc_counter_add(RlcCounter *counter, int32_t delta); // returns the new value
 int32_t rlc_counter_load(const RlcCounter *counter);
+void rlc_counter_store(RlcCounter *counter, int32_t value);
 
 #endif

@@ -72,6 +72,7 @@ internal sealed class MacOverlayLoop
     private int pausedWanted;       // SetPaused, from any thread
     private Settings applied;       // the render thread's
     private bool paused;
+    private bool appliedDemo;
     private double refreshHz = FramePacer.DefaultRefreshHz;
     private bool onBattery;
     private bool configured;
@@ -112,23 +113,34 @@ internal sealed class MacOverlayLoop
 
     public int SurfaceCount => surfaceCount;
 
-    /// <summary>Replaces the screens' surfaces (after a display change). A surface whose size and scale are unchanged
-    /// keeps what it shows; the others start hidden with nothing drawn.</summary>
-    public void SetSurfaces(ReadOnlySpan<SurfaceInfo> infos)
+    /// <summary>
+    /// Replaces the screens' surfaces (after a display or settings change). The Mac app makes new windows each time,
+    /// so every surface starts hidden with nothing drawn: its first visible frame shows its window.
+    /// </summary>
+    /// <remarks>
+    /// To render at half scale ("Reduce on battery", <see cref="FrameInfo.RenderScale"/>) the render thread halves the
+    /// drawable and passes the halved size and pixels per point here, so the constants need no render scale of their
+    /// own.
+    /// </remarks>
+    public void SetSurfaces(ReadOnlySpan<SurfaceInfo> infos, double nowSeconds)
     {
         int count = Math.Min(infos.Length, MaxSurfaces);
         for (int i = 0; i < count; i++)
-        {
-            ref Surface s = ref surfaces[i];
-            SurfaceInfo info = infos[i];
-            bool same = i < surfaceCount && s.Info.WidthPx == info.WidthPx && s.Info.HeightPx == info.HeightPx &&
-                s.Info.PixelsPerPoint == info.PixelsPerPoint;
-            if (!same) s = new Surface { Fade = info.Paused != 0 ? 0 : 1 };
-            s.Info = info;
-        }
+            surfaces[i] = new Surface { Info = infos[i], Fade = infos[i].Paused != 0 ? 0 : 1 };
         for (int i = count; i < surfaceCount; i++) surfaces[i] = default;
         surfaceCount = count;
-        pacer.NoteInputChanged(lastNow);
+        pacer.NoteInputChanged(nowSeconds);
+    }
+
+    /// <summary>
+    /// Pauses or resumes the glow on one screen (a full-screen window covers it, doc 04 §4): it fades out or in over
+    /// 300 ms, keeping its window.
+    /// </summary>
+    public void SetSurfacePaused(int index, bool paused, double nowSeconds)
+    {
+        if ((uint)index >= (uint)surfaceCount) return;
+        surfaces[index].Info.Paused = paused ? 1 : 0;
+        pacer.NoteInputChanged(nowSeconds);
     }
 
     /// <summary>The main screen's refresh rate (0 when unknown) and whether the Mac runs on battery.</summary>
@@ -139,18 +151,22 @@ internal sealed class MacOverlayLoop
         configured = false;
     }
 
-    private double lastNow;
-
     /// <summary>Takes the inputs published since the last call. True when one changed (a frame may be due early).</summary>
     public bool ApplyInputs(double nowSeconds)
     {
-        lastNow = nowSeconds;
         bool changed = false;
         Settings latest = Volatile.Read(ref published);
         if (!ReferenceEquals(latest, applied))
         {
             applied = latest;
             configured = false;
+            changed = true;
+        }
+        // Demo mode is the frame source's own switch; it is an input here so that turning it on wakes a stopped loop.
+        bool demoNow = source.DemoWanted;
+        if (demoNow != appliedDemo)
+        {
+            appliedDemo = demoNow;
             changed = true;
         }
         bool pause = Volatile.Read(ref pausedWanted) != 0;
@@ -295,10 +311,10 @@ internal sealed class MacOverlayLoop
         return true;
     }
 
+    // The surface's size and pixels per point already include any render scale (SetSurfaces).
     private GlowConstants Constants(in LightState state, in Surface s, float visibility)
     {
-        float renderScale = Reduced ? 0.5f : 1f;
-        GlowConstants c = GlowConstants.Create(state, s.Info.WidthPx, s.Info.HeightPx, s.Info.PixelsPerPoint, renderScale,
+        GlowConstants c = GlowConstants.Create(state, s.Info.WidthPx, s.Info.HeightPx, s.Info.PixelsPerPoint, 1,
             applied.CornerRadiusDip, meanColor);
         c.Visibility = visibility;
         return c;

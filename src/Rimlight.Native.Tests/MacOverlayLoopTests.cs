@@ -58,7 +58,7 @@ public sealed class MacOverlayLoopTests
     {
         var loop = Started(new Settings(), demo: true, screens: 2);
         Run(loop, seconds: 0.5, out _, out _, out _);
-        loop.SetSurfaces([Info(paused: true), Info()]);
+        loop.SetSurfacePaused(0, true, now);
         int frames = 0;
         bool hidden = false;
         while (!hidden && frames < 60)
@@ -113,6 +113,29 @@ public sealed class MacOverlayLoopTests
     }
 
     [Fact]
+    public void NewSurfacesShowTheirWindowsAgain()
+    {
+        // The Mac makes new windows on every display change, so even a same-sized screen's must be shown again.
+        var loop = Started(new Settings(), demo: true, screens: 1);
+        Run(loop, seconds: 0.5, out _, out int before, out _);
+        loop.SetSurfaces([Info()], now);
+        Run(loop, seconds: 0.1, out _, out int after, out _);
+        Assert.Equal(1, before);
+        Assert.Equal(1, after);
+    }
+
+    [Fact]
+    public void TurningTheDemoOnWakesAStoppedLoop()
+    {
+        var loop = Started(new Settings { Enabled = false }, demo: false, screens: 1);
+        Run(loop, seconds: 1, out PaceInfo pace, out _, out _);
+        Assert.Equal(2, pace.Pace); // nothing to draw
+        Assert.False(loop.ApplyInputs(now));
+        loop.SetDemo(true);
+        Assert.True(loop.ApplyInputs(now));
+    }
+
+    [Fact]
     public void ABatteryWithReduceCapsAtThirtyAndHalvesTheScale()
     {
         var loop = Started(new Settings(), demo: true, screens: 1);
@@ -145,7 +168,7 @@ public sealed class MacOverlayLoopTests
         loop.SetDisplay(60, onBattery: false);
         SurfaceInfo[] infos = new SurfaceInfo[screens];
         for (int i = 0; i < screens; i++) infos[i] = Info();
-        loop.SetSurfaces(infos);
+        loop.SetSurfaces(infos, now);
         loop.ApplyInputs(now);
         return loop;
     }

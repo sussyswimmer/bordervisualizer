@@ -9,17 +9,28 @@ final class MetalGlow {
     /// is skipped rather than allowed to block the render thread in nextDrawable.
     static let maxInFlight: Int32 = 2
 
+    /// After this long with every drawable still out, the counter is presumed stuck (a presented handler that never
+    /// came) and starts over, so a screen can't stop drawing for good.
+    static let stuckSeconds: CFTimeInterval = 1
+
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
-    private let gradient: MTLTexture
+    // The gradient, in turns: a frame still on the GPU keeps reading its own copy while the next one is written
+    // (Metal doesn't rename a texture on upload as Direct3D does). One more than the frames in flight.
+    private let gradients: [MTLTexture]
+    private var gradientIndex = 0
 
     init(device: MTLDevice) throws {
         self.device = device
         guard let queue = device.makeCommandQueue() else { throw MetalGlowError.noQueue }
         self.queue = queue
 
-        let library = try device.makeLibrary(source: try ShaderSource.load(), options: nil)
+        let options = MTLCompileOptions()
+        if #available(macOS 15.0, *) {
+            options.mathMode = .safe // exp and atan2 as precise as the CPU's, so the GPU matches the golden table
+        }
+        let library = try device.makeLibrary(source: try ShaderSource.load(), options: options)
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = library.makeFunction(name: "glow_vertex")
         descriptor.fragmentFunction = library.makeFunction(name: "glow_fragment")
@@ -31,12 +42,19 @@ final class MetalGlow {
                                                                mipmapped: false)
         texture.usage = .shaderRead
         texture.storageMode = device.hasUnifiedMemory ? .shared : .managed
-        guard let gradient = device.makeTexture(descriptor: texture) else { throw MetalGlowError.noTexture }
-        self.gradient = gradient
+        var gradients: [MTLTexture] = []
+        for _ in 0...Int(Self.maxInFlight) {
+            guard let gradient = device.makeTexture(descriptor: texture) else { throw MetalGlowError.noTexture }
+            gradients.append(gradient)
+        }
+        self.gradients = gradients
     }
 
-    /// Uploads the 64 RGBA float texels (rl_loop_gradient).
+    private var gradient: MTLTexture { gradients[gradientIndex] }
+
+    /// Uploads the 64 RGBA float texels (rl_loop_gradient) into the next texture of the ring.
     func upload(gradient texels: UnsafePointer<Float>) {
+        gradientIndex = (gradientIndex + 1) % gradients.count
         gradient.replace(region: MTLRegionMake2D(0, 0, 64, 1), mipmapLevel: 0, withBytes: texels,
                          bytesPerRow: 64 * 4 * MemoryLayout<Float>.size)
     }
@@ -55,14 +73,21 @@ final class MetalGlow {
     }
 
     /// Draws one frame on a screen's layer and presents it. False when the screen has no drawable free (it hasn't
-    /// shown the frames already sent), so nothing was presented.
-    func draw(_ constants: RlGlowConstants, on layer: CAMetalLayer, inFlight: InFlightCounter) -> Bool {
-        guard inFlight.value < Self.maxInFlight,
-              let drawable = layer.nextDrawable(),
-              let buffer = queue.makeCommandBuffer() else { return false }
+    /// shown the frames already sent), so nothing was presented. `onScreen` runs (on a Metal thread) once the frame
+    /// has reached the screen, or was dropped.
+    func draw(_ constants: RlGlowConstants, on layer: CAMetalLayer, inFlight: InFlightCounter, now: CFTimeInterval,
+              onScreen: (@Sendable () -> Void)? = nil) -> Bool {
+        if inFlight.value >= Self.maxInFlight {
+            guard now - inFlight.lastAdded > Self.stuckSeconds else { return false }
+            inFlight.reset()
+        }
+        guard let drawable = layer.nextDrawable(), let buffer = queue.makeCommandBuffer() else { return false }
         render(constants, into: drawable.texture, buffer: buffer)
-        inFlight.add(1)
-        drawable.addPresentedHandler { _ in inFlight.add(-1) }
+        inFlight.add(1, at: now)
+        drawable.addPresentedHandler { _ in
+            inFlight.add(-1)
+            onScreen?()
+        }
         buffer.present(drawable)
         buffer.commit()
         return true

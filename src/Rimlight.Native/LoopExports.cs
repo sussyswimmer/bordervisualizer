@@ -131,12 +131,27 @@ internal static unsafe partial class Exports
     }
 
     [UnmanagedCallersOnly(EntryPoint = "rl_loop_set_surfaces")]
-    public static int LoopSetSurfaces(nint loop, SurfaceInfo* surfaces, int count)
+    public static int LoopSetSurfaces(nint loop, SurfaceInfo* surfaces, int count, double nowSeconds)
     {
         try
         {
             if (Loop(loop) is not { } l || count < 0 || (surfaces == null && count > 0)) return NativeStatus.InvalidArgument;
-            l.SetSurfaces(new ReadOnlySpan<SurfaceInfo>(surfaces, count));
+            l.SetSurfaces(new ReadOnlySpan<SurfaceInfo>(surfaces, count), nowSeconds);
+            return NativeStatus.Ok;
+        }
+        catch (Exception)
+        {
+            return NativeStatus.Internal;
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "rl_loop_set_surface_paused")]
+    public static int LoopSetSurfacePaused(nint loop, int index, int paused, double nowSeconds)
+    {
+        try
+        {
+            if (Loop(loop) is not { } l) return NativeStatus.InvalidArgument;
+            l.SetSurfacePaused(index, paused != 0, nowSeconds);
             return NativeStatus.Ok;
         }
         catch (Exception)

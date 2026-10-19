@@ -9,12 +9,15 @@ struct OverlaySurface {
     let layer: CAMetalLayer
     let info: RlSurface
     let inFlight = InFlightCounter()
+    let visibility = PanelVisibility()
 }
 
 /// Drawables submitted to a screen and not yet shown. Each drawable's presented handler holds the counter, so it
-/// outlives a surface that is replaced while frames are still on their way.
-final class InFlightCounter {
+/// outlives a surface that is replaced while frames are still on their way. The count is atomic; `lastAdded` belongs
+/// to the render thread.
+final class InFlightCounter: @unchecked Sendable {
     let counter: OpaquePointer
+    private(set) var lastAdded: CFTimeInterval = 0
 
     init() {
         guard let counter = rlc_counter_create() else { fatalError("Out of memory") }
@@ -27,8 +30,50 @@ final class InFlightCounter {
 
     var value: Int32 { rlc_counter_load(counter) }
 
+    func add(_ delta: Int32, at now: CFTimeInterval) {
+        lastAdded = now
+        rlc_counter_add(counter, delta)
+    }
+
     func add(_ delta: Int32) {
         rlc_counter_add(counter, delta)
+    }
+
+    func reset() {
+        rlc_counter_store(counter, 0)
+    }
+}
+
+/// Orders a panel in and out on the main thread, in the order the render thread asked, even though a hide waits for
+/// its transparent frame to reach the screen: a hide asked before the latest show is dropped. `requested` belongs to
+/// the render thread, `shown` to the main thread.
+final class PanelVisibility: @unchecked Sendable {
+    private var requested = 0
+    private var shown = 0
+
+    /// Render thread: shows the panel now.
+    func show(_ panel: OverlayPanel) {
+        requested += 1
+        let generation = requested
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.shown = generation
+                panel.orderFrontRegardless()
+            }
+        }
+    }
+
+    /// Render thread: a hide to run once the transparent frame is on screen (or at once, for a screen that takes no
+    /// frames). It does nothing if the panel was shown again meanwhile.
+    func hider(_ panel: OverlayPanel) -> @Sendable () -> Void {
+        let generation = requested
+        return {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if self.shown == generation { panel.orderOut(nil) }
+                }
+            }
+        }
     }
 }
 
@@ -36,7 +81,7 @@ final class InFlightCounter {
 /// FramePacer says: on the main screen's display link at the full rate, on a timer at the slow rate, and not at all
 /// (asleep in its run loop, 0 % CPU) when nothing can change until an input does. The main thread hands it inputs by
 /// running blocks on its run loop, so nothing here takes a lock.
-final class RenderThread: NSObject {
+final class RenderThread: NSObject, @unchecked Sendable {
     private let loop: CoreLoop
     private let metal: MetalGlow
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "render")
@@ -47,7 +92,7 @@ final class RenderThread: NSObject {
     private var surfaces: [OverlaySurface] = []
     private var link: CADisplayLink?
     private var linkRate: Double = 0
-    private var slowTimer: Timer?
+    private var timer: Timer?   // one timer, re-aimed: slow frames, and the display link's fallback
     private var pace: Int32 = RL_PACE_FULL
     private var lastFrame: CFTimeInterval = 0
     private var uploadedGradient: Int32 = -1
@@ -88,14 +133,13 @@ final class RenderThread: NSObject {
             let old = self.surfaces
             self.surfaces = new
             let infos = new.map(\.info)
-            rl_loop_set_surfaces(self.loop.handle, infos, Int32(infos.count))
+            rl_loop_set_surfaces(self.loop.handle, infos, Int32(infos.count), CACurrentMediaTime())
             rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0)
             // The old panels are closed on the main thread once this thread no longer draws on them.
+            let closing = old.map(\.panel).filter { panel in !new.contains { $0.panel === panel } }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    for surface in old where !new.contains(where: { $0.panel === surface.panel }) {
-                        surface.panel.close()
-                    }
+                    for panel in closing { panel.close() }
                 }
             }
             self.pace = RL_PACE_FULL
@@ -109,6 +153,11 @@ final class RenderThread: NSObject {
         runLoop = CFRunLoopGetCurrent()
         // A port keeps the run loop alive while no timer or link is attached (RL_PACE_BLOCK).
         RunLoop.current.add(NSMachPort(), forMode: .default)
+        let timer = Timer(fire: .distantFuture, interval: 3600, repeats: true) { [weak self] _ in
+            self?.frame(due: true)
+        }
+        RunLoop.current.add(timer, forMode: .default)
+        self.timer = timer
         started.signal()
         while true {
             autoreleasepool {
@@ -153,10 +202,14 @@ final class RenderThread: NSObject {
                 let action = rl_loop_plan_surface(loop.handle, Int32(index), &constants)
                 if action <= RL_SURFACE_NONE { continue }
                 let surface = surfaces[index]
-                if action == RL_SURFACE_SHOW_AND_DRAW { show(surface.panel) }
-                let presented = metal.draw(constants, on: surface.layer, inFlight: surface.inFlight)
-                if rl_loop_surface_done(loop.handle, Int32(index), presented ? 1 : 0, nowMs) == 1 {
-                    hide(surface.panel)
+                if action == RL_SURFACE_SHOW_AND_DRAW { surface.visibility.show(surface.panel) }
+                // A transparent frame hides its window once it is on screen, so showing the window again never
+                // flashes the old glow (Windows hides only after its transparent present, too).
+                let hide = action == RL_SURFACE_CLEAR ? surface.visibility.hider(surface.panel) : nil
+                let presented = metal.draw(constants, on: surface.layer, inFlight: surface.inFlight, now: now,
+                                           onScreen: hide)
+                if rl_loop_surface_done(loop.handle, Int32(index), presented ? 1 : 0, nowMs) == 1, !presented {
+                    hide?() // a screen that takes no frames (asleep) is hidden without its transparent frame
                 }
             }
 
@@ -166,36 +219,36 @@ final class RenderThread: NSObject {
         }
     }
 
+    /// Display link at the full rate, with the timer as a fallback should the main screen stop refreshing (turned
+    /// off, asleep: the link then stops firing, as Windows' vsync wait stops); the timer alone at the slow rate; and
+    /// nothing at all when blocked, until an input arrives through `perform`. The one timer is re-aimed, never made.
     private func wait(_ next: RlPace) {
         pace = next.pace
-        slowTimer?.invalidate()
-        slowTimer = nil
-        if next.pace == RL_PACE_FULL, let link {
-            if linkRate != next.fullRateHz {
-                linkRate = next.fullRateHz
-                let rate = Float(next.fullRateHz)
-                link.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
+        let now = Date()
+        switch next.pace {
+        case RL_PACE_FULL where link != nil:
+            if let link {
+                if linkRate != next.fullRateHz {
+                    linkRate = next.fullRateHz
+                    let rate = Float(next.fullRateHz)
+                    link.preferredFrameRateRange = CAFrameRateRange(minimum: rate, maximum: rate, preferred: rate)
+                }
+                link.isPaused = false
             }
-            link.isPaused = false
-            return
+            timer?.fireDate = now.addingTimeInterval(Self.linkFallbackSeconds)
+        case RL_PACE_FULL:
+            timer?.fireDate = now.addingTimeInterval(1 / max(next.fullRateHz, 1))
+        case RL_PACE_SLOW:
+            link?.isPaused = true
+            timer?.fireDate = now.addingTimeInterval(next.intervalSeconds)
+        default:
+            link?.isPaused = true
+            timer?.fireDate = .distantFuture
         }
-        link?.isPaused = true
-        if next.pace == RL_PACE_SLOW || (next.pace == RL_PACE_FULL && link == nil) {
-            let interval = next.pace == RL_PACE_SLOW ? next.intervalSeconds : 1 / max(next.fullRateHz, 1)
-            let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in self?.frame(due: true) }
-            RunLoop.current.add(timer, forMode: .default)
-            slowTimer = timer
-        }
-        // RL_PACE_BLOCK: nothing until an input arrives through perform.
     }
 
-    private func show(_ panel: OverlayPanel) {
-        DispatchQueue.main.async { MainActor.assumeIsolated { panel.orderFrontRegardless() } }
-    }
-
-    private func hide(_ panel: OverlayPanel) {
-        DispatchQueue.main.async { MainActor.assumeIsolated { panel.orderOut(nil) } }
-    }
+    /// No refresh for this long at the full rate: draw anyway (Windows' VsyncFallbackSeconds).
+    static let linkFallbackSeconds: TimeInterval = 0.1
 
     /// The display link's selector, for NSScreen.displayLink(target:selector:).
     static let tickSelector = #selector(RenderThread.tick(_:))

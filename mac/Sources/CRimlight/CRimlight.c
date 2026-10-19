@@ -25,6 +25,10 @@ int32_t rlc_counter_add(RlcCounter *counter, int32_t delta) {
     return atomic_fetch_add_explicit(&counter->value, delta, memory_order_acq_rel) + delta;
 }
 
+void rlc_counter_store(RlcCounter *counter, int32_t value) {
+    atomic_store_explicit(&counter->value, value, memory_order_release);
+}
+
 int32_t rlc_counter_load(const RlcCounter *counter) {
     return atomic_load_explicit((_Atomic int32_t *)&counter->value, memory_order_acquire);
 }
