@@ -18,14 +18,15 @@ namespace Rimlight.Core.Color;
 /// among groups at least <see cref="SecondaryMinDistance"/> (Oklab distance) from Primary; without one, Secondary
 /// is Primary turned <see cref="DerivedHueShift"/>° in hue and <see cref="DerivedLightnessShift"/> lighter. Both are
 /// then glow-ified (<see cref="Glow"/>).</para>
-/// <para><b>No art</b> (doc 05 §1: a player's generic app icon instead of a cover). The result is null when the
-/// palette is nearly grayscale, meaning the Primary and Secondary sources are both below
-/// <see cref="NoArtMaxChroma"/> chroma, <i>and</i> the image is mostly one flat color, meaning at least
-/// <see cref="MinFlatShare"/> of the used pixels lie within <see cref="FlatTolerance"/> (Oklab distance) of the
-/// largest k-means cluster's centroid (before merging, so near shades don't pull the flat color off-center). A
-/// grayscale photo or gradient is not flat, so it still gives a soft-white palette, and a colorful flat image is not
-/// grayscale, so it still gives its color. An image with no pixel at alpha <see cref="MinAlpha"/> or above is also
-/// no art.</para>
+/// <para><b>No art</b> (doc 05 §1: a blank thumbnail, such as a player's empty placeholder). The result is null when
+/// the image is essentially one flat color, meaning at least <see cref="MinFlatShare"/> of the used pixels lie within
+/// <see cref="FlatTolerance"/> (Oklab distance) of the largest k-means cluster's centroid (before merging, so near
+/// shades don't pull the flat color off-center), <i>and</i> the palette is nearly grayscale, meaning the Primary and
+/// Secondary sources are both below <see cref="NoArtMaxChroma"/> chroma. Anything more than a speck is art: a
+/// black-and-white cover, even a black one with a line of white text or a grey tile with a white glyph, gives a
+/// soft-white or grey palette, and a flat colorful image gives its color. An image with no pixel at alpha
+/// <see cref="MinAlpha"/> or above is also no art. <i>Maxwell's feedback:</i> the flat share needed to be only 60 %,
+/// so a black cover with white text (about 80 % flat black) was no art and showed the manual colors.</para>
 /// <para>The same input always gives the same output. The instance holds no state (scratch buffers come from
 /// <see cref="ArrayPool{T}.Shared"/> per call), so concurrent calls are safe. The pool keeps returned buffers per
 /// thread, so the first call on each thread allocates its scratch (about 85 KB at 64 × 64) and later calls on that
@@ -81,14 +82,24 @@ internal sealed class PaletteExtractor : IPaletteExtractor
     /// <summary>The fitness of near-black and near-white clusters: low, but above 0 so a black-and-white image still ranks by size.</summary>
     public const float FitnessFloor = 0.05f;
 
-    /// <summary>No art needs both palette sources below this chroma (the same level <see cref="Glow"/> treats as grayscale).</summary>
+    /// <summary>No art needs both palette sources below this chroma (the level up to which <see cref="Glow"/> keeps a
+    /// color neutral).</summary>
     public const float NoArtMaxChroma = Glow.NeutralChroma;
 
     /// <summary>The Oklab distance from the largest cluster's centroid within which a pixel counts as that flat color.</summary>
     public const float FlatTolerance = 0.03f;
 
-    /// <summary>No art needs at least this share of the used pixels to be the one flat color.</summary>
-    public const float MinFlatShare = 0.6f;
+    /// <summary>No art needs at least this share of the used pixels to be the one flat color: a blank image, or one
+    /// with a speck of up to 2 % of the pixels (about 80 at 64 × 64).</summary>
+    /// <remarks>Measured at 64 × 64: a blank grey from #101010 up, with ±3 grain per channel and ±2 per 8 × 8 block
+    /// (a noisy JPEG), is at least 99.3 % flat, and a 6 × 6 white speck on a grey tile 98.8 %. Real content is far
+    /// below: one line of small white credits on black is 94.3 % flat, a 1-pixel rule across the cover 96.9 %, the
+    /// generic icon fixture's note glyph 93.4 % and a black cover with a title and credits 79.3 %. Marks of 2–3 % (a
+    /// tiny word, a 10 × 10 logo) are art, because their neutral glow is a smaller mistake than the manual colors.
+    /// Darker than about #101010 Oklab spreads the same grain two to three times wider (#000000 to #010101 alone is
+    /// 0.067 in L), so a grainy blank there can fall under this share and glow a dim grey. A clean one is still no
+    /// art.</remarks>
+    public const float MinFlatShare = 0.98f;
 
     /// <inheritdoc />
     public Palette? Extract(ReadOnlySpan<byte> bgra, int width, int height, string trackId)
@@ -317,7 +328,7 @@ internal sealed class PaletteExtractor : IPaletteExtractor
 /// <param name="PrimarySource">The Primary color before glow-ify.</param>
 /// <param name="SecondarySource">The Secondary color before glow-ify (a group centroid or the derived color).</param>
 /// <param name="FlatShare">The share of used pixels within the flat tolerance of the largest k-means cluster's centroid.</param>
-/// <param name="IsNoArt">Whether the image counts as no art (grayscale palette and mostly one flat color).</param>
+/// <param name="IsNoArt">Whether the image counts as no art (essentially one flat color, and a nearly grayscale palette).</param>
 /// <param name="SampleCount">The number of pixels used (opaque enough, on the sampling grid).</param>
 /// <param name="ClusterCenters">The raw k-means centroids, before merging.</param>
 /// <param name="ClusterShares">Each raw k-means cluster's fraction of the used pixels (0 for an empty cluster).</param>
