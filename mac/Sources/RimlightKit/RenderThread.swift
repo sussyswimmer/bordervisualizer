@@ -159,6 +159,18 @@ final class RenderThread: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Pauses or resumes the glow on each surface, in surface order (a full-screen window covers its display).
+    func setSurfacesPaused(_ paused: [Bool]) {
+        perform { [weak self] in
+            guard let self else { return }
+            let now = CACurrentMediaTime()
+            for (index, value) in paused.enumerated() {
+                rl_loop_set_surface_paused(self.loop.handle, Int32(index), value ? 1 : 0, now)
+            }
+            self.handleInputs(force: true)
+        }
+    }
+
     // MARK: - The thread
 
     private func main() {
@@ -182,9 +194,9 @@ final class RenderThread: NSObject, @unchecked Sendable {
         frame(due: true)
     }
 
-    private func handleInputs() {
+    private func handleInputs(force: Bool = false) {
         let now = CACurrentMediaTime()
-        guard rl_loop_apply_inputs(loop.handle, now) == 1 else { return }
+        guard rl_loop_apply_inputs(loop.handle, now) == 1 || force else { return }
         // At the full rate the next frame draws the change within one interval, so a stream of inputs can't push
         // frames past the cap (FramePacer.InputWaits).
         if rl_loop_input_waits(loop.handle, pace, now - lastFrame) == 1 { return }

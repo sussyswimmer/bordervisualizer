@@ -82,6 +82,13 @@ final class SystemAudioTap: @unchecked Sendable {
         }
     }
 
+    /// After a wake the devices may have changed under the tap: build it again if it is open. Any thread.
+    func restartAfterWake() {
+        queue.async { [self] in
+            if procID != nil { restart("the Mac woke") }
+        }
+    }
+
     /// Holds the tap closed (false) until the first-run banner has said why macOS will ask for "System Audio
     /// Recording" (docs/10-MACOS.md §2.1), then lets it open (true). Any thread.
     func setAllowed(_ value: Bool) {

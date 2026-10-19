@@ -700,10 +700,31 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M2 system audio → Core → glow: a Core Audio process tap (C IO proc into a C ring), drained by the render thread into the shared frame source; device changes, health checks, the "can't hear" warning; the Mac's frame source proven equal to the Windows one — branch `claude/mac-m2-audio` — effort: L (notes below; Mac manual test pending)
 - [x] M3 menu bar, Settings, saved settings: the menu bar menu (doc 06 §2), the Settings window's six pages with a live preview drawn by the overlay's shader, presets, the level meter, live edits saved through Core's store 500 ms after the last, the first-run welcome — branch `claude/mac-m3-settings` — effort: L (notes below; Mac manual test pending)
 - [x] M4 album-art colors: Music and Spotify through their distributed notifications; Music's cover by Apple event (only while Music runs), decoded to 64 × 64 BGRA and handed to Core's extractor; doc 05 §1's debounce and retry; the Windows tooltip text; the Color page's Now playing — branch `claude/mac-m4-album` — effort: M (notes below; Mac manual test pending)
-- [ ] M5 system watchers
+- [x] M5 system watchers: sleep and wake, displays asleep, lock, fast user switching, battery and Low Power Mode (Reduce at half scale and 30 fps, or Pause), the per-display full-screen pause, the Dock's room re-read, the tap rebuilt on wake — branch `claude/mac-m5-watchers` — effort: M (notes below; Mac manual test pending)
 - [ ] M6 hotkey, login item, single instance
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M5 notes
+
+- **What pauses the glow everywhere** (`SystemWatcher`, main thread):
+  - sleep, `NSWorkspace.willSleep`/`didWake`;
+  - the displays sleeping, `screensDidSleep`/`Wake`;
+  - another user switching in, `sessionDidResignActive`/`BecomeActive`;
+  - the lock, the distributed `com.apple.screenIsLocked`/`Unlocked`, undocumented and used by Chromium.
+  - Any of these pauses it, through `rl_loop_set_paused`. The light engine fades out, the tap closes, and frames stop once the glow is static, as on Windows.
+- **Wake:** the overlays are rebuilt, and an open tap is rebuilt on the new devices.
+- **Battery:** `IOPSNotificationCreateRunLoopSource` + `IOPSGetProvidingPowerSourceType`, plus Low Power Mode (`NSProcessInfoPowerStateDidChange`), which counts the same.
+  - "Reduce" halves the drawables (the layer stretches them back) and passes the halved pixels per point. FramePacer caps at 30 fps from the same flag.
+  - "Pause" pauses the glow (OverlayRules).
+- **Full screen (doc 04 §4):**
+  - Checked when an app comes to the front and every 2 s, with a 0.5 s timer tolerance so the wakes coalesce.
+  - A layer-0 window of the frontmost app whose bounds exactly cover a display pauses that display's glow (`rl_loop_set_surface_paused`, a 300 ms fade, keeping the window).
+  - This catches macOS full-screen Spaces, borderless games and full-screen video. Window bounds and owners need no permission.
+  - The same tick re-reads the layout, so the glow follows the Dock when it moves or auto-hides with "Cover the menu bar and Dock" off.
+- **Behavior page:** Pause in full-screen apps and videos, and On battery (Keep going / Save power / Pause).
+- **Tests:** the window-list coordinate conversion for screens above and beside the main one. C#'s loop tests already cover the per-screen fade, the pause and Reduce.
+- **M1's checklist changes:** with "Pause in fullscreen apps" on (the default), the glow now fades out on a screen in a full-screen app. Turn it off to check that the overlay still shows above full-screen apps.
 
 ### M4 notes
 
