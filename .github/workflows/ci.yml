@@ -179,5 +179,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mac-app
-          path: artifacts/mac/*-mac.zip
+          path: |
+            artifacts/mac/*-mac.zip
+            artifacts/mac/*Setup.dmg
           if-no-files-found: error

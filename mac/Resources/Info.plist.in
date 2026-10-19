@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- build.sh fills in the @…@ values from src/Directory.Build.props (<AppName>, <Version>). BUNDLE_VERSION is the
-     version without a prerelease suffix: CFBundleVersion allows only digits and dots. -->
+     version without a prerelease suffix: CFBundleVersion allows only digits and dots. SPARKLE_PUBLIC_KEY is empty
+     unless the build is given one; the app then has no updater at all (Updater.swift). -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -36,6 +37,16 @@
 	<string>@APP_NAME@ listens to your Mac's sound output to light your screen to the beat. Nothing is recorded or saved.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>@APP_NAME@ reads the album art of the song Music is playing, to color the glow. It changes nothing in Music.</string>
+	<key>SUFeedURL</key>
+	<string>@FEED_URL@</string>
+	<key>SUPublicEDKey</key>
+	<string>@SPARKLE_PUBLIC_KEY@</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>43200</integer>
+	<key>SUEnableSystemProfiling</key>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Free and open source under the MIT License.</string>
 </dict>

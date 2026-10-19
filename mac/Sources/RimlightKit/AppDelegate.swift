@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var media: NowPlayingService?
     private var watcher: SystemWatcher?
     private var hotkey: GlobalHotkey?
+    private var updater: Updater?
     private var appliedHotkey: String?
     private var appliedLogin: Bool?
 
@@ -99,6 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // The shortcut, the login item, and a second launch's requests (M6).
         hotkey = GlobalHotkey { [weak self] in self?.toggleGlow() }
+        let updater = Updater()
+        self.updater = updater
+        if updater.isAvailable { model.checkForUpdates = { [weak self] in self?.checkForUpdates() } }
         model.recordingShortcut = { [weak self] recording in
             guard let self else { return }
             if recording {
@@ -190,6 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         demo.target = self
         demoItem = demo
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
+        if updater?.isAvailable == true {
+            menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+                .target = self
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit \(Core.appName)", action: #selector(NSApplication.terminate(_:)),
                      keyEquivalent: "q")
@@ -222,6 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 glowItem?.keyEquivalent = ""
             }
         }
+        updater?.apply(autoUpdate: settings.autoUpdate)
         if settings.launchAtStartup != appliedLogin {
             appliedLogin = settings.launchAtStartup
             LoginItem.apply(settings.launchAtStartup)
@@ -254,6 +263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openAudioPrivacy() { AudioPrivacy.open() }
+
+    @objc private func checkForUpdates() { updater?.checkNow() }
 
     private func settingsChanged() {
         overlays?.settingsChanged()

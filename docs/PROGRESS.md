@@ -702,8 +702,24 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M4 album-art colors: Music and Spotify through their distributed notifications; Music's cover by Apple event (only while Music runs), decoded to 64 × 64 BGRA and handed to Core's extractor; doc 05 §1's debounce and retry; the Windows tooltip text; the Color page's Now playing — branch `claude/mac-m4-album` — effort: M (notes below; Mac manual test pending)
 - [x] M5 system watchers: sleep and wake, displays asleep, lock, fast user switching, battery and Low Power Mode (Reduce at half scale and 30 fps, or Pause), the per-display full-screen pause, the Dock's room re-read, the tap rebuilt on wake — branch `claude/mac-m5-watchers` — effort: M (notes below; Mac manual test pending)
 - [x] M6 hotkey, login item, single instance: the global shortcut through Carbon (no Accessibility), parsed and formatted by the Windows `HotkeyGesture`; a recorder on the Behavior page; launch at login through SMAppService; one copy at a time (a lock file; a second launch opens Settings or starts the demo in the first) — branch `claude/mac-m6-shell` — effort: M (notes below; Mac manual test pending)
-- [ ] M7 packaging, notarization, updates
+- [x] M7 packaging and updates: `RimlightSetup.dmg` and the update zip from `build.sh` (ad hoc, per Q2); Sparkle 2 with an EdDSA-signed appcast as a release asset; "Check for Updates…" and AutoUpdate; Mac jobs in `release.yml` (H-031) — branch `claude/mac-m7-release` — effort: M (notes below; needs the update key from Maxwell, and a Mac manual test)
 - [ ] M8 README and docs
+
+### M7 notes
+
+- **Downloads:** `mac/build.sh` now also makes `artifacts/mac/RimlightSetup.dmg`: a compressed HFS+ image holding the app and an Applications shortcut, checked with `hdiutil verify`. The zip stays as Sparkle's update archive. `RIMLIGHT_VERSION` sets the version from the tag, as `pack.ps1 -Version` does on Windows.
+- **Updates (`Updater.swift`):**
+  - `SPUStandardUpdaterController`, started once the settings are applied.
+  - `automaticallyChecksForUpdates` and `automaticallyDownloadsUpdates` follow AutoUpdate, and `sendsSystemProfile` is off.
+  - The feed is `releases/latest/download/appcast.xml`. **Check for Updates…** is in the menu and on the About page.
+  - Without a public key in Info.plist there is no updater, no menu item, and the About page says the copy makes no network requests.
+- **Release workflow (Lane A file, H-031):**
+  - `mac-build` (macOS, no secrets) builds, tests and keeps the DMG and zip.
+  - `mac-appcast` (tag only, key set up) checks Sparkle's archive SHA-256, signs and writes `appcast.xml`.
+  - `publish` attaches the Mac files to the draft before it is published. A release without the key still ships the DMG.
+- **Why Sparkle works without a Developer ID:** Sparkle requires either a valid EdDSA signature or a matching code signature, not both (`SUUpdateValidator.m`, 2.x). An ad-hoc copy is checked by EdDSA alone. Sparkle's framework keeps its authors' signature, and since the app has no hardened runtime, library validation doesn't apply.
+- **Unverified until a real release:** an install from the DMG (Gatekeeper's Open Anyway), and an update from one tagged release to the next. Each update is a new ad-hoc identity, so macOS may ask for the system audio and Automation permissions again (§6, point 2).
+- **Tests:** `appcast.sh` with a stand-in signer gives valid XML; Swift `UpdaterTests` cover when a copy can update.
 
 ### M6 notes
 
