@@ -703,7 +703,22 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M5 system watchers: sleep and wake, displays asleep, lock, fast user switching, battery and Low Power Mode (Reduce at half scale and 30 fps, or Pause), the per-display full-screen pause, the Dock's room re-read, the tap rebuilt on wake — branch `claude/mac-m5-watchers` — effort: M (notes below; Mac manual test pending)
 - [x] M6 hotkey, login item, single instance: the global shortcut through Carbon (no Accessibility), parsed and formatted by the Windows `HotkeyGesture`; a recorder on the Behavior page; launch at login through SMAppService; one copy at a time (a lock file; a second launch opens Settings or starts the demo in the first) — branch `claude/mac-m6-shell` — effort: M (notes below; Mac manual test pending)
 - [x] M7 packaging and updates: `RimlightSetup.dmg` and the update zip from `build.sh` (ad hoc, per Q2); Sparkle 2 with an EdDSA-signed appcast as a release asset; "Check for Updates…" and AutoUpdate; Mac jobs in `release.yml` (H-031) — branch `claude/mac-m7-release` — effort: M (notes below; needs the update key from Maxwell, and a Mac manual test)
-- [ ] M8 README and docs
+- [x] M8 README and docs: a Download for Mac button and macOS badge, a Mac (preview) install with the Gatekeeper and audio-permission steps, Mac lines in How it works, Privacy, FAQ (Open Anyway, uninstall, logs), build from source and the roadmap; Sparkle in Credits; RELEASE-GUIDE §7 (update key, link checks, a Mac test, a Mac recording) — branch `claude/mac-m8-docs` — effort: S (notes below)
+
+### M8 notes
+
+- **The Mac is a "preview" in the README:** CI builds and tests it on every change, but no one has run it on a real Mac yet (every milestone's Mac manual test is still pending). Doc 08 says no claims that aren't true, so the button's subtitle and the Install heading say so, and the section asks for bug reports.
+- **Links:**
+  - The Mac links (`RimlightSetup.dmg`) use the same `releases/latest/download/` form as Windows, so like those they work from the first release on.
+  - The shields.io badges were fetched: they render, with the Apple logo.
+  - The FAQ's log command uses the bundle ID the app logs under.
+- **Facts checked against the code:**
+  - Album colours come only from Music (Q4 keeps Spotify off).
+  - The update toggle is on the About page.
+  - ⌃⌥L is the default shortcut.
+  - Settings live in `~/Library/Application Support/Rimlight`.
+  - Logs go to the unified log. `AppPaths`' comment said `~/Library/Logs`, which nothing writes, so the comment was corrected.
+- **Not changed:** the banner and its tagline, which say nothing about Windows. The downloads badge still counts `RimlightSetup.exe` only.
 
 ### M7 notes
 

@@ -91,6 +91,7 @@ All on github.com/sussyswimmer/bordervisualizer, signed in as the owner.
 - [ ] CI is green on `main`, and the README badge shows it.
 - [ ] Sections 1 to 3 are done and merged: the GIF, the video link, the screenshots and the release-notes GIF.
 - [ ] `CHANGELOG.md`: rename `## [0.1.0] - YYYY-MM-DD` to `## [1.0.0] - <today's date>`, move the `[Unreleased]` entries into it, and update the links at the bottom as its comment explains, with `1.0.0` instead of `0.1.0`.
+- [ ] For Mac updates: the update key is set up (section 7, step 1). Without it the release still has the Mac download, but those copies never update.
 - [ ] Optional: set `<Version>1.0.0</Version>` in `src/Directory.Build.props`. The tag sets the release's version either way; the file only sets local builds.
 
 **Tag it.** On an up-to-date `main`:
@@ -115,7 +116,7 @@ The README and the release notes link only the `RimlightSetup*.exe` names, and t
 
 **After it finishes:**
 
-- [ ] The Release run is green, and **Releases** shows **v1.0.0** marked **Latest**, with the 11 files listed above (four installers, two zips, two packages, two feeds and `RELEASES`) plus GitHub's two **Source code** archives.
+- [ ] The Release run is green, and **Releases** shows **v1.0.0** marked **Latest**, with the 11 files listed above (four installers, two zips, two packages, two feeds and `RELEASES`), the Mac files (`RimlightSetup.dmg`, `Rimlight-mac.zip` and, with the update key, `appcast.xml`: section 7), and GitHub's two **Source code** archives.
 - [ ] The release notes start with the demo GIF and play it, then the short "what it is" and install text, then the generated list of changes. You can fix the notes afterwards with **Edit** on the release.
 - [ ] The README's download links all work. In PowerShell:
   ```powershell
@@ -140,3 +141,31 @@ Releases are unsigned until you add the six `SIGNING_*` secrets for Azure Truste
 - [ ] `README.md`, **Install** step 2: delete the quoted line about *Windows protected your PC*.
 - [ ] `.github/release-notes-intro.md`, the **Install** line: delete its last two sentences, from "Windows may say" to "**Run anyway**."
 - [ ] This guide: drop the SmartScreen part of step 2 of the clean-account test in section 5.
+
+## 7. The Mac app
+
+The release workflow builds the Mac app next to the Windows one and attaches it to the same release (docs/10-MACOS.md §6). Two things only you can do: set up its update key once, and try it on a Mac.
+
+1. **Set up the update key (once, before the first release with the Mac app).** Without it, every Mac copy is built with no updater.
+   1. On your Mac, download `Sparkle-2.10.0.tar.xz` from [Sparkle's 2.10.0 release](https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0) and double-click it to unpack it.
+   2. In Terminal, in the unpacked folder, run `./bin/generate_keys`. It keeps the key in your login keychain and prints the public key, a line ending in `=`.
+   3. Run `./bin/generate_keys -x private-key.txt`.
+   4. On GitHub, open **Settings > Secrets and variables > Actions**:
+      - **Variables > New repository variable:** name `SPARKLE_PUBLIC_KEY`, with the public key as the value.
+      - **Secrets > New repository secret:** name `SPARKLE_PRIVATE_KEY`, with the contents of `private-key.txt` as the value.
+   5. Delete `private-key.txt`. The keychain copy is your backup: if the key is lost, installed Macs can't update again.
+   The release checks that the two halves match before it ships the Mac files.
+2. **After the release:** check the Mac links in Terminal:
+   ```sh
+   for name in RimlightSetup.dmg Rimlight-mac.zip appcast.xml; do
+     curl -sL -r 0-0 -o /dev/null -w "%{http_code}  $name\n" "https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/$name"
+   done
+   ```
+   Each line should start with 206 (or 200).
+3. **Try it on a Mac** (macOS 14.4 or later), ideally a user account that has never run it:
+   1. Click **Download for Mac** in the README, open the DMG, and drag Rimlight to Applications.
+   2. Open it. On macOS 15 or later, macOS refuses at first: click **Done**, then **Open Anyway** in **System Settings > Privacy & Security**. The README's Install section says the same.
+   3. The menu bar icon and the welcome window appear. Allow system audio when asked, play music in the Music app, and the edges glow in the cover's colors (Music asks once whether Rimlight may read it).
+   4. Bugs: no glow, a prompt for the **microphone** (it must never ask for one), the glow catching clicks, or a second icon after opening the app again.
+   5. When the next version ships, check **Settings > About > Check for Updates…** finds it, and that the new version is running after you quit and reopen Rimlight.
+4. **Optional, a Mac demo recording.** The demo runs on a Mac too: quit Rimlight, then run `/Applications/Rimlight.app/Contents/MacOS/Rimlight --demo` in Terminal. Press **⌘⇧5**, choose **Record Entire Screen**, and record 15 seconds. Keep **Hide the glow from screen recordings** off (**Settings > Behavior**). Trim and export it as in section 1. The README has no Mac slot yet, so hand the file to Claude Code if you want one.

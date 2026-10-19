@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 /// Where the app keeps its files: ~/Library/Application Support/<name> for settings.json (the Windows app's
-/// %APPDATA%\<name>, doc 06 §1) and ~/Library/Logs/<name> for logs.
+/// %APPDATA%\<name>, doc 06 §1). Logs go to the unified log (os.Logger, subsystem = the bundle ID).
 public enum AppPaths {
     public static var supportDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
