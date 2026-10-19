@@ -80,7 +80,8 @@ internal static class SampleArt
         return x + 4 * MathF.Sin(y * 0.3f) > y ? Shade(255 * fade, 0, 255 * fade, 0) : Shade(0, 255 * fade, 255 * fade, 0);
     });
 
-    // The "no art" quirk (doc 05 §1): a player's generic icon, a flat dark-grey tile with a white note glyph.
+    // A player's generic icon, a flat dark-grey tile with a white note glyph. It was doc 05 §1's "no art" case until
+    // Maxwell's feedback; now only a blank image is, and this glows neutral like a black-and-white cover.
     private static ArtImage GenericAppIcon() => ArtImage.Create(Size, Size, (x, y) =>
     {
         float head = Coverage(MathF.Sqrt((x - 26) * (x - 26) * 0.7f + (y - 44) * (y - 44)), 6);
