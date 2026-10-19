@@ -14,7 +14,9 @@ final class OverlayController {
     private var layoutKey = ""
     private var rebuildPending = false
     private var observer: NSObjectProtocol?
-    private var onBattery = false              // on battery or in Low Power Mode (M5)
+    private var onBattery = false              // on battery (M5)
+    private var lowPower = false               // Low Power Mode (M5)
+    private var refreshHz: Double = 60
     private var fullscreen: Set<String> = []   // displays a full-screen window covers (M5)
 
     init(loop: CoreLoop, metal: MetalGlow, tap: SystemAudioTap?) {
@@ -36,12 +38,25 @@ final class OverlayController {
         rebuild()
     }
 
-    /// On battery (or Low Power Mode, which counts the same, 10-MACOS §5): FramePacer caps at 30 fps and "Reduce"
-    /// halves the render scale, "Pause" pauses the glow. A change rebuilds the surfaces at the new scale.
-    func setOnBattery(_ value: Bool) {
-        guard value != onBattery else { return }
-        onBattery = value
-        rebuild(force: true)
+    /// On battery the OnBattery setting applies (Reduce: 30 fps at half scale; Pause); Low Power Mode always reduces
+    /// (10-MACOS §5). Only a change of render scale makes new windows; otherwise the glow carries on unbroken.
+    func setPower(onBattery: Bool, lowPower: Bool) {
+        guard onBattery != self.onBattery || lowPower != self.lowPower else { return }
+        let scaleBefore = renderScale
+        self.onBattery = onBattery
+        self.lowPower = lowPower
+        if renderScale != scaleBefore {
+            rebuild(force: true)
+        } else {
+            render.setDisplay(refreshHz: refreshHz, onBattery: onBattery, lowPower: lowPower)
+        }
+    }
+
+    /// Half render scale (doc 04 §2) under "Reduce on battery" or Low Power Mode. The layer stretches the smaller
+    /// drawable back.
+    private var renderScale: CGFloat {
+        let reduce = loop.settings?.onBattery == "Reduce"
+        return (onBattery && reduce) || lowPower ? 0.5 : 1
     }
 
     /// Displays (by UUID) that a full-screen window covers: the glow fades out there (doc 04 §4) and keeps its window.
@@ -52,22 +67,23 @@ final class OverlayController {
         render.setSurfacesPaused(paused)
     }
 
-    /// The displays' UUIDs in surface order, with their frames, for the full-screen check.
-    var overlaidScreens: [(id: String, frame: NSRect)] {
+    /// The overlaid displays, with their frames and the notch's height, for the full-screen check.
+    var overlaidScreens: [SystemWatcher.Display] {
         NSScreen.screens.compactMap { screen in
             guard let id = Self.uuid(of: screen), screenIDs.contains(id) else { return nil }
-            return (id, screen.frame)
+            return SystemWatcher.Display(id: id, frame: screen.frame, topInset: screen.safeAreaInsets.top)
         }
     }
 
     /// Re-reads the layout (the Dock moved or auto-hid, which no notification reliably reports, 10-MACOS §3.1).
     func checkLayout() {
+        guard !rebuildPending else { return } // displays are settling: the debounced rebuild follows
         rebuild()
     }
 
-    /// After waking from sleep: displays and their link may have changed under us.
+    /// After waking from sleep: displays and their link may have changed under us. Rebuilt once they settle.
     func wake() {
-        rebuild(force: true)
+        scheduleRebuild()
     }
 
     /// Displays changed: rebuild after they settle (300 ms, doc 02).
@@ -86,11 +102,9 @@ final class OverlayController {
         guard let settings = loop.settings else { return }
         let screens = Self.chosenScreens(settings)
         let frames = screens.map { settings.coverTaskbar ? $0.frame : $0.visibleFrame }
-        // "Reduce on battery": half render scale (doc 04 §2). The layer stretches the smaller drawable back.
-        let renderScale: CGFloat = onBattery && settings.onBattery == "Reduce" ? 0.5 : 1
+        let renderScale = self.renderScale
         let key = zip(screens, frames).map { "\(Self.uuid(of: $0.0) ?? "?")@\($0.1)x\($0.0.backingScaleFactor)" }
             .joined(separator: ";") + (settings.hideFromScreenCapture ? ";hidden" : "") + ";scale\(renderScale)"
-            + ";battery\(onBattery)"
         if !force && key == layoutKey { return }
         layoutKey = key
 
@@ -120,8 +134,8 @@ final class OverlayController {
         // Pacing follows the primary screen (the one with the menu bar), as Windows follows the primary monitor.
         let primary = NSScreen.screens.first
         let link = primary?.displayLink(target: render, selector: RenderThread.tickSelector)
-        let refresh = Double(primary?.maximumFramesPerSecond ?? 60)
-        render.setSurfaces(surfaces, link: link, refreshHz: refresh, onBattery: onBattery)
+        refreshHz = Double(primary?.maximumFramesPerSecond ?? 60)
+        render.setSurfaces(surfaces, link: link, refreshHz: refreshHz, onBattery: onBattery, lowPower: lowPower)
     }
 
     /// The screens the settings choose (doc 06 §1 Monitors): all, the primary, or those whose display UUID is listed.

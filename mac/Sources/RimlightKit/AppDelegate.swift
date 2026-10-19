@@ -77,7 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self?.loop?.setPaused(paused)
                     self?.overlays?.settingsChanged()
                 },
-                onBattery: { [weak self] value in self?.overlays?.setOnBattery(value) },
+                power: { [weak self] battery, lowPower in
+                    self?.overlays?.setPower(onBattery: battery, lowPower: lowPower)
+                },
                 fullscreen: { [weak self] displays in self?.overlays?.setFullscreen(displays) },
                 woke: { [weak self] in
                     self?.overlays?.wake()
@@ -200,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func settingsChanged() {
         overlays?.settingsChanged()
         if let model { media?.setAlbumColorsWanted(model.usesAlbumColors) }
+        watcher?.recheck() // "Pause in full-screen apps" applies at once
         updateStatusItem()
     }
 

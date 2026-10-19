@@ -22,7 +22,7 @@ final class LoopBridgeTests: XCTestCase {
         let surfaces = [RlSurface(widthPx: 1920, heightPx: 1080, pixelsPerPoint: 1, paused: 0),
                         RlSurface(widthPx: 3024, heightPx: 1964, pixelsPerPoint: 2, paused: 0)]
         XCTAssertEqual(rl_loop_set_surfaces(loop.handle, surfaces, 2, 10), RL_OK)
-        XCTAssertEqual(rl_loop_set_display(loop.handle, 120, 0), RL_OK)
+        XCTAssertEqual(rl_loop_set_display(loop.handle, 120, 0, 0), RL_OK)
 
         var now = 10.0
         var actions: [Int32] = []

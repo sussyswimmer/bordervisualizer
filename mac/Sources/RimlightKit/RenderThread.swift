@@ -134,7 +134,8 @@ final class RenderThread: NSObject, @unchecked Sendable {
 
     /// Replaces the screens' overlays (main thread, after a display change). `link` comes from the main screen
     /// (NSScreen.displayLink, created on the main thread) and is added to this thread's run loop here.
-    func setSurfaces(_ new: [OverlaySurface], link newLink: CADisplayLink?, refreshHz: Double, onBattery: Bool) {
+    func setSurfaces(_ new: [OverlaySurface], link newLink: CADisplayLink?, refreshHz: Double, onBattery: Bool,
+                     lowPower: Bool) {
         perform { [weak self] in
             guard let self else { return }
             self.link?.invalidate()
@@ -146,7 +147,7 @@ final class RenderThread: NSObject, @unchecked Sendable {
             self.surfaces = new
             let infos = new.map(\.info)
             rl_loop_set_surfaces(self.loop.handle, infos, Int32(infos.count), CACurrentMediaTime())
-            rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0)
+            rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0, lowPower ? 1 : 0)
             // The old panels are closed on the main thread once this thread no longer draws on them.
             let closing = old.map(\.panel).filter { panel in !new.contains { $0.panel === panel } }
             DispatchQueue.main.async {
@@ -156,6 +157,16 @@ final class RenderThread: NSObject, @unchecked Sendable {
             }
             self.pace = RL_PACE_FULL
             self.frame(due: true)
+        }
+    }
+
+    /// The power state changed without changing the render scale: the frame rate cap and "Pause on battery" follow
+    /// on the next frame, and the windows stay as they are.
+    func setDisplay(refreshHz: Double, onBattery: Bool, lowPower: Bool) {
+        perform { [weak self] in
+            guard let self else { return }
+            rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0, lowPower ? 1 : 0)
+            self.handleInputs(force: true)
         }
     }
 

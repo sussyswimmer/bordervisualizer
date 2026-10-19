@@ -284,7 +284,7 @@ struct BehaviorPage: View {
                     Text("Pause the glow").tag("Pause")
                 }
             } footer: {
-                Text("Low Power Mode counts as on battery.").font(.caption).foregroundStyle(.secondary)
+                Text("In Low Power Mode the glow always saves power.").font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 Toggle("Hide the glow from screen recordings", isOn: $model.settings.hideFromScreenCapture)

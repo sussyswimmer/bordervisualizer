@@ -9,9 +9,16 @@ import os
 ///   another app comes to the front and every 2 s, which also notices the Dock moving when the glow leaves it room.
 @MainActor
 final class SystemWatcher {
+    /// One overlaid display for the full-screen check.
+    struct Display {
+        let id: String
+        let frame: NSRect       // NSScreen.frame
+        let topInset: CGFloat   // the notch: a full-screen window starts below it
+    }
+
     struct Callbacks {
         var paused: @MainActor (Bool) -> Void           // the glow should pause everywhere
-        var onBattery: @MainActor (Bool) -> Void
+        var power: @MainActor (_ onBattery: Bool, _ lowPower: Bool) -> Void
         var fullscreen: @MainActor (Set<String>) -> Void // display UUIDs covered by a full-screen window
         var woke: @MainActor () -> Void
         var tick: @MainActor () -> Void                 // every 2 s while running
@@ -26,12 +33,13 @@ final class SystemWatcher {
     private var timer: Timer?
     private var reasons: Set<String> = []  // why the glow is paused: "sleep", "displays", "locked", "session"
     private var battery = false
-    private let screens: @MainActor () -> [(id: String, frame: NSRect)]
+    private var lowPower = false
+    private let screens: @MainActor () -> [Display]
     private let checksFullscreen: @MainActor () -> Bool
 
     /// `screens`: the overlaid displays with their frames; `checksFullscreen`: whether "Pause in fullscreen apps" is on
     /// and the glow could show.
-    init(callbacks: Callbacks, screens: @escaping @MainActor () -> [(id: String, frame: NSRect)],
+    init(callbacks: Callbacks, screens: @escaping @MainActor () -> [Display],
          checksFullscreen: @escaping @MainActor () -> Bool) {
         self.callbacks = callbacks
         self.screens = screens
@@ -43,6 +51,8 @@ final class SystemWatcher {
         observe(workspace, NSWorkspace.willSleepNotification) { $0.set("sleep", true) }
         observe(workspace, NSWorkspace.didWakeNotification) {
             $0.set("sleep", false)
+            // A missed screensDidWake must not leave the glow paused for good (Windows' PowerWatcher has the same).
+            if CGDisplayIsAsleep(CGMainDisplayID()) == 0 { $0.set("displays", false) }
             $0.callbacks.woke()
         }
         observe(workspace, NSWorkspace.screensDidSleepNotification) { $0.set("displays", true) }
@@ -104,10 +114,17 @@ final class SystemWatcher {
     }
 
     private func checkPower() {
-        let value = Self.onBattery() || ProcessInfo.processInfo.isLowPowerModeEnabled
-        guard value != battery else { return }
-        battery = value
-        callbacks.onBattery(value)
+        let battery = Self.onBattery()
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        guard battery != self.battery || lowPower != self.lowPower else { return }
+        self.battery = battery
+        self.lowPower = lowPower
+        callbacks.power(battery, lowPower)
+    }
+
+    /// Checks the full-screen state now (the setting changed).
+    func recheck() {
+        checkFullscreen()
     }
 
     /// Whether the Mac runs on its battery (IOPSGetProvidingPowerSourceType).
@@ -118,34 +135,50 @@ final class SystemWatcher {
     }
 
     private func checkFullscreen() {
-        guard checksFullscreen() else { return callbacks.fullscreen([]) }
+        // Nothing can show while paused (asleep, locked): the window list isn't worth reading.
+        guard checksFullscreen(), reasons.isEmpty else { return callbacks.fullscreen([]) }
         callbacks.fullscreen(Self.coveredDisplays(screens()))
     }
 
-    /// The displays a window of the frontmost app covers exactly (doc 04 §4: borderless games, full-screen video,
-    /// and macOS full-screen Spaces). Window bounds and owners need no permission; only names would need Screen
-    /// Recording (Apple DTS, forums 839069).
-    static func coveredDisplays(_ screens: [(id: String, frame: NSRect)]) -> Set<String> {
-        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != getpid(),
-              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+    /// The displays whose top window covers them exactly (doc 04 §4: borderless games, full-screen video, macOS
+    /// full-screen Spaces), whichever app is in front, as Windows keeps a video's monitor paused while you work on
+    /// another. The window list runs front to back: for each display, the first app window that reaches it decides.
+    /// Window bounds and owners need no permission; only names would need Screen Recording (Apple DTS, forums 839069).
+    static func coveredDisplays(_ screens: [Display]) -> Set<String> {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                        kCGNullWindowID) as? [[String: Any]] else { return [] }
+        let own = getpid()
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let frames = screens.map { windowFrame(of: $0.frame, primaryHeight: primaryHeight) }
+        var decided = Set<Int>()
         var covered: Set<String> = []
-        for window in windows {
-            guard (window[kCGWindowOwnerPID as String] as? pid_t) == front.processIdentifier,
-                  (window[kCGWindowLayer as String] as? Int) == 0,
+        for window in windows where decided.count < screens.count {
+            guard (window[kCGWindowLayer as String] as? Int) == 0,
+                  (window[kCGWindowOwnerPID as String] as? pid_t) != own,
                   let boundsInfo = window[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsInfo as CFDictionary) else { continue }
-            for screen in screens where bounds.equalTo(windowFrame(of: screen.frame, primaryHeight: primaryHeight)) {
-                covered.insert(screen.id)
+            for (index, screen) in screens.enumerated() where !decided.contains(index) {
+                guard bounds.intersects(frames[index]) else { continue }
+                decided.insert(index)
+                if covers(bounds, frames[index], topInset: screen.topInset) { covered.insert(screen.id) }
             }
         }
         return covered
     }
 
+    /// Whether window bounds fill a display: exactly, or below the notch (a full-screen window on a notched MacBook
+    /// starts under the camera housing).
+    nonisolated static func covers(_ bounds: CGRect, _ frame: CGRect, topInset: CGFloat) -> Bool {
+        if bounds.equalTo(frame) { return true }
+        guard topInset > 0 else { return false }
+        let belowNotch = CGRect(x: frame.minX, y: frame.minY + topInset, width: frame.width,
+                                height: frame.height - topInset)
+        return bounds.equalTo(belowNotch)
+    }
+
     /// A screen's frame in window-list coordinates: global, from the primary screen's top-left (NSScreen's are from
     /// its bottom-left).
-    static func windowFrame(of screenFrame: NSRect, primaryHeight: CGFloat) -> CGRect {
+    nonisolated static func windowFrame(of screenFrame: NSRect, primaryHeight: CGFloat) -> CGRect {
         CGRect(x: screenFrame.minX, y: primaryHeight - screenFrame.maxY, width: screenFrame.width,
                height: screenFrame.height)
     }

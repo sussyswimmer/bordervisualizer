@@ -16,4 +16,12 @@ final class SystemWatcherTests: XCTestCase {
         XCTAssertEqual(SystemWatcher.windowFrame(of: right, primaryHeight: 982),
                        CGRect(x: 1512, y: 0, width: 2560, height: 1440))
     }
+
+    func testAFullScreenWindowBelowTheNotchCoversTheDisplay() {
+        let frame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        XCTAssertTrue(SystemWatcher.covers(frame, frame, topInset: 0))
+        XCTAssertTrue(SystemWatcher.covers(CGRect(x: 0, y: 32, width: 1512, height: 950), frame, topInset: 32))
+        XCTAssertFalse(SystemWatcher.covers(CGRect(x: 0, y: 32, width: 1512, height: 950), frame, topInset: 0))
+        XCTAssertFalse(SystemWatcher.covers(CGRect(x: 0, y: 25, width: 1512, height: 900), frame, topInset: 32))
+    }
 }

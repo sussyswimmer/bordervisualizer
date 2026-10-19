@@ -714,7 +714,7 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - the lock, the distributed `com.apple.screenIsLocked`/`Unlocked`, undocumented and used by Chromium.
   - Any of these pauses it, through `rl_loop_set_paused`. The light engine fades out, the tap closes, and frames stop once the glow is static, as on Windows.
 - **Wake:** the overlays are rebuilt, and an open tap is rebuilt on the new devices.
-- **Battery:** `IOPSNotificationCreateRunLoopSource` + `IOPSGetProvidingPowerSourceType`, plus Low Power Mode (`NSProcessInfoPowerStateDidChange`), which counts the same.
+- **Battery:** `IOPSNotificationCreateRunLoopSource` + `IOPSGetProvidingPowerSourceType`. Low Power Mode (`NSProcessInfoPowerStateDidChange`) always reduces and never pauses.
   - "Reduce" halves the drawables (the layer stretches them back) and passes the halved pixels per point. FramePacer caps at 30 fps from the same flag.
   - "Pause" pauses the glow (OverlayRules).
 - **Full screen (doc 04 §4):**
@@ -723,7 +723,21 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - This catches macOS full-screen Spaces, borderless games and full-screen video. Window bounds and owners need no permission.
   - The same tick re-reads the layout, so the glow follows the Dock when it moves or auto-hides with "Cover the menu bar and Dock" off.
 - **Behavior page:** Pause in full-screen apps and videos, and On battery (Keep going / Save power / Pause).
-- **Tests:** the window-list coordinate conversion for screens above and beside the main one. C#'s loop tests already cover the per-screen fade, the pause and Reduce.
+- **First macOS run:** the tests called the static geometry helpers, which inherited the class's main-actor isolation. They are now `nonisolated` (pure functions).
+- **Independent review**, two blockers fixed:
+  - **Notch.** A full-screen window on a notched MacBook starts below the camera housing, so it never matched the screen exactly. A window filling the display below `safeAreaInsets.top` now counts.
+  - **Low Power Mode always reduces** (30 fps at half scale) and never pauses, as 10-MACOS §5 says. Before, it followed the On battery setting. `rl_loop_set_display` takes it separately (ABI 7); see `LowPowerModeReducesWhateverTheBatterySettingAndNeverPauses`.
+  - **Also fixed:**
+    - a power change that keeps the render scale no longer makes new windows, so the glow doesn't blink;
+    - the 2 s layout check waits for a pending display rebuild;
+    - wake rebuilds once the displays settle;
+    - a missed display-wake can't leave the glow paused;
+    - the window list isn't read while the glow is paused;
+    - the full-screen setting applies at once.
+  - **The full-screen pause is sticky, as on Windows.** For each display, the frontmost app window that reaches it decides, whichever app is in front, so the glow stays paused over a video while you work on another display.
+- **Tests:**
+  - Swift: the window-list coordinate conversion for screens above and beside the main one, and a window below the notch.
+  - C#: Low Power Mode. The loop tests already cover the per-screen fade, the pause and Reduce.
 - **M1's checklist changes:** with "Pause in fullscreen apps" on (the default), the glow now fades out on a screen in a full-screen app. Turn it off to check that the overlay still shows above full-screen apps.
 
 ### M4 notes
