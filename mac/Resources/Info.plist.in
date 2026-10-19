@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- build.sh fills in the @…@ values from src/Directory.Build.props (<AppName>, <Version>). -->
+<!-- build.sh fills in the @…@ values from src/Directory.Build.props (<AppName>, <Version>). BUNDLE_VERSION is the
+     version without a prerelease suffix: CFBundleVersion allows only digits and dots. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -22,7 +23,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>@VERSION@</string>
 	<key>CFBundleVersion</key>
-	<string>@VERSION@</string>
+	<string>@BUNDLE_VERSION@</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.4</string>
 	<key>LSUIElement</key>

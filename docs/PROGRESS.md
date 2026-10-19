@@ -719,6 +719,16 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - The Swift package links libRimlightCore at build time. `build.sh` builds it first into `mac/.build-core`.
   - The bundle ID is `io.github.sussyswimmer.` followed by the lower-case `<AppName>`.
 - **CI:** the `macos` job runs on pull requests and `workflow_dispatch` only (not on pushes to main), on `macos-26`.
+- **First macOS run (workflow_dispatch, run 39193560386):** green on the first try, with all three jobs passing. The universal build had zero warnings, the 6 Swift tests passed against the AOT library, and the zipped app is 3.0 MB.
+- **Independent review:** no blockers. Fixed:
+  - `Utf8Text.Read` now uses `CreateReadOnlySpanFromNullTerminated`, which can't read past a page.
+  - Each export has its own try/catch: the shared delegate allocated a closure per call, which M1's per-frame calls must not do.
+  - `build.sh` fails if the development rpath survives in the bundled app.
+  - `CFBundleVersion` drops any prerelease suffix.
+  - "Open Settings Folder" creates the folder first.
+  - The header lists every status.
+  - The intermediate publish folders moved out of `artifacts/`.
+  - Kept: `rl_header_abi_version` (it is the C target's one source file), and the 512 px icon until M7 adds a 1024 px one.
 
 ## K0 notes
 

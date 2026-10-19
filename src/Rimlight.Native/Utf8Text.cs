@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Rimlight.Native;
@@ -9,6 +10,8 @@ namespace Rimlight.Native;
 /// </summary>
 internal static unsafe class Utf8Text
 {
+    private static readonly UTF8Encoding Strict = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
     /// <summary>Writes <paramref name="value"/> into the caller's buffer when it fits.</summary>
     /// <returns>The length in bytes without the NUL, or <see cref="NativeStatus.InvalidArgument"/>.</returns>
     public static int Write(string value, byte* buffer, int capacity)
@@ -28,11 +31,11 @@ internal static unsafe class Utf8Text
     public static string? Read(byte* text)
     {
         if (text == null) return null;
-        var bytes = new ReadOnlySpan<byte>(text, int.MaxValue);
-        int length = bytes.IndexOf((byte)0);
+        // Scans for the NUL without reading past the page it is on (a span of int.MaxValue bytes could).
+        ReadOnlySpan<byte> bytes = MemoryMarshal.CreateReadOnlySpanFromNullTerminated(text);
         try
         {
-            return new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes[..length]);
+            return Strict.GetString(bytes);
         }
         catch (DecoderFallbackException)
         {

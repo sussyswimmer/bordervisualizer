@@ -45,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Finder. Loading and saving it back also normalizes a hand-edited file, as Core's store does on Windows.
     @objc private func openSettingsFolder() {
         let directory = AppPaths.supportDirectory
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            log.error("Creating the settings folder failed: \(error.localizedDescription, privacy: .public)")
+        }
         if let json = Core.loadSettings(directory: directory.path) {
             let status = Core.saveSettings(directory: directory.path, json: json)
             if status != 0 { log.error("Saving the settings failed: \(status)") }

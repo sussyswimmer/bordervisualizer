@@ -31,11 +31,13 @@ int32_t rl_app_name(char *buffer, int32_t capacity);
 int32_t rl_version(char *buffer, int32_t capacity);
 
 /// The settings in directory/settings.json, validated, as JSON with the file's field names. A missing or bad file
-/// gives the defaults (and a bad one is backed up). Never writes the file.
+/// gives the defaults (and a bad one is backed up as settings.bad.json). Never writes settings.json.
+/// Returns the JSON's length, RL_INVALID_ARGUMENT or RL_INTERNAL.
 int32_t rl_settings_load(const char *directory, char *buffer, int32_t capacity);
 
 /// Validates the settings in json (the format rl_settings_load returns) and writes directory/settings.json
-/// atomically, creating the directory. Returns RL_OK, RL_BAD_JSON or RL_IO_ERROR.
+/// atomically, creating the directory. Fields left out keep their defaults. Returns RL_OK, RL_BAD_JSON, RL_IO_ERROR,
+/// RL_INVALID_ARGUMENT or RL_INTERNAL.
 int32_t rl_settings_save(const char *directory, const char *json);
 
 #endif

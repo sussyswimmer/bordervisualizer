@@ -29,7 +29,7 @@ public enum Core {
         for _ in 0..<3 {
             var buffer = [CChar](repeating: 0, count: Int(capacity))
             let length = buffer.withUnsafeMutableBufferPointer { call($0.baseAddress, capacity) }
-            if length < 0 { return nil }
+            if length < 0 || length == Int32.max { return nil }
             if length < capacity {
                 return String(decoding: buffer[..<Int(length)].map { UInt8(bitPattern: $0) }, as: UTF8.self)
             }

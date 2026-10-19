@@ -24,12 +24,13 @@ if [[ -z "$app_name" || -z "$version" ]]; then
   echo "error: <AppName> or <Version> missing from src/Directory.Build.props" >&2
   exit 1
 fi
+bundle_version="${version%%-*}"
 bundle_id="io.github.sussyswimmer.$(echo "$app_name" | tr '[:upper:]' '[:lower:]')"
 echo "Building $app_name $version ($bundle_id) for ${archs[*]}"
 
 # 1. Core, one NativeAOT dylib per architecture, joined.
 rm -rf "$core_dir" "$out"
-mkdir -p "$core_dir" "$out"
+mkdir -p "$core_dir/publish" "$out"
 slices=()
 for arch in "${archs[@]}"; do
   case "$arch" in
@@ -38,8 +39,8 @@ for arch in "${archs[@]}"; do
     *) echo "error: unknown architecture $arch" >&2; exit 1 ;;
   esac
   dotnet publish "$root/src/Rimlight.Native/Rimlight.Native.csproj" -c Release -r "$rid" \
-    -o "$out/core/$rid" -p:DebugType=none
-  slices+=("$out/core/$rid/Rimlight.Native.dylib")
+    -o "$core_dir/publish/$rid" -p:DebugType=none
+  slices+=("$core_dir/publish/$rid/Rimlight.Native.dylib")
 done
 lib="$core_dir/libRimlightCore.dylib"
 lipo -create "${slices[@]}" -output "$lib"
@@ -59,8 +60,12 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 cp "$bin_dir/RimlightMac" "$app/Contents/MacOS/$app_name"
 cp "$lib" "$app/Contents/Frameworks/"
 # The development rpath to .build-core: the bundled app finds the dylib in Contents/Frameworks.
-install_name_tool -delete_rpath "$core_dir" "$app/Contents/MacOS/$app_name" 2>/dev/null || true
-sed -e "s|@APP_NAME@|$app_name|g" -e "s|@BUNDLE_ID@|$bundle_id|g" -e "s|@VERSION@|$version|g" \
+install_name_tool -delete_rpath "$core_dir" "$app/Contents/MacOS/$app_name"
+if otool -l "$app/Contents/MacOS/$app_name" | grep -q ".build-core"; then
+  echo "error: the app still has a path to .build-core in its load commands" >&2
+  exit 1
+fi
+sed -e "s|@APP_NAME@|$app_name|g" -e "s|@BUNDLE_ID@|$bundle_id|g" -e "s|@VERSION@|$version|g" -e "s|@BUNDLE_VERSION@|$bundle_version|g" \
   "$mac/Resources/Info.plist.in" > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 
