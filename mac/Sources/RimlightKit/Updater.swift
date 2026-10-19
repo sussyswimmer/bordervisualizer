@@ -8,21 +8,24 @@ import Sparkle
 @MainActor
 final class Updater {
     private let controller: SPUStandardUpdaterController?
+    private let reminders: GentleReminders // Sparkle holds its delegate weakly
 
     /// Nil when the build has no update key (a local or pull-request build): such a copy never checks.
     init() {
-        guard Self.isConfigured(Bundle.main.infoDictionary ?? [:]) else {
+        let reminders = GentleReminders()
+        self.reminders = reminders
+        guard Updater.isConfigured(Bundle.main.infoDictionary ?? [:]) else {
             controller = nil
             return
         }
         controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil,
-                                                  userDriverDelegate: nil)
+                                                  userDriverDelegate: reminders)
     }
 
     /// Whether this copy can update itself: "Check for Updates…" is shown only then.
     var isAvailable: Bool { controller != nil }
 
-    /// Follows the AutoUpdate setting, and starts the updater the first time.
+    /// Follows the AutoUpdate setting (when it changes), and starts the updater the first time.
     func apply(autoUpdate: Bool) {
         guard let controller else { return }
         let updater = controller.updater
@@ -48,4 +51,11 @@ final class Updater {
         let key = (info["SUPublicEDKey"] as? String) ?? ""
         return feed.hasPrefix("https://") && !key.isEmpty
     }
+}
+
+/// A menu bar app has no Dock icon or window to show a scheduled update's alert behind, so Sparkle is told it may
+/// remind gently: it then shows its alert in front, and doesn't warn about background apps.
+@MainActor
+private final class GentleReminders: NSObject, SPUStandardUserDriverDelegate {
+    var supportsGentleScheduledUpdateReminders: Bool { true }
 }

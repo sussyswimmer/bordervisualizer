@@ -717,8 +717,14 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - `mac-build` (macOS, no secrets) builds, tests and keeps the DMG and zip.
   - `mac-appcast` (tag only, key set up) checks Sparkle's archive SHA-256, signs and writes `appcast.xml`.
   - `publish` attaches the Mac files to the draft before it is published. A release without the key still ships the DMG.
-- **Why Sparkle works without a Developer ID:** Sparkle requires either a valid EdDSA signature or a matching code signature, not both (`SUUpdateValidator.m`, 2.x). An ad-hoc copy is checked by EdDSA alone. Sparkle's framework keeps its authors' signature, and since the app has no hardened runtime, library validation doesn't apply.
+- **Why Sparkle works without a Developer ID:** Sparkle requires either a valid EdDSA signature or a matching code signature, not both (`SUUpdateValidator.m`, 2.x). An ad-hoc copy is checked by EdDSA alone. Sparkle's framework keeps its own signature, which is ad hoc too: its helpers have no Team ID, so its installer asks nothing of the app's signature, and the app has no hardened runtime, so library validation doesn't apply.
 - **Unverified until a real release:** an install from the DMG (Gatekeeper's Open Anyway), and an update from one tagged release to the next. Each update is a new ad-hoc identity, so macOS may ask for the system audio and Automation permissions again (§6, point 2).
+- **Key safety:** `appcast.sh` checks the new signature against `SPARKLE_PUBLIC_KEY` with CryptoKit (`mac/tools/verify-signature.swift`), and checks that the app in the zip carries that key. A key pair that doesn't match fails the release's Mac part rather than shipping copies that can never update. In that case the Mac files are left out of the release.
+- **The Windows release never waits on the Mac.** If the Mac build or appcast fails, the release goes out without the Mac files. The previous release's `appcast.xml` is carried forward, so `releases/latest/download/appcast.xml` keeps answering installed copies.
+- **Installs on quit:** a menu bar app that starts at login rarely quits, so a downloaded update may wait until the next restart or log out. That matches Windows, which applies on restart. Sparkle's gentle reminders are on, so a scheduled update's alert isn't lost behind other apps.
+- **Download counts:** GitHub counts each `appcast.xml` download, so that number roughly counts update checks. Nothing about the Mac is sent.
+- **Pinning:** `mac/Package.resolved` pins Sparkle's commit, and its manifest pins the framework zip's checksum.
+- **Review:** an independent review checked the work against Sparkle 2.10.0's source. Fixed after it: the key pair check, the release not waiting on the Mac, the appcast carried forward, the updater re-applied only when AutoUpdate changes, a quiet `sign_update` failure, and the signing wording.
 - **Tests:** `appcast.sh` with a stand-in signer gives valid XML; Swift `UpdaterTests` cover when a copy can update.
 
 ### M6 notes

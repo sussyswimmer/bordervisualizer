@@ -210,7 +210,7 @@ jobs:
         run: mac/build.sh
 
       - name: Test the Swift package
-        run: swift test --package-path mac
+        run: swift test --package-path mac -Xswiftc -warnings-as-errors -Xcc -Werror
 
       - name: Keep the Mac downloads
         uses: actions/upload-artifact@v4
@@ -260,6 +260,7 @@ jobs:
       - name: Write the appcast
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
           TAG: ${{ github.ref_name }}
         run: |
           if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
@@ -284,11 +285,9 @@ jobs:
   publish:
     name: Publish the GitHub release
     needs: [pack, mac-build, mac-appcast]
-    # mac-appcast is skipped when the update key isn't set up: the release then goes out without an appcast.
-    if: >-
-      github.event_name == 'push' && !cancelled() &&
-      needs.pack.result == 'success' && needs.mac-build.result == 'success' &&
-      (needs.mac-appcast.result == 'success' || needs.mac-appcast.result == 'skipped')
+    # The Windows release never waits on the Mac: a failed Mac build or appcast leaves the Mac files out of this
+    # release (see "Attach the Mac downloads"), and mac-appcast is skipped when the update key isn't set up.
+    if: github.event_name == 'push' && !cancelled() && needs.pack.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -346,7 +345,9 @@ jobs:
             --notes-file "$RUNNER_TEMP/notes.md" "${prerelease[@]}" artifacts/installers/*
           echo "RELEASE_NAME=$app $version" >> "$GITHUB_ENV"
 
+      # Not when the appcast failed: a Mac build whose key doesn't match could never update itself.
       - name: Download the Mac downloads
+        if: needs.mac-build.result == 'success' && needs.mac-appcast.result != 'failure'
         uses: actions/download-artifact@v4
         with:
           name: mac
@@ -361,8 +362,24 @@ jobs:
 
       # The Mac app (docs/10-MACOS.md §6): RimlightSetup.dmg for the README's Mac button, the update zip, and
       # appcast.xml when the update key is set up. Attached while the release is still a draft.
+      # Every installed Mac copy reads releases/latest/download/appcast.xml, so a release without its own appcast
+      # (a failed Mac job) carries the previous release's forward: it still points at that release's zip, and Mac
+      # copies keep working until the next release has a Mac build.
       - name: Attach the Mac downloads
-        run: gh release upload "$TAG" artifacts/mac/*
+        run: |
+          mkdir -p artifacts/mac
+          if [[ ! -f artifacts/mac/appcast.xml ]]; then
+            if gh release download --repo "$GITHUB_REPOSITORY" --pattern appcast.xml --dir artifacts/mac 2>/dev/null; then
+              echo "::warning::No Mac appcast for $TAG: the previous release's appcast.xml is carried forward."
+            fi
+          fi
+          shopt -s nullglob
+          files=(artifacts/mac/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::warning::No Mac files for $TAG."
+          else
+            gh release upload "$TAG" "${files[@]}"
+          fi
 
       # One Velopack channel per architecture. An installed copy reads only its own channel's feed
       # (releases.win.json or releases.win-arm64.json) from the 10 newest published releases and

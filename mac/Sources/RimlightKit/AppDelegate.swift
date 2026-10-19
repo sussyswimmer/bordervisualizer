@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var updater: Updater?
     private var appliedHotkey: String?
     private var appliedLogin: Bool?
+    private var appliedAutoUpdate: Bool?
 
     // Menu items whose state follows the settings (menuNeedsUpdate).
     private var glowItem: NSMenuItem?
@@ -230,7 +231,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 glowItem?.keyEquivalent = ""
             }
         }
-        updater?.apply(autoUpdate: settings.autoUpdate)
+        if settings.autoUpdate != appliedAutoUpdate {
+            appliedAutoUpdate = settings.autoUpdate
+            updater?.apply(autoUpdate: settings.autoUpdate)
+        }
         if settings.launchAtStartup != appliedLogin {
             appliedLogin = settings.launchAtStartup
             LoginItem.apply(settings.launchAtStartup)

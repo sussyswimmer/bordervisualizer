@@ -175,6 +175,20 @@ jobs:
       - name: Test the Swift package
         run: swift test --package-path mac -Xswiftc -warnings-as-errors -Xcc -Werror
 
+      # The release's Mac update signing (release.yml, mac-appcast), with a throwaway key and Sparkle's real
+      # sign_update from its release archive, checked against the same pinned SHA-256.
+      - name: Check the update signing
+        env:
+          SPARKLE_VERSION: 2.10.0
+          SPARKLE_SHA256: c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/sparkle.tar.xz" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          echo "$SPARKLE_SHA256  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle" ./bin/sign_update
+          mac/tools/check-appcast.sh "$RUNNER_TEMP/sparkle/bin/sign_update"
+
       - name: Upload the app
         uses: actions/upload-artifact@v4
         with:

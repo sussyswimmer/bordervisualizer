@@ -74,11 +74,10 @@ app="$out/$app_name.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 cp "$bin_dir/RimlightMac" "$app/Contents/MacOS/$app_name"
 cp "$lib" "$app/Contents/Frameworks/"
-# Sparkle as SwiftPM delivers it, signed by its authors; ditto keeps the framework's symlinks.
-sparkle="$bin_dir/Sparkle.framework"
-if [[ ! -d "$sparkle" ]]; then
-  sparkle="$(find "$mac/.build/artifacts" -maxdepth 6 -path "*/macos-arm64_x86_64/Sparkle.framework" | head -n 1)"
-fi
+# Sparkle as its checksum-pinned SwiftPM archive holds it (already signed ad hoc by its build, which seals its
+# helpers), or else the build's copy; ditto keeps the framework's symlinks.
+sparkle="$(find "$mac/.build/artifacts" -maxdepth 6 -path "*/macos-arm64_x86_64/Sparkle.framework" | head -n 1)"
+if [[ ! -d "$sparkle" ]]; then sparkle="$bin_dir/Sparkle.framework"; fi
 if [[ ! -d "$sparkle" ]]; then
   echo "error: Sparkle.framework not found in the Swift build" >&2
   exit 1
@@ -117,21 +116,29 @@ done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 rm -rf "$iconset"
 
-# 4. Ad-hoc signature, inside out (no Developer ID: docs/10-MACOS.md §6). Sparkle keeps its own signature: the app has
-#    no hardened runtime, so library validation doesn't ask for one team.
+# 4. Ad-hoc signature, inside out (no Developer ID: docs/10-MACOS.md §6). Sparkle keeps its own (ad-hoc) signature:
+#    with no Team ID on either side, its installer asks nothing of the app's signature, and the app has no hardened
+#    runtime, so library validation doesn't apply.
 codesign --force --sign - "$app/Contents/Frameworks/libRimlightCore.dylib"
 codesign --force --sign - "$app"
 codesign --verify --strict --deep --verbose=2 "$app"
 
 # 5. The update archive: a zip that keeps the bundle's permissions and symlinks.
-ditto -c -k --keepParent "$app" "$out/$app_name-mac.zip"
+ditto -c -k --sequesterRsrc --keepParent "$app" "$out/$app_name-mac.zip"
 
 # 6. The download: a compressed disk image with the app and a shortcut to Applications.
 staging="$out/dmg"
 mkdir -p "$staging"
 ditto "$app" "$staging/$app_name.app"
 ln -s /Applications "$staging/Applications"
-hdiutil create -volname "$app_name" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$out/${app_name}Setup.dmg"
+# hdiutil sometimes fails with "Resource busy" on CI machines, so it gets three tries.
+for attempt in 1 2 3; do
+  if hdiutil create -volname "$app_name" -srcfolder "$staging" -fs HFS+ -format UDZO -ov "$out/${app_name}Setup.dmg"; then
+    break
+  fi
+  if [[ $attempt -eq 3 ]]; then echo "error: hdiutil couldn't make the disk image" >&2; exit 1; fi
+  sleep 5
+done
 rm -rf "$staging"
 hdiutil verify "$out/${app_name}Setup.dmg"
 echo "Built $app ($version), $out/$app_name-mac.zip and $out/${app_name}Setup.dmg"

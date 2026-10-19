@@ -32,7 +32,8 @@ final class SettingsModel: ObservableObject {
     /// Called with true while the Behavior page records a shortcut (the current one is let go meanwhile, so it can
     /// be pressed), and false after.
     var recordingShortcut: @MainActor (Bool) -> Void = { _ in }
-    /// "Check for Updates…", or nil when this copy can't update itself (a build without the update key).
+    /// "Check for Updates…", or nil when this copy can't update itself (a build without the update key). Not
+    /// published: it is set once at start, before Settings can open.
     var checkForUpdates: (@MainActor () -> Void)?
     /// macOS wants the login item allowed in System Settings.
     @Published var loginNeedsApproval = false
