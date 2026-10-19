@@ -726,7 +726,22 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - `TapIO.c` compiled with `-Wnullability-completeness -Werror` against stub headers.
   - C#: 24 tests.
   - The IO proc's nullability matches `AudioDeviceIOProc`'s, so Swift passes the C function as one.
+- **First macOS run:** two Swift compile errors. `CATapDescription` takes `[AudioObjectID]`, not `[NSNumber]` (the first review had it wrong too), and `.unmuted` needed its type once that was fixed. Both are fixed.
+- **Independent review**, three blockers fixed:
+  - **Microphone safety.** The aggregate listed the output device as a sub-device, and an aggregate exposes its sub-devices' inputs, so a USB headset could have had its mic opened. Now the output device joins only when it has no input streams; otherwise the aggregate holds the tap alone. The tap refuses to start unless the aggregate shows exactly one input stream, the tap's.
+  - **Health checks after opening.** They now measure from the open (`rlc_tap_reset_times`), with a 3 s grace period, so a fresh tap isn't flagged or restarted during the permission prompt.
+  - **No restart loop.** A tap that stops delivering goes through the backoff, which resets only once callbacks arrive.
+  - **Also fixed:**
+    - planar buffers use the shortest buffer's length;
+    - the rate is the aggregate's nominal rate, and a rate change restarts the tap;
+    - device-change bursts are debounced (0.2 s);
+    - the health timer restarts with each open;
+    - the mirror test now restarts the capture while capturing;
+    - `Self.address`, the timebase is set up at creation, and the sample buffer is freed in `deinit`.
+  - **Deviation from 10-MACOS §2.1:** the "can't hear" warning is a menu bar item until Settings exists (M3), where it moves to Motion.
 - **Unverified until Maxwell's run:**
+  - **no orange microphone dot in the menu bar**, with built-in speakers, AirPods and a USB headset;
+  - that a tap-only aggregate (headsets) delivers audio;
   - the exact wording of the prompt;
   - that "Allow it…" lands on the right pane (`Privacy_ScreenCapture`, the pane that holds "System Audio Recording Only");
   - the latency, which should be under 50 ms per doc 03 §3.

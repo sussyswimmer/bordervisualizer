@@ -25,6 +25,7 @@ public sealed class MacGlowSourceMirrorTests
         var next = new Palette(new Rgb(0.2f, 0.9f, 0.3f), new Rgb(0.9f, 0.8f, 0.1f), "b");
         Palette? published = null;
         Program program = Program.Music;
+        bool restart = false;
 
         var script = new (double At, Action Change)[]
         {
@@ -41,6 +42,7 @@ public sealed class MacGlowSourceMirrorTests
             (30, () => program = Program.Silence),
             (33, () => program = Program.Music),
             (34, () => published = null),
+            (35, () => restart = true), // the tap rebuilds while capturing (a new output device)
             (36, () => settings = settings with { Enabled = false }),
             (38, () => settings = settings with { Enabled = true, PrimaryRatio = 0.4f }),
         };
@@ -59,7 +61,8 @@ public sealed class MacGlowSourceMirrorTests
 
             // The capture runs while the glow listens, as on Windows; opening or closing it starts the analysis over.
             bool listen = BenchPipeline.Listens(settings, paused);
-            bool changed = listen != capturing;
+            bool changed = listen != capturing || (restart && capturing);
+            restart = false;
             if (changed)
             {
                 capturing = listen;

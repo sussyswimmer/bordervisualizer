@@ -21,6 +21,9 @@ void rlc_tap_destroy(RlcTap *tap);
 /// format that isn't float makes the IO proc write nothing.
 void rlc_tap_set_format(RlcTap *tap, int32_t isFloat32);
 
+/// Counts the tap as having just delivered sound, so the health checks measure from this open (call before IO starts).
+void rlc_tap_reset_times(RlcTap *tap);
+
 /// For AudioDeviceCreateIOProcID, with the RlcTap as client data. Declared with AudioDeviceIOProc's own nullability,
 /// so Swift passes it as one.
 OSStatus rlc_tap_io_proc(AudioObjectID device, const AudioTimeStamp *now, const AudioBufferList *input,

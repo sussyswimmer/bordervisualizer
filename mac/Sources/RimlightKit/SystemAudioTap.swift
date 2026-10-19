@@ -5,8 +5,11 @@ import Foundation
 import os
 
 /// The Mac's system audio (docs/10-MACOS.md §2.1): a Core Audio process tap of everything the Mac plays, Rimlight
-/// itself excluded, read through a private aggregate device. It never opens an input device: the only permission is
-/// "System Audio Recording Only", never the microphone. The IO proc is C (TapIO.c) and only mixes to mono into the
+/// itself excluded, read through a private aggregate device that holds the tap and nothing else. It never opens an
+/// input device: an aggregate exposes its sub-devices' inputs, so the output device joins it only when it has no
+/// inputs (a headset may have a mic), and the tap refuses to start if the aggregate shows any input stream but the
+/// tap's. The only
+/// permission is "System Audio Recording Only", never the microphone. The IO proc is C (TapIO.c) and only mixes to mono into the
 /// ring; the render thread drains the ring every frame.
 ///
 /// Everything here runs on its own serial queue. The render thread reads `sampleRate` and `generation` (atomics) and
@@ -21,6 +24,10 @@ final class SystemAudioTap: @unchecked Sendable {
     private static let cantHearSeconds = 10.0
     /// The tap is rebuilt at most this often while it hears only zeros (a macOS 26.5 beta bug, §2.1).
     private static let zeroRestartSeconds = 60.0
+    /// A new tap's first checks wait this long: the permission prompt may be up, and the IO proc needs a moment.
+    private static let graceSeconds = 3.0
+    /// A burst of device changes (one switch can send several) rebuilds once, after this quiet time.
+    private static let debounceSeconds = 0.2
 
     let ring: OpaquePointer
     private let context: OpaquePointer
@@ -38,8 +45,10 @@ final class SystemAudioTap: @unchecked Sendable {
     private var retry = firstRetry
     private var retryPending = false
     private var lastZeroRestart = Date.distantPast
+    private var openedAt = Date.distantPast
     private var health: DispatchSourceTimer?
     private var listening = false
+    private var deviceChangeToken = 0
 
     init?() {
         guard let ring = rlc_ring_create(Self.ringCapacity), let context = rlc_tap_create(ring),
@@ -78,8 +87,7 @@ final class SystemAudioTap: @unchecked Sendable {
         listenForDefaultDevice()
         do {
             try build()
-            retry = Self.firstRetry
-            startHealthChecks()
+            startHealthChecks() // from this open, so the grace period holds
         } catch {
             log.error("The system audio tap failed: \(String(describing: error), privacy: .public)")
             teardown()
@@ -100,6 +108,15 @@ final class SystemAudioTap: @unchecked Sendable {
         open()
     }
 
+    /// The tap failed while open: start over after the backoff, not at once, so a device that never delivers can't
+    /// rebuild it every few seconds (and reset the analysis with it).
+    private func fail(_ reason: String) {
+        log.error("The system audio tap failed: \(reason, privacy: .public)")
+        stopHealthChecks()
+        teardown()
+        scheduleRetry()
+    }
+
     private func scheduleRetry() {
         guard wanted, !retryPending else { return }
         retryPending = true
@@ -113,31 +130,39 @@ final class SystemAudioTap: @unchecked Sendable {
 
     private func build() throws {
         let ownProcess = try Self.processObject(for: getpid())
-        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [NSNumber(value: ownProcess)])
+        let description = CATapDescription(stereoGlobalTapButExcludeProcesses: [ownProcess])
         description.uuid = UUID()
         description.isPrivate = true
-        description.muteBehavior = .unmuted
+        description.muteBehavior = CATapMuteBehavior.unmuted
         description.name = "\(Core.appName) system audio"
         try check(AudioHardwareCreateProcessTap(description, &tapID), "AudioHardwareCreateProcessTap")
 
         let tapUID = try Self.string(tapID, kAudioTapPropertyUID)
         var format = AudioStreamBasicDescription()
         try Self.get(tapID, kAudioTapPropertyFormat, &format)
-        let output = try Self.defaultOutputDevice()
-        let outputUID = try Self.string(output, kAudioDevicePropertyDeviceUID)
 
-        let aggregate: [String: Any] = [
+        // The output device clocks the aggregate, as in Apple's sample, but only when it has no input streams of its
+        // own (speakers, not a headset with a mic): an aggregate exposes its sub-devices' inputs. Otherwise the
+        // aggregate holds the tap alone. Either way the check below allows only the tap's stream.
+        var aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: "\(Core.appName) system audio",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
-            kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
             kAudioAggregateDeviceTapListKey: [[kAudioSubTapDriftCompensationKey: true, kAudioSubTapUIDKey: tapUID]],
         ]
+        if let output = try? Self.defaultOutputDevice(), Self.inputStreamCount(output) == 0,
+           let outputUID = try? Self.string(output, kAudioDevicePropertyDeviceUID) {
+            aggregate[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
+            aggregate[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
+        }
         try check(AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID),
                   "AudioHardwareCreateAggregateDevice")
+        let inputs = Self.inputStreamCount(aggregateID)
+        if inputs != 1 {
+            throw CoreAudioError(call: "The aggregate has \(inputs) input streams, not just the tap's", status: -1)
+        }
 
         let isFloat = format.mFormatID == kAudioFormatLinearPCM && format.mFormatFlags & kAudioFormatFlagIsFloat != 0
             && format.mBitsPerChannel == 32
@@ -149,11 +174,17 @@ final class SystemAudioTap: @unchecked Sendable {
                   "AudioDeviceCreateIOProcID")
         procID = proc
         // The first start is where macOS asks for "System Audio Recording" (forums thread 771864).
+        rlc_tap_reset_times(context)
+        openedAt = Date()
         try check(AudioDeviceStart(aggregateID, procID), "AudioDeviceStart")
 
-        rlc_counter_store(rate, Int32(format.mSampleRate.rounded()))
+        // The IO proc runs at the aggregate's rate; the tap's format is the fallback.
+        var nominal: Float64 = 0
+        let sampleRate = (try? Self.get(aggregateID, kAudioDevicePropertyNominalSampleRate, &nominal)) != nil && nominal > 0
+            ? nominal : format.mSampleRate
+        rlc_counter_store(rate, Int32(sampleRate.rounded()))
         rlc_counter_add(generationCounter, 1)
-        log.info("System audio tap open: \(format.mSampleRate) Hz, \(format.mChannelsPerFrame) channels")
+        log.info("System audio tap open: \(sampleRate) Hz, \(format.mChannelsPerFrame) channels")
     }
 
     private func teardown() {
@@ -181,15 +212,23 @@ final class SystemAudioTap: @unchecked Sendable {
                                                  mElement: kAudioObjectPropertyElementMain)
         let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue) {
             [weak self] _, _ in
-            self?.restart("the default output device changed")
+            self?.defaultDeviceChanged()
         }
         if status != noErr { log.error("Can't follow the default output device: \(status)") }
+    }
+
+    private func defaultDeviceChanged() {
+        deviceChangeToken += 1
+        let token = deviceChangeToken
+        queue.asyncAfter(deadline: .now() + Self.debounceSeconds) { [self] in
+            if token == deviceChangeToken { restart("the default output device changed") }
+        }
     }
 
     /// Every 2 s while open: a stopped IO proc restarts the tap, and only zeros while other apps play mean it
     /// probably has no permission (or hit the zero-buffer bug, which a restart a minute fixes).
     private func startHealthChecks() {
-        guard health == nil else { return }
+        stopHealthChecks()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 2, repeating: 2, leeway: .milliseconds(500))
         timer.setEventHandler { [weak self] in self?.checkHealth() }
@@ -205,7 +244,15 @@ final class SystemAudioTap: @unchecked Sendable {
     private func checkHealth() {
         guard wanted else { return }
         if procID == nil { return scheduleRetry() }
-        if rlc_tap_seconds_since_callback(context) > 2 { return restart("the tap stopped delivering audio") }
+        guard Date().timeIntervalSince(openedAt) > Self.graceSeconds else { return }
+        if rlc_tap_seconds_since_callback(context) > 2 { return fail("the tap stopped delivering audio") }
+        retry = Self.firstRetry // it delivers: a later failure starts the backoff over
+        // A format change (another rate on the output) would leave the analysis at the wrong rate.
+        var nominal: Float64 = 0
+        if (try? Self.get(aggregateID, kAudioDevicePropertyNominalSampleRate, &nominal)) != nil, nominal > 0,
+           Int32(nominal.rounded()) != rlc_counter_load(rate) {
+            return restart("the sample rate changed")
+        }
         let silent = rlc_tap_seconds_since_sound(context) > Self.cantHearSeconds
         let othersPlay = silent && Self.anotherProcessPlays()
         rlc_counter_store(cantHearFlag, othersPlay ? 1 : 0)
@@ -234,7 +281,7 @@ final class SystemAudioTap: @unchecked Sendable {
 
     private static func get<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector,
                                _ value: inout T) throws {
-        var address = address(selector)
+        var address = Self.address(selector)
         var size = UInt32(MemoryLayout<T>.size)
         let status = withUnsafeMutablePointer(to: &value) {
             AudioObjectGetPropertyData(object, &address, 0, nil, &size, $0)
@@ -258,8 +305,18 @@ final class SystemAudioTap: @unchecked Sendable {
         return device
     }
 
+    /// The device's input streams: 0 for speakers, and for the aggregate only the tap's one stream is allowed.
+    private static func inputStreamCount(_ device: AudioObjectID) -> Int {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams,
+                                                 mScope: kAudioObjectPropertyScopeInput,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr else { return -1 }
+        return Int(size) / MemoryLayout<AudioStreamID>.size
+    }
+
     private static func processObject(for pid: pid_t) throws -> AudioObjectID {
-        var address = address(kAudioHardwarePropertyTranslatePIDToProcessObject)
+        var address = Self.address(kAudioHardwarePropertyTranslatePIDToProcessObject)
         var pid = pid
         var object = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
@@ -274,7 +331,7 @@ final class SystemAudioTap: @unchecked Sendable {
     /// Whether any process but this one is playing sound (kAudioProcessPropertyIsRunningOutput, macOS 14.2). The
     /// device-wide "running somewhere" isn't used: browsers and call apps keep the output open while silent.
     private static func anotherProcessPlays() -> Bool {
-        var address = address(kAudioHardwarePropertyProcessObjectList)
+        var address = Self.address(kAudioHardwarePropertyProcessObjectList)
         let system = AudioObjectID(kAudioObjectSystemObject)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0 else { return false }

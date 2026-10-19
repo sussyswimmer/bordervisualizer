@@ -116,6 +116,10 @@ final class RenderThread: NSObject, @unchecked Sendable {
         started.wait()
     }
 
+    deinit {
+        samples.deallocate()
+    }
+
     /// Runs a block on the render thread, waking it. Any thread.
     func perform(_ block: @escaping () -> Void) {
         guard let runLoop else { return }
