@@ -31,6 +31,6 @@ final class NowPlayingTests: XCTestCase {
 
     func testLinearColoursShowAsSrgb() {
         XCTAssertEqual(Color(linear: RlRgb(r: 1, g: 0, b: 0)).hex, "#FF0000")
-        XCTAssertEqual(Color(linear: RlRgb(r: 0.214041, g: 0.214041, b: 0.214041)).hex, "#808080") // mid grey
+        XCTAssertEqual(Color(linear: RlRgb(r: 0.2158605, g: 0.2158605, b: 0.2158605)).hex, "#808080") // mid grey
     }
 }
