@@ -134,8 +134,32 @@ struct ColorPage: View {
                 .pickerStyle(.segmented)
                 Toggle("Use my colors even when there's album art", isOn: $model.settings.overrideAlbumColor)
                     .disabled(model.settings.colorMode != "AlbumArt")
+            }
+            Section("Now playing") {
+                if let track = model.nowPlaying, let title = track.title {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(title).lineLimit(1)
+                            Text([track.artist, track.app].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        if let colors = model.albumColors {
+                            Circle().fill(colors.0).frame(width: 18, height: 18).accessibilityLabel("Primary album color")
+                            Circle().fill(colors.1).frame(width: 18, height: 18)
+                                .accessibilityLabel("Secondary album color")
+                        }
+                    }
+                } else {
+                    Text("Nothing playing in Music or Spotify.").foregroundStyle(.secondary)
+                }
+                if model.automationDenied {
+                    Label("Allow \(Core.appName) to read Music's album art in Privacy & Security › Automation.",
+                          systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    Button("Open Privacy & Security") { AudioPrivacy.openAutomation() }
+                }
             } footer: {
-                Text("Album colors come with a later update; until then the glow uses your colors.")
+                Text("Album colors come from Apple Music. Spotify and other players use your colors.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("My colors") {
@@ -356,6 +380,14 @@ enum AudioPrivacy {
     @MainActor
     static func open() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Privacy & Security › Automation, where "control Music" is allowed.
+    @MainActor
+    static func openAutomation() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
             NSWorkspace.shared.open(url)
         }
     }

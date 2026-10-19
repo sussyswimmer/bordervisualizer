@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 5
+#define RL_ABI_VERSION 6
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -172,6 +172,21 @@ int32_t rl_preview_frame(RlPreview preview, double nowSeconds, int32_t widthPx, 
 const float *rl_preview_gradient(RlPreview preview);
 /// Starts the preview's clock over when it is shown again: older audio counts as stale.
 int32_t rl_preview_restart(RlPreview preview);
+
+// ---- Now playing (src/Rimlight.Native/MediaExports.cs) ----
+
+/// Extracts the album palette from a cover of width x height BGRA8 pixels (at most 4096 each; 64 x 64 is plenty) and
+/// gives it to the glow. Returns 1 when published, 0 when the picture is "no art" (a flat grey icon: keep the previous
+/// colours or retry), or a negative status. Runs on the calling thread: call it from a background queue.
+int32_t rl_album_art(RlLoop loop, const uint8_t *bgra, int32_t width, int32_t height, const char *trackId);
+/// No album colours: the manual ones show. Any thread.
+int32_t rl_album_clear(RlLoop loop);
+/// The album palette the glow has (linear RGB): 1 with the colours, 0 when there is none. Any thread.
+int32_t rl_album_palette(RlLoop loop, RlRgb *primary, RlRgb *secondary);
+/// The menu bar tooltip: "<name> — Title · Artist" while a track plays, "<name> — Waiting for music" otherwise
+/// (TrayToolTip.cs). Pass NULL title and artist for no track.
+int32_t rl_tooltip(const char *title, const char *artist, const char *sourceApp, int32_t isPlaying, char *buffer,
+                   int32_t capacity);
 
 /// GlowConstants.Create alone, for tests: the constants for a light state on a surface.
 int32_t rl_glow_constants(const RlLightState *state, int32_t widthPx, int32_t heightPx, float pixelsPerPoint,

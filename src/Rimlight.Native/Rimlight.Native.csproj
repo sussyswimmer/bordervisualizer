@@ -28,5 +28,6 @@
     <Compile Include="../Rimlight.App/Overlay/SrgbHex.cs" Link="Shared/SrgbHex.cs" />
     <Compile Include="../Rimlight.App/Overlay/DemoBeat.cs" Link="Shared/DemoBeat.cs" />
     <Compile Include="../Rimlight.App/Overlay/AudioReading.cs" Link="Shared/AudioReading.cs" />
+    <Compile Include="../Rimlight.App/TrayToolTip.cs" Link="Shared/TrayToolTip.cs" />
   </ItemGroup>
 </Project>

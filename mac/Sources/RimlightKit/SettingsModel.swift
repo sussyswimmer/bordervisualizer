@@ -21,6 +21,12 @@ final class SettingsModel: ObservableObject {
     @Published var settings: AppSettings {
         didSet { if settings != oldValue && !reloading { changed() } }
     }
+    /// What's playing (M4), for the Color page.
+    @Published private(set) var nowPlaying: NowPlayingService.Track?
+    /// Music refused the cover (Automation not allowed).
+    @Published private(set) var automationDenied = false
+    /// The album colours the glow has (sRGB), or nil.
+    @Published private(set) var albumColors: (Color, Color)?
 
     let loop: CoreLoop
     let device: MTLDevice
@@ -54,6 +60,15 @@ final class SettingsModel: ObservableObject {
     var previewMetal: MetalGlow? {
         if previewGlow == nil { previewGlow = try? MetalGlow(device: device) }
         return previewGlow
+    }
+
+    /// A new track or cover from the media service.
+    func mediaChanged(_ track: NowPlayingService.Track?, automationDenied denied: Bool) {
+        nowPlaying = track
+        automationDenied = denied
+        var primary = RlRgb(), secondary = RlRgb()
+        albumColors = rl_album_palette(loop.handle, &primary, &secondary) == 1
+            ? (Color(linear: primary), Color(linear: secondary)) : nil
     }
 
     /// The window's visibility, from its occlusion state: the meter runs only while it is on screen.
@@ -154,6 +169,17 @@ extension Color {
         func byte(_ c: CGFloat) -> Int { Int((min(max(c, 0), 1) * 255).rounded()) }
         return String(format: "#%02X%02X%02X", byte(color.redComponent), byte(color.greenComponent),
                       byte(color.blueComponent))
+    }
+}
+
+extension Color {
+    /// A colour from Core's linear RGB (CORE-API §2), encoded to sRGB for display.
+    init(linear c: RlRgb) {
+        func encode(_ v: Float) -> Double {
+            let x = Double(min(max(v, 0), 1))
+            return x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
+        }
+        self.init(.sRGB, red: encode(c.r), green: encode(c.g), blue: encode(c.b))
     }
 }
 

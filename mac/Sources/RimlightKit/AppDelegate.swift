@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var overlays: OverlayController?
     private var model: SettingsModel?
     private var settingsWindow: SettingsWindowController?
+    private var media: NowPlayingService?
 
     // Menu items whose state follows the settings (menuNeedsUpdate).
     private var glowItem: NSMenuItem?
@@ -58,6 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         self.model = model
         settingsWindow = SettingsWindowController(model: model)
+
+        // Now playing and album colours (M4): the tooltip, the Color page, and the palette for the glow.
+        let media = NowPlayingService(loop: loop) { [weak self] track, denied in
+            self?.model?.mediaChanged(track, automationDenied: denied)
+            self?.updateStatusItem()
+        }
+        media.start()
+        self.media = media
 
         NSApp.mainMenu = Self.makeMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -166,10 +175,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatusItem()
     }
 
-    /// The icon dims while the glow is off (doc 06 §2), and the tooltip names the app.
+    /// The icon dims while the glow is off (doc 06 §2), and the tooltip names the track: the Windows tooltip's text.
     private func updateStatusItem() {
         statusItem?.button?.appearsDisabled = model?.settings.enabled == false
-        statusItem?.button?.toolTip = Core.appName
+        let track = model?.nowPlaying
+        statusItem?.button?.toolTip = Core.readString { buffer, capacity in
+            withOptionalCString(track?.title) { title in
+                withOptionalCString(track?.artist) { artist in
+                    withOptionalCString(track?.app) { app in
+                        rl_tooltip(title, artist, app, track?.isPlaying == true ? 1 : 0, buffer, capacity)
+                    }
+                }
+            }
+        } ?? Core.appName
     }
 
     /// An accessory app shows no menu bar of its own, but the Settings window's text fields still need the Edit

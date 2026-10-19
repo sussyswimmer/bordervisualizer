@@ -699,11 +699,33 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M1 glow on every display with the demo beat: the overlay loop (`MacOverlayLoop`, `MacGlowSource`) in C# over the shared FramePacer, GlowConstants and OverlayRules; `Glow.metal` (a port of `Glow.hlsl`) over `glow_math.h`; the render thread with display-link pacing; one panel per screen — branch `claude/mac-m1-glow` — effort: L (notes below; Mac manual test pending)
 - [x] M2 system audio → Core → glow: a Core Audio process tap (C IO proc into a C ring), drained by the render thread into the shared frame source; device changes, health checks, the "can't hear" warning; the Mac's frame source proven equal to the Windows one — branch `claude/mac-m2-audio` — effort: L (notes below; Mac manual test pending)
 - [x] M3 menu bar, Settings, saved settings: the menu bar menu (doc 06 §2), the Settings window's six pages with a live preview drawn by the overlay's shader, presets, the level meter, live edits saved through Core's store 500 ms after the last, the first-run welcome — branch `claude/mac-m3-settings` — effort: L (notes below; Mac manual test pending)
-- [ ] M4 album-art colors
+- [x] M4 album-art colors: Music and Spotify through their distributed notifications; Music's cover by Apple event (only while Music runs), decoded to 64 × 64 BGRA and handed to Core's extractor; doc 05 §1's debounce and retry; the Windows tooltip text; the Color page's Now playing — branch `claude/mac-m4-album` — effort: M (notes below; Mac manual test pending)
 - [ ] M5 system watchers
 - [ ] M6 hotkey, login item, single instance
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M4 notes
+
+- **Track changes:** the distributed notifications `com.apple.Music.playerInfo` and `com.spotify.client.PlaybackStateChanged`. They need no permission, and they don't launch a player.
+- **Which track:** a playing one; Music's if both play. A player that quits drops out, and its colours clear.
+- **The cover:**
+  - Music's is read with an Apple event (`raw data of artwork 1 of current track`), only on a track change and only while Music runs.
+  - That asks once for Automation ("control Music"; `NSAppleEventsUsageDescription`). A refusal (-1743) shows a note and a button to Automation on the Color page.
+  - Image I/O decodes it to at most 64 × 64 BGRA, and `rl_album_art` hands it to Core's extractor on the media queue. The palette reaches the glow by reference, as on Windows.
+- **Doc 05 §1's rules:**
+  - a 250 ms debounce;
+  - a missing cover or "no art" keeps the previous colours and is read once more after 750 ms, then the manual colours show;
+  - the track ID is `app|artist|title`.
+- **Spotify:** the track shows (tooltip, Color page), but its colours are the manual ones. Its cover is a URL on Spotify's server, and fetching it would be a second network call, which isn't allowed (Q4 stays no). Other players, browsers included, have no public now-playing API on the Mac (10-MACOS §4.1).
+- **Tooltip:** `TrayToolTip.cs` is compiled into the native library (`rl_tooltip`), so the Mac shows exactly the Windows text: "Rimlight — Title · Artist" or "Rimlight — Waiting for music".
+- **Tests:**
+  - C#: 32, including a cover becoming the palette (blue primary from a 70/30 blue and orange cover), a flat grey icon being "no art", and the tooltip.
+  - Swift: decoding a cover to 64 px BGRA, and linear colours shown as sRGB.
+- **Unverified until Maxwell's run:**
+  - the Music notification's keys on macOS 26 and 27 (`Name`, `Artist`, `Player State`);
+  - `raw data` of the artwork;
+  - the Automation prompt's wording.
 
 ### M3 notes
 
