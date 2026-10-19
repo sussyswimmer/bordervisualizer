@@ -690,6 +690,15 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] Feedback round 1: dynamics, soft edge, Settings failure message + WPF smoke tests — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 - [x] Feedback round 2: real-music corpus (`tools/corpus/`), dynamics retuned on it, an edge with no rim, Record 2 min — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 
+## Fix: a settings save that fails is tried again
+
+`SettingsFlowTests.ChangesAreSavedHalfASecondAfterTheLast` failed twice on Windows CI (runs 39194057907 and 39198227918, both on Mac PRs that touch no Windows code), and passed on the same commits otherwise.
+
+- **Cause:** `SettingsService.Flush` logged a failed save and dropped it, so the change waited for the next edit. On Windows a new file is often held for a moment by another process, an antivirus scan for one. The user's last change could then be lost until they changed something else, and the test waited for a file that never came.
+- **Fix:** a failed save keeps the change pending and is tried again after 1 s, up to 5 times. After that the next change tries again, as CORE-API §7.2 asks. Quitting still saves at once.
+- **New test:** `ASaveThatFailsIsTriedAgain`, with a store whose first two saves fail.
+- **Effort:** S.
+
 ## K0 notes
 
 - Contracts are defined by doc 09 §3; source specs are unchanged. `AudioTuning` and `AnalyzerDiagnostics` are data containers, not DSP implementations. Doc 03 does not specify a numeric `minFlux`; K0 uses a provisional 0.01 pending C2 tuning.

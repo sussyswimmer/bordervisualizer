@@ -61,6 +61,18 @@ public sealed class SettingsFlowTests : IDisposable
     }
 
     [Fact]
+    public void ASaveThatFailsIsTriedAgain()
+    {
+        // The file held by another process for a moment (an antivirus scan, on Windows): the change isn't lost.
+        var store = new FailingStore(CoreFactory.CreateSettingsStore(directory), failures: 2);
+        using var service = new SettingsService(store);
+        service.Update(s => s with { Glow = 0.7f });
+        Assert.True(SpinWait.SpinUntil(() => store.Saves == 1, TimeSpan.FromSeconds(10)));
+        Assert.Equal(3, store.Attempts);
+        Assert.Equal(0.7f, CoreFactory.CreateSettingsStore(directory).Load().Glow);
+    }
+
+    [Fact]
     public void ABadFileStartsFromDefaultsAndIsKeptAside()
     {
         Directory.CreateDirectory(directory);
@@ -116,4 +128,24 @@ public sealed class SettingsFlowTests : IDisposable
 
     private static string[] Chosen(Settings settings) =>
         [.. Presets.All.Where(p => PresetChoice.IsShowing(p.Apply, settings)).Select(p => p.Name)];
+
+    // A store whose first saves fail as a file in use would.
+    private sealed class FailingStore(ISettingsStore inner, int failures) : ISettingsStore
+    {
+        private int attempts, saves;
+
+        public int Attempts => Volatile.Read(ref attempts);
+        public int Saves => Volatile.Read(ref saves);
+        public string Path => inner.Path;
+
+        public Settings Load() => inner.Load();
+
+        public void Save(Settings settings)
+        {
+            if (Interlocked.Increment(ref attempts) <= failures)
+                throw new IOException("The process cannot access the file because it is being used by another process.");
+            inner.Save(settings);
+            Interlocked.Increment(ref saves);
+        }
+    }
 }
