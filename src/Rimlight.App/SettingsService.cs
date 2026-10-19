@@ -10,6 +10,9 @@ namespace Rimlight.App;
 internal sealed class SettingsService : IDisposable
 {
     private const int SaveDelayMs = 500;
+    // A failed save is tried again this long after, up to MaxRetries times; then the next change tries again.
+    private const int RetryDelayMs = 1000;
+    private const int MaxRetries = 5;
 
     private readonly ISettingsStore store;
     private readonly Timer saveTimer;
@@ -17,6 +20,7 @@ internal sealed class SettingsService : IDisposable
     private Settings current;
     private int savePending; // 1 while a change is unsaved; set by Update without the lock, so the UI never waits on I/O
     private bool disposed;
+    private int failedSaves; // consecutive failed saves; under saveGate
 
     public SettingsService(ISettingsStore store)
     {
@@ -59,12 +63,31 @@ internal sealed class SettingsService : IDisposable
             try
             {
                 store.Save(Current);
+                failedSaves = 0;
             }
             catch (Exception exception)
             {
-                // ISettingsStore.Save writes atomically, so a failure leaves the previous file intact.
+                // ISettingsStore.Save writes atomically, so a failure leaves the previous file intact. A file another
+                // process holds for a moment (an antivirus scan of the new file) is common on Windows, so the change
+                // is kept and saved again shortly, a few times, instead of waiting for the next change (CORE-API §7.2).
                 Trace.WriteLine($"[Settings] Saving to {store.Path} failed: {exception.Message}");
+                if (++failedSaves <= MaxRetries && !disposed) RetryLater();
             }
+        }
+    }
+
+    // Under saveGate. The change stays pending, so a retry that finds the file free saves it (and a newer change is
+    // saved with it).
+    private void RetryLater()
+    {
+        Volatile.Write(ref savePending, 1);
+        try
+        {
+            saveTimer.Change(RetryDelayMs, Timeout.Infinite);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed meanwhile: Dispose's own Flush saves it.
         }
     }
 
