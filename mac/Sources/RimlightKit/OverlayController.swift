@@ -50,7 +50,7 @@ final class OverlayController {
         let screens = Self.chosenScreens(settings)
         let frames = screens.map { settings.coverTaskbar ? $0.frame : $0.visibleFrame }
         let key = zip(screens, frames).map { "\(Self.uuid(of: $0.0) ?? "?")@\($0.1)x\($0.0.backingScaleFactor)" }
-            .joined(separator: ";")
+            .joined(separator: ";") + (settings.hideFromScreenCapture ? ";hidden" : "")
         if !force && key == layoutKey { return }
         layoutKey = key
 
@@ -59,6 +59,8 @@ final class OverlayController {
         for (screen, frame) in zip(screens, frames) {
             let scale = screen.backingScaleFactor
             let panel = OverlayPanel(frame: frame, scale: scale)
+            // "Hide from screen capture" (PRD §5, default off); some recorders may still show it (10-MACOS §3.1).
+            panel.sharingType = settings.hideFromScreenCapture ? .none : .readOnly
             metal.configure(panel.metalLayer)
             let size = panel.metalLayer.drawableSize
             let info = RlSurface(widthPx: Int32(size.width), heightPx: Int32(size.height),

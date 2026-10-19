@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 3
+#define RL_ABI_VERSION 4
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -137,6 +137,39 @@ int32_t rl_loop_plan_surface(RlLoop loop, int32_t index, RlGlowConstants *consta
 int32_t rl_loop_surface_done(RlLoop loop, int32_t index, int32_t presented, int64_t nowMs);
 /// Ends the frame: how to wait for the next.
 int32_t rl_loop_end_frame(RlLoop loop, double nowSeconds, RlPace *pace);
+
+// ---- Settings window (src/Rimlight.Native/SettingsExports.cs) ----
+
+/// The analyzer's latest features, for the level meter.
+typedef struct RlAudioReading {
+    float level, bass, beat; // 0..1
+    int32_t silent;          // 1 while silent
+    int32_t sequence;        // the same value twice means no new frame came; -1 before the first
+} RlAudioReading;
+
+GM_STATIC_ASSERT(sizeof(RlAudioReading) == 20, "RlAudioReading must match AudioReadingInfo");
+
+/// Core's presets (doc 06 §1), in menu order. Any thread.
+int32_t rl_presets_count(void);
+int32_t rl_preset_name(int32_t index, char *buffer, int32_t capacity);
+/// The settings JSON with preset index applied (its appearance fields only), as JSON.
+int32_t rl_preset_apply(int32_t index, const char *settingsJson, char *buffer, int32_t capacity);
+
+/// Keeps the audio capture and analysis running while Settings shows the meter or the preview. Any thread.
+int32_t rl_loop_set_audio_wanted(RlLoop loop, int32_t wanted);
+/// The analyzer's features from the latest frame. Any thread.
+int32_t rl_loop_audio(RlLoop loop, RlAudioReading *reading);
+
+/// The Appearance page's live preview: its own light engine and blender, fed the loop's settings, colors and audio.
+/// Main thread.
+typedef intptr_t RlPreview; // 0 = none
+RlPreview rl_preview_create(RlLoop loop);
+void rl_preview_destroy(RlPreview preview);
+/// Advances the preview to nowSeconds and fills the constants for a card widthPx x heightPx (drawn as a 1280-point
+/// screen). Returns 1 when the gradient changed (upload rl_preview_gradient again), 0 when not, or a negative status.
+int32_t rl_preview_frame(RlPreview preview, double nowSeconds, int32_t widthPx, int32_t heightPx,
+                         RlGlowConstants *constants);
+const float *rl_preview_gradient(RlPreview preview);
 
 /// GlowConstants.Create alone, for tests: the constants for a light state on a surface.
 int32_t rl_glow_constants(const RlLightState *state, int32_t widthPx, int32_t heightPx, float pixelsPerPoint,

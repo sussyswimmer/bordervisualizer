@@ -698,12 +698,38 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M0 skeleton + macOS CI job: `src/Rimlight.Native` (C ABI: ABI version, name, version, settings load and save), its tests, the Swift package (`mac/`), `mac/build.sh` (universal, ad-hoc signed, zipped), the `macos` job in ci.yml — branch `claude/mac-m0-skeleton` — effort: M (notes below; Mac manual test pending)
 - [x] M1 glow on every display with the demo beat: the overlay loop (`MacOverlayLoop`, `MacGlowSource`) in C# over the shared FramePacer, GlowConstants and OverlayRules; `Glow.metal` (a port of `Glow.hlsl`) over `glow_math.h`; the render thread with display-link pacing; one panel per screen — branch `claude/mac-m1-glow` — effort: L (notes below; Mac manual test pending)
 - [x] M2 system audio → Core → glow: a Core Audio process tap (C IO proc into a C ring), drained by the render thread into the shared frame source; device changes, health checks, the "can't hear" warning; the Mac's frame source proven equal to the Windows one — branch `claude/mac-m2-audio` — effort: L (notes below; Mac manual test pending)
-- [ ] M3 menu bar, Settings, saved settings
+- [x] M3 menu bar, Settings, saved settings: the menu bar menu (doc 06 §2), the Settings window's six pages with a live preview drawn by the overlay's shader, presets, the level meter, live edits saved through Core's store 500 ms after the last, the first-run welcome — branch `claude/mac-m3-settings` — effort: L (notes below; Mac manual test pending)
 - [ ] M4 album-art colors
 - [ ] M5 system watchers
 - [ ] M6 hotkey, login item, single instance
 - [ ] M7 packaging, notarization, updates
 - [ ] M8 README and docs
+
+### M3 notes
+
+- **Menu bar menu (doc 06 §2):** Glow On, Mode, Colors, Presets, Demo Mode, Settings… (⌘,) and Quit.
+  - It is missing "Check for updates" (M7) and "Open logs folder": the Mac logs to the unified log (`os.Logger`, see Console.app), which has no folder.
+  - The icon dims while the glow is off.
+  - The tooltip is the name only until M4 brings the track.
+- **Settings window:** SwiftUI, with the six pages of doc 06 §3.
+  - Every change applies live through `rl_loop_apply_settings` and is saved 500 ms after the last one through Core's store. The window then shows exactly what the file holds.
+  - **Appearance:** the live preview, Thickness, Glow, Brightness, Corner radius, Cover the menu bar and Dock, and the presets as swatches.
+  - **Color:** album art or manual, Override, two colour pickers and the ratio. A footnote says album colours come later (M4).
+  - **Motion:** mode, When it's quiet, Sensitivity, the level meter, and the "can't hear" warning.
+  - **Displays:** all, main or chosen displays (by UUID), and the frame rate limit.
+  - **Behavior:** Hide from screen recordings (`sharingType`). Pause in full screen, battery, launch at login and the hotkey arrive with M5 and M6, and aren't shown before they work.
+  - **About:** the version, source and licence, the Mac's privacy statement, and "Show the Settings File in Finder".
+- **Preview:**
+  - Core's `MacPreview` mirrors the Windows `GlowPreview`: its own engine and blender, the latest audio, and the glow "as it looks when on", treated as a 1280-point screen.
+  - Its constants are drawn by the overlay's own Metal shader into a small layer, so it can't drift from the overlay. Windows needed a CPU port.
+  - It runs at 30 fps only while the window is visible (occlusion state), and keeps the audio open while it runs, as the meter does (`rl_loop_set_audio_wanted`, MusicGlowSource.SetAudioWanted).
+- **First run (PRD §7, 10-MACOS §2.1):**
+  - Settings opens with a welcome banner that says why macOS will ask for System Audio Recording.
+  - The audio tap stays closed until **Start** is clicked or the window is closed, so the prompt comes after the explanation.
+- **Tests:**
+  - C#: 27, including presets through the C ABI, the meter keeping the capture open, and the preview's scale and fade-in.
+  - Swift: the settings round trip, sRGB hex colours and presets.
+  - The Mac frame source still matches the Windows one bit for bit, since the meter is off in that script.
 
 ### M2 notes
 

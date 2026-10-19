@@ -27,5 +27,6 @@
     <Compile Include="../Rimlight.Platform/Overlay/IOverlayFrameSource.cs" Link="Shared/IOverlayFrameSource.cs" />
     <Compile Include="../Rimlight.App/Overlay/SrgbHex.cs" Link="Shared/SrgbHex.cs" />
     <Compile Include="../Rimlight.App/Overlay/DemoBeat.cs" Link="Shared/DemoBeat.cs" />
+    <Compile Include="../Rimlight.App/Overlay/AudioReading.cs" Link="Shared/AudioReading.cs" />
   </ItemGroup>
 </Project>

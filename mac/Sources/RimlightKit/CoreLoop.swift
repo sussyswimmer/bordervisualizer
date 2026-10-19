@@ -35,4 +35,16 @@ final class CoreLoop {
     func setPaused(_ paused: Bool) {
         rl_loop_set_paused(handle, paused ? 1 : 0)
     }
+
+    /// Keeps the capture and analysis running while Settings shows the meter or the preview.
+    func setAudioWanted(_ wanted: Bool) {
+        rl_loop_set_audio_wanted(handle, wanted ? 1 : 0)
+    }
+
+    /// The analyzer's features from the latest frame.
+    var audio: RlAudioReading {
+        var reading = RlAudioReading()
+        rl_loop_audio(handle, &reading)
+        return reading
+    }
 }

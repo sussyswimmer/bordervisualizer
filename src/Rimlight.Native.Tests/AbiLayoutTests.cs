@@ -18,5 +18,6 @@ public sealed class AbiLayoutTests
         Assert.Equal(24, Unsafe.SizeOf<PaceInfo>());
         Assert.Equal(52, Unsafe.SizeOf<LightState>());
         Assert.Equal(12, Unsafe.SizeOf<Rgb>());
+        Assert.Equal(20, Unsafe.SizeOf<AudioReadingInfo>());
     }
 }

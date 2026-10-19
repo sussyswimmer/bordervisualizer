@@ -1,19 +1,26 @@
 import AppKit
+import CRimlight
 import Metal
 import os
 
-/// The menu bar app: the glow on every chosen screen (OverlayController) driven by the Mac's sound (SystemAudioTap),
-/// Glow On, Demo Mode (`--demo` starts in it), a warning when the app can't hear the Mac, the settings folder and Quit.
+/// The menu bar app (doc 06 §2): the glow on every chosen screen (OverlayController) driven by the Mac's sound
+/// (SystemAudioTap), its menu, the Settings window, and the first run.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "app")
     private var statusItem: NSStatusItem?
     private var loop: CoreLoop?
+    private var tap: SystemAudioTap?
     private var overlays: OverlayController?
+    private var model: SettingsModel?
+    private var settingsWindow: SettingsWindowController?
+
+    // Menu items whose state follows the settings (menuNeedsUpdate).
     private var glowItem: NSMenuItem?
     private var demoItem: NSMenuItem?
     private var cantHearItem: NSMenuItem?
-    private var tap: SystemAudioTap?
+    private var modeItems: [(NSMenuItem, String)] = []
+    private var colorItems: [(NSMenuItem, String)] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard Core.abiMatches else {
@@ -21,21 +28,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                  reason: "libRimlightCore speaks a different ABI than this app")
             return
         }
-
-        let directory = AppPaths.supportDirectory
         let demo = CommandLine.arguments.contains("--demo")
-        guard let loop = CoreLoop(settingsDirectory: directory.path, demo: demo) else {
+        guard let loop = CoreLoop(settingsDirectory: AppPaths.supportDirectory.path, demo: demo) else {
             fail("\(Core.appName) couldn't start.", "Its settings couldn't be read.", reason: "rl_loop_create failed")
             return
         }
         self.loop = loop
-
         guard let device = MTLCreateSystemDefaultDevice() else {
-            fail("\(Core.appName) can't draw on this Mac.", "No Metal graphics device was found.", reason: "No Metal device")
+            fail("\(Core.appName) can't draw on this Mac.", "No Metal graphics device was found.",
+                 reason: "No Metal device")
             return
         }
+
         tap = SystemAudioTap()
         if tap == nil { log.error("The audio ring couldn't be made; the glow won't hear music") }
+        let firstRun = loop.settings?.firstRunComplete == false
+        // The first run explains the "System Audio Recording" prompt before the tap may open (10-MACOS §2.1).
+        if firstRun { tap?.setAllowed(false) }
+
         do {
             overlays = OverlayController(loop: loop, metal: try MetalGlow(device: device), tap: tap)
         } catch {
@@ -43,37 +53,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                  reason: "Metal setup failed: \(error)")
             return
         }
+        let model = SettingsModel(loop: loop, device: device, tap: tap) { [weak self] in
+            self?.settingsChanged()
+        }
+        self.model = model
+        settingsWindow = SettingsWindowController(model: model)
 
+        NSApp.mainMenu = Self.makeMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = StatusIcon.make()
-        item.button?.toolTip = Core.appName
         item.button?.setAccessibilityLabel(Core.appName)
         item.menu = makeMenu()
         statusItem = item
+        updateStatusItem()
         log.info("\(Core.appName, privacy: .public) \(Core.version, privacy: .public) started (demo: \(demo))")
+
+        if firstRun { settingsWindow?.show() } // PRD §7: the first launch shows Settings with a welcome
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        model?.saveNow()
+    }
+
+    // MARK: - The menu bar menu (doc 06 §2)
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
-        let title = NSMenuItem(title: "\(Core.appName) \(Core.version)", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
+        let glow = menu.addItem(withTitle: "Glow On", action: #selector(toggleGlow), keyEquivalent: "")
+        glow.target = self
+        glowItem = glow
         let cantHear = menu.addItem(withTitle: "\(Core.appName) can't hear your Mac. Allow it…",
                                     action: #selector(openAudioPrivacy), keyEquivalent: "")
         cantHear.target = self
         cantHear.isHidden = true
         cantHearItem = cantHear
         menu.addItem(.separator())
-        let glow = menu.addItem(withTitle: "Glow On", action: #selector(toggleGlow), keyEquivalent: "")
-        glow.target = self
-        glowItem = glow
+
+        let mode = NSMenu()
+        for (title, value) in [("Music Sync", "MusicSync"), ("Idle Glow", "IdleGlow"), ("Off", "Off")] {
+            let item = mode.addItem(withTitle: title, action: #selector(chooseMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            modeItems.append((item, value))
+        }
+        menu.addItem(withTitle: "Mode", action: nil, keyEquivalent: "").submenu = mode
+
+        let colors = NSMenu()
+        for (title, value) in [("From Album Art", "AlbumArt"), ("Manual", "Manual")] {
+            let item = colors.addItem(withTitle: title, action: #selector(chooseColors(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            colorItems.append((item, value))
+        }
+        menu.addItem(withTitle: "Colors", action: nil, keyEquivalent: "").submenu = colors
+
+        let presets = NSMenu()
+        for preset in model?.presets ?? [] {
+            let item = presets.addItem(withTitle: preset.name, action: #selector(choosePreset(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(preset.index)
+        }
+        menu.addItem(withTitle: "Presets", action: nil, keyEquivalent: "").submenu = presets
+        menu.addItem(.separator())
+
         let demo = menu.addItem(withTitle: "Demo Mode", action: #selector(toggleDemo), keyEquivalent: "")
         demo.target = self
         demoItem = demo
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Open Settings Folder", action: #selector(openSettingsFolder), keyEquivalent: "")
-            .target = self
+        menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit \(Core.appName)", action: #selector(NSApplication.terminate(_:)),
                      keyEquivalent: "q")
@@ -81,25 +128,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        glowItem?.state = loop?.settings?.enabled == true ? .on : .off
+        guard let settings = model?.settings else { return }
+        glowItem?.state = settings.enabled ? .on : .off
         demoItem?.state = loop?.demo == true ? .on : .off
-        statusItem?.button?.appearsDisabled = loop?.settings?.enabled == false
         cantHearItem?.isHidden = tap?.cantHear != true
+        for (item, value) in modeItems { item.state = settings.animation == value ? .on : .off }
+        for (item, value) in colorItems { item.state = settings.colorMode == value ? .on : .off }
     }
 
-    /// Privacy & Security › Screen & System Audio Recording, where "System Audio Recording Only" lists the app.
-    @objc private func openAudioPrivacy() {
-        let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
+    @objc private func toggleGlow() { model?.settings.enabled.toggle() }
+
+    @objc private func chooseMode(_ sender: NSMenuItem) {
+        if let value = sender.representedObject as? String { model?.settings.animation = value }
     }
 
-    @objc private func toggleGlow() {
-        guard let loop, var settings = loop.settings else { return }
-        settings.enabled.toggle()
-        let status = loop.apply(settings)
-        if status != 0 { log.error("Saving the settings failed: \(status)") }
-        statusItem?.button?.appearsDisabled = !settings.enabled
-        overlays?.settingsChanged()
+    @objc private func chooseColors(_ sender: NSMenuItem) {
+        if let value = sender.representedObject as? String { model?.settings.colorMode = value }
+    }
+
+    @objc private func choosePreset(_ sender: NSMenuItem) {
+        guard let model, let preset = model.presets.first(where: { Int($0.index) == sender.tag }) else { return }
+        model.apply(preset: preset)
     }
 
     @objc private func toggleDemo() {
@@ -108,24 +157,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlays?.settingsChanged()
     }
 
-    /// Writes settings.json if it isn't there yet (Core's defaults, in the same format as Windows) and shows it in
-    /// Finder.
-    @objc private func openSettingsFolder() {
-        let directory = AppPaths.supportDirectory
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        } catch {
-            log.error("Creating the settings folder failed: \(error.localizedDescription, privacy: .public)")
-        }
-        if let json = Core.loadSettings(directory: directory.path) {
-            let status = Core.saveSettings(directory: directory.path, json: json)
-            if status != 0 { log.error("Saving the settings failed: \(status)") }
-        }
-        if FileManager.default.fileExists(atPath: AppPaths.settingsFile.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([AppPaths.settingsFile])
-        } else {
-            NSWorkspace.shared.open(directory)
-        }
+    @objc private func showSettings() { settingsWindow?.show() }
+
+    @objc private func openAudioPrivacy() { AudioPrivacy.open() }
+
+    private func settingsChanged() {
+        overlays?.settingsChanged()
+        updateStatusItem()
+    }
+
+    /// The icon dims while the glow is off (doc 06 §2), and the tooltip names the app.
+    private func updateStatusItem() {
+        statusItem?.button?.appearsDisabled = model?.settings.enabled == false
+        statusItem?.button?.toolTip = Core.appName
+    }
+
+    /// An accessory app shows no menu bar of its own, but the Settings window's text fields still need the Edit
+    /// shortcuts, and ⌘W should close it.
+    private static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        let app = NSMenu()
+        app.addItem(withTitle: "Quit \(Core.appName)", action: #selector(NSApplication.terminate(_:)),
+                    keyEquivalent: "q")
+        main.addItem(withTitle: Core.appName, action: nil, keyEquivalent: "").submenu = app
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
+        let window = NSMenu(title: "Window")
+        window.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        main.addItem(withTitle: "Window", action: nil, keyEquivalent: "").submenu = window
+        return main
     }
 
     private func fail(_ message: String, _ detail: String, reason: String) {
