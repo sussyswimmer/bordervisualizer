@@ -33,4 +33,16 @@ final class NowPlayingTests: XCTestCase {
         XCTAssertEqual(Color(linear: RlRgb(r: 1, g: 0, b: 0)).hex, "#FF0000")
         XCTAssertEqual(Color(linear: RlRgb(r: 0.2158605, g: 0.2158605, b: 0.2158605)).hex, "#808080") // mid grey
     }
+
+    /// Spotify's cover address comes from another app, so only Spotify's own image hosts over HTTPS are fetched.
+    func testOnlySpotifyImageHostsAreFetched() {
+        func allowed(_ text: String) -> Bool { URL(string: text).map(NowPlayingService.isSpotifyImage) ?? false }
+        XCTAssertTrue(allowed("https://i.scdn.co/image/ab67616d0000b273abcdef"))
+        XCTAssertTrue(allowed("https://image-cdn-ak.spotifycdn.com/image/ab67616d0000b273abcdef"))
+        XCTAssertFalse(allowed("http://i.scdn.co/image/ab67616d0000b273abcdef"))        // not HTTPS
+        XCTAssertFalse(allowed("https://example.com/image.jpg"))
+        XCTAssertFalse(allowed("https://i.scdn.co.example.com/image"))                 // look-alike host
+        XCTAssertFalse(allowed("https://user@i.scdn.co/image"))
+        XCTAssertFalse(allowed("file:///etc/passwd"))
+    }
 }

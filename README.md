@@ -4,11 +4,12 @@
 
 <p align="center">
   <b>The edges of your screen glow with your music.</b><br>
-  Colors from the album art. Motion from the beat. Free for Windows.
+  Colors from the album art. Motion from the beat. Free for Windows and Mac.
 </p>
 
 <p align="center">
   <a href="https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/RimlightSetup.exe"><img src="https://img.shields.io/badge/Download%20for%20Windows-7C5CFF?style=for-the-badge&amp;logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTEwLjc1IDNoMi41djkuMmwzLjEtMy4xIDEuNzcgMS43N0wxMiAxNyA1Ljg4IDEwLjg3IDcuNjUgOS4xbDMuMSAzLjFWM3pNNCAxOWgxNnYyLjI1SDR6Ii8%2BPC9zdmc%2B" alt="Download for Windows" height="44"></a>
+  <a href="https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/RimlightSetup.dmg"><img src="https://img.shields.io/badge/Download%20for%20Mac-1F2937?style=for-the-badge&amp;logo=apple&amp;logoColor=white" alt="Download for Mac" height="44"></a>
 </p>
 
 <p align="center">
@@ -42,7 +43,7 @@ Or let the album art pick the colors, which is the default.
 🎨 &nbsp;**Takes the colors** from the album art.<br>
 ✨ &nbsp;**Draws the glow** on your graphics card. Clicks go straight through.
 
-🔒 No tracking, and nothing leaves your PC except the update check.
+🔒 No tracking. The only network requests are the update check and, on a Mac, Spotify's album cover.
 
 <details>
 <summary><b>How it's built</b></summary>
@@ -69,7 +70,9 @@ flowchart LR
 2. Run it. If Windows says *Windows protected your PC*, click **More info → Run anyway**.
 3. Play some music.
 
-**Ctrl+Alt+L** turns the glow on and off. Double-click the tray icon for Settings. Windows 10 and 11; a Mac version is in the works.
+**Ctrl+Alt+L** turns the glow on and off. Double-click the tray icon for Settings. Windows 10 and 11.
+
+**Mac** (macOS 14.4 or later): open **[RimlightSetup.dmg](https://github.com/sussyswimmer/bordervisualizer/releases/latest/download/RimlightSetup.dmg)** and drag Rimlight to Applications. The first time, macOS blocks it: click **Done**, then **Open Anyway** in **System Settings > Privacy & Security**. **⌃⌥L** turns the glow on and off.
 
 ## FAQ
 
@@ -132,7 +135,7 @@ dotnet run --project src/Rimlight.App
 
 ---
 
-<sub>Built with [NAudio](https://github.com/naudio/NAudio), [Vortice.Windows](https://github.com/amerkoleci/Vortice.Windows), [WPF-UI](https://github.com/lepoco/wpfui), [H.NotifyIcon](https://github.com/HavenDV/H.NotifyIcon), [Velopack](https://github.com/velopack/velopack) and [CsWin32](https://github.com/microsoft/CsWin32). Lettering: [Inter](https://github.com/rsms/inter) (SIL OFL 1.1). [MIT License](LICENSE) © 2026 [Maxwell Olander](https://maxwellolander.com).</sub>
+<sub>Built with [NAudio](https://github.com/naudio/NAudio), [Vortice.Windows](https://github.com/amerkoleci/Vortice.Windows), [WPF-UI](https://github.com/lepoco/wpfui), [H.NotifyIcon](https://github.com/HavenDV/H.NotifyIcon), [Velopack](https://github.com/velopack/velopack) and [CsWin32](https://github.com/microsoft/CsWin32). [Sparkle](https://github.com/sparkle-project/Sparkle) on the Mac. Lettering: [Inter](https://github.com/rsms/inter) (SIL OFL 1.1). [MIT License](LICENSE) © 2026 [Maxwell Olander](https://maxwellolander.com).</sub>
 
 <p align="center">
   <img src="assets/footer.svg" alt="" width="100%">

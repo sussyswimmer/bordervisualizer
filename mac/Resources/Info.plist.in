@@ -36,7 +36,7 @@
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>@APP_NAME@ listens to your Mac's sound output to light your screen to the beat. Nothing is recorded or saved.</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>@APP_NAME@ reads the album art of the song Music is playing, to color the glow. It changes nothing in Music.</string>
+	<string>@APP_NAME@ reads the album art of the song Music or Spotify is playing, to color the glow. It changes nothing in them.</string>
 	<key>SUFeedURL</key>
 	<string>@FEED_URL@</string>
 	<key>SUPublicEDKey</key>

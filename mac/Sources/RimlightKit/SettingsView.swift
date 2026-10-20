@@ -154,14 +154,14 @@ struct ColorPage: View {
                     Text("Nothing playing in Music or Spotify.").foregroundStyle(.secondary)
                 }
                 if model.automationDenied {
-                    Label("Allow \(Core.appName) to read Music's album art in Privacy & Security › Automation.",
+                    Label("Allow \(Core.appName) to read \(model.nowPlaying?.app ?? "Music")'s album art in Privacy & Security › Automation.",
                           systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
                     Button("Open Privacy & Security") { AudioPrivacy.openAutomation() }
                 }
             } header: {
                 Text("Now playing")
             } footer: {
-                Text("Album colors come from Apple Music. Spotify and other players use your colors.")
+                Text("Album colors come from Music and Spotify (Spotify's cover is downloaded from Spotify). Other players use your colors.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("My colors") {
@@ -334,8 +334,8 @@ struct AboutPage: View {
                 Text("Only your Mac's sound output is captured, through a system audio tap. The microphone is never opened.")
                 Text("Audio is analyzed in memory and immediately discarded. Nothing is recorded or saved.")
                 Text(model.checkForUpdates == nil
-                     ? "No telemetry or analytics. This copy makes no network requests."
-                     : "No telemetry or analytics. The only network request is the update check, to GitHub.")
+                     ? "No telemetry or analytics. The only network request is Spotify's album cover, from Spotify."
+                     : "No telemetry or analytics. The only network requests are the update check, to GitHub, and Spotify's album cover, from Spotify.")
             }
             Section {
                 Button("Show the Settings File in Finder") { AppPaths.revealSettingsFile() }

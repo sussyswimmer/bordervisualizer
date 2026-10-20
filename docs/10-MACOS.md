@@ -262,7 +262,7 @@ Doc 05's quirks carry over: debounce 250 ms, retry once after 750 ms when the ar
 
 - Apple Music's artwork comes from the local app.
 - Spotify's comes only from the URL Spotify's own app hands over (`i.scdn.co`), fetched once per track change, with no cookies and a 64 px decode.
-- That's a second network destination besides the update check, which is Maxwell's call (Q4). If he says no, Spotify plays with the manual colours.
+- That's a second network destination besides the update check, which is Maxwell's call (Q4). **He said yes on 2026-10-20** ("I am playing it from spotify … grab the album cover"), and it is built: an Apple event asks Spotify for `artwork url`, and only HTTPS addresses on `i.scdn.co`, `*.scdn.co` or `*.spotifycdn.com` are fetched, with an ephemeral session (no cookies, no cache) and a 4 MB cap. It happens only while album colours are in use.
 
 ---
 
