@@ -60,6 +60,7 @@ public sealed class DemoBeatTests
     {
         Assert.Equal(4, DemoBeat.Palettes.Length);
         Assert.Equal(TimeSpan.FromMilliseconds(800), DemoBeat.PaletteFade);
+        Assert.Equal(MusicGlowSource.AlbumFade, DemoBeat.PaletteFade); // written out so the Mac app can compile it
         Assert.Equal(0, DemoBeat.PaletteSeconds % (4 * DemoBeat.BeatSeconds)); // whole bars
         var demo = new DemoBeat();
         var changes = new List<(double Time, int Index)>();

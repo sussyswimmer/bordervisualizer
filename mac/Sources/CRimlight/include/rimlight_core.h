@@ -10,7 +10,9 @@
 
 #include <stdint.h>
 
-#define RL_ABI_VERSION 1
+#include "glow_math.h"
+
+#define RL_ABI_VERSION 2
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -39,5 +41,113 @@ int32_t rl_settings_load(const char *directory, char *buffer, int32_t capacity);
 /// atomically, creating the directory. Fields left out keep their defaults. Returns RL_OK, RL_BAD_JSON, RL_IO_ERROR,
 /// RL_INVALID_ARGUMENT or RL_INTERNAL.
 int32_t rl_settings_save(const char *directory, const char *json);
+
+// ---- Overlay loop (src/Rimlight.Native/Overlay/MacOverlayLoop.cs) ----
+// The glow's per-frame decisions, the same code as Windows' (FramePacer, GlowConstants, the light engine). Create it on
+// the main thread; apply_settings, set_demo, demo and set_paused are safe from any thread. Every other call belongs to
+// the render thread, and the per-frame ones allocate nothing.
+
+typedef intptr_t RlLoop; // 0 = none
+
+/// One screen's overlay surface (SurfaceInfo).
+typedef struct RlSurface {
+    int32_t widthPx;      // the drawable's size in pixels
+    int32_t heightPx;
+    float pixelsPerPoint; // the screen's backing scale factor
+    int32_t paused;       // 1 while a full-screen window covers this screen
+} RlSurface;
+
+/// What a frame needs from the render thread (FrameInfo).
+typedef struct RlFrameInfo {
+    int32_t gradientVersion; // upload rl_loop_gradient again when this changes
+    float renderScale;       // 1, or 0.5 with "Reduce on battery": resize the drawables and set the surfaces again
+    int32_t listening;       // 1 when the glow wants audio
+    int32_t demo;            // 1 while demo mode is on
+} RlFrameInfo;
+
+/// How to wait after a frame (PaceInfo).
+typedef struct RlPace {
+    int32_t pace;           // RL_PACE_FULL, RL_PACE_SLOW or RL_PACE_BLOCK
+    int32_t pad;
+    double intervalSeconds; // the wait at RL_PACE_SLOW
+    double fullRateHz;      // the display link's rate at RL_PACE_FULL
+} RlPace;
+
+typedef struct RlRgb {
+    float r, g, b;
+} RlRgb;
+
+/// Core's LightState (linear RGB colours; the rest 0..1, thickness in points).
+typedef struct RlLightState {
+    RlRgb colorA;
+    RlRgb colorB;
+    float ratio, intensity, spread, coreThicknessDip, phase, pulse, visibility;
+} RlLightState;
+
+GM_STATIC_ASSERT(sizeof(RlSurface) == 16, "RlSurface must match SurfaceInfo");
+GM_STATIC_ASSERT(sizeof(RlFrameInfo) == 16, "RlFrameInfo must match FrameInfo");
+GM_STATIC_ASSERT(sizeof(RlPace) == 24, "RlPace must match PaceInfo");
+GM_STATIC_ASSERT(sizeof(RlLightState) == 52, "RlLightState must match LightState");
+
+static const int32_t RL_PACE_FULL = 0;  // frames on the display link, at fullRateHz
+static const int32_t RL_PACE_SLOW = 1;  // one frame after intervalSeconds
+static const int32_t RL_PACE_BLOCK = 2; // no frames until an input changes
+
+static const int32_t RL_SURFACE_NONE = 0;     // nothing to do
+static const int32_t RL_SURFACE_DRAW = 1;     // draw the constants and present
+static const int32_t RL_SURFACE_SHOW_AND_DRAW = 2; // show the window, then draw and present
+static const int32_t RL_SURFACE_CLEAR = 3;    // draw the transparent frame (then hide the window, per surface_done)
+
+/// A loop with the settings in directory/settings.json; demo 1 starts in demo mode. 0 on failure.
+RlLoop rl_loop_create(const char *settingsDirectory, int32_t demo);
+void rl_loop_destroy(RlLoop loop);
+
+/// The loop's newest settings as JSON (the settings file's format).
+int32_t rl_loop_settings(RlLoop loop, char *buffer, int32_t capacity);
+/// Publishes new settings to the render thread; save 1 also validates and writes settings.json (the loop then gets
+/// exactly what the file holds). Returns RL_OK, RL_BAD_JSON, RL_IO_ERROR (published, not saved) or RL_INVALID_ARGUMENT.
+int32_t rl_loop_apply_settings(RlLoop loop, const char *json, int32_t save);
+int32_t rl_loop_set_demo(RlLoop loop, int32_t on);
+/// 1 while demo mode is on, 0 when off.
+int32_t rl_loop_demo(RlLoop loop);
+int32_t rl_loop_set_paused(RlLoop loop, int32_t paused);
+
+// Render thread:
+/// Replaces the screens' surfaces; each starts hidden. For half render scale, pass the halved size and pixels per point.
+int32_t rl_loop_set_surfaces(RlLoop loop, const RlSurface *surfaces, int32_t count, double nowSeconds);
+/// Pauses (1) or resumes (0) the glow on one screen; it fades over 300 ms and keeps its window.
+int32_t rl_loop_set_surface_paused(RlLoop loop, int32_t index, int32_t paused, double nowSeconds);
+int32_t rl_loop_set_display(RlLoop loop, double refreshHz, int32_t onBattery);
+/// Takes the inputs published since the last call: 1 when one changed (a frame may be due early), else 0.
+int32_t rl_loop_apply_inputs(RlLoop loop, double nowSeconds);
+/// 1 when an input arriving elapsedSeconds after the last frame should wait for the next frame at this pace.
+int32_t rl_loop_input_waits(RlLoop loop, int32_t pace, double elapsedSeconds);
+/// The time step for a frame elapsedSeconds after the last; frameDue 0 when an input brought it forward.
+float rl_loop_frame_dt(RlLoop loop, double elapsedSeconds, int32_t frameDue);
+/// Starts a frame. samples: mono audio drained since the last frame (count 0 for none) at sampleRate.
+int32_t rl_loop_begin_frame(RlLoop loop, float dt, const float *samples, int32_t count, int32_t sampleRate,
+                            RlFrameInfo *info);
+/// The 64 RGBA float texels of the palette gradient (linear RGB); the pointer stays valid for the loop's life.
+const float *rl_loop_gradient(RlLoop loop);
+/// What to do with surface index this frame (RL_SURFACE_*), and the constants to draw it with.
+int32_t rl_loop_plan_surface(RlLoop loop, int32_t index, RlGlowConstants *constants);
+/// Whether the planned frame was presented. Returns 1 when the window should be hidden now.
+int32_t rl_loop_surface_done(RlLoop loop, int32_t index, int32_t presented, int64_t nowMs);
+/// Ends the frame: how to wait for the next.
+int32_t rl_loop_end_frame(RlLoop loop, double nowSeconds, RlPace *pace);
+
+/// GlowConstants.Create alone, for tests: the constants for a light state on a surface.
+int32_t rl_glow_constants(const RlLightState *state, int32_t widthPx, int32_t heightPx, float pixelsPerPoint,
+                          float renderScale, float cornerRadiusDip, const RlRgb *meanColor, RlGlowConstants *constants);
+
+// ---- Helpers implemented in C (CRimlight.c) ----
+
+/// A lock-free counter shared between threads (drawables in flight, M1).
+typedef struct RlcCounter RlcCounter;
+RlcCounter *rlc_counter_create(void);
+void rlc_counter_destroy(RlcCounter *counter);
+int32_t rlc_counter_add(RlcCounter *counter, int32_t delta); // returns the new value
+int32_t rlc_counter_load(const RlcCounter *counter);
+void rlc_counter_store(RlcCounter *counter, int32_t value);
 
 #endif

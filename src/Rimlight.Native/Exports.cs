@@ -12,7 +12,7 @@ namespace Rimlight.Native;
 /// export rather than shared through a delegate, which would allocate a closure per call: the per-frame exports (M1)
 /// must not allocate.
 /// </remarks>
-internal static unsafe class Exports
+internal static unsafe partial class Exports
 {
     [UnmanagedCallersOnly(EntryPoint = "rl_abi_version")]
     public static int AbiVersion() => NativeApi.AbiVersion;

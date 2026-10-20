@@ -26,6 +26,7 @@ let package = Package(
             ]),
         .target(name: "RimlightKit", dependencies: ["CRimlight"]),
         .executableTarget(name: "RimlightMac", dependencies: ["RimlightKit"]),
-        .testTarget(name: "RimlightKitTests", dependencies: ["RimlightKit", "CRimlight"]),
+        // The golden table is read by path (#filePath), not bundled.
+        .testTarget(name: "RimlightKitTests", dependencies: ["RimlightKit", "CRimlight"], exclude: ["Fixtures"]),
     ]
 )

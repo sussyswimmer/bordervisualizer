@@ -6,6 +6,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!-- No background GC: it can make GC.GetAllocatedBytesForCurrentThread report a few KB on a thread that allocated
+         nothing, which would make the zero-allocation test flaky (as in Rimlight.Platform.Tests). -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rimlight.Native/Rimlight.Native.csproj" />
