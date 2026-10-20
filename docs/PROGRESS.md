@@ -707,6 +707,16 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M7 packaging and updates: `RimlightSetup.dmg` and the update zip from `build.sh` (ad hoc, per Q2); Sparkle 2 with an EdDSA-signed appcast as a release asset; "Check for Updates…" and AutoUpdate; Mac jobs in `release.yml` (H-031) — branch `claude/mac-m7-release` — effort: M (notes below; needs the update key from Maxwell, and a Mac manual test)
 - [x] M8 README and docs: a Download for Mac button and macOS badge, a Mac (preview) install with the Gatekeeper and audio-permission steps, Mac lines in How it works, Privacy, FAQ (Open Anyway, uninstall, logs), build from source and the roadmap; Sparkle in Credits; RELEASE-GUIDE §7 (update key, link checks, a Mac test, a Mac recording) — branch `claude/mac-m8-docs` — effort: S (notes below)
 
+### Fix: Mac album colours, after Maxwell's test
+
+- **What he saw:** a black-and-white song glowed light and dark blue. Those are the default manual colours (#7C5CFF / #22D3EE), so no cover was used.
+  - Core's fix from PR #32 (05a621f) is merged into the stack, so in Music a black-and-white cover now glows soft white and grey, as on Windows. The Mac calls the same extractor through `rl_album_art`.
+  - Spotify and browsers give the Mac no cover at all: Spotify only offers a web address for its artwork (Q4: a network fetch, which needs Maxwell's yes), and browsers would need a private API (Q5: no).
+- **Music:**
+  - The cover is read with `raw data` and, for streamed tracks that lack it, `data` as a fallback.
+  - Every failure is now logged with its reason (Automation refused, no cover, not decodable, blank), so `log show` tells which one it was.
+- **README:** the short README from PR #32, with a Download for Mac button and one Mac install line (Open Anyway).
+
 ### M8 notes
 
 - **The Mac is a "preview" in the README:** CI builds and tests it on every change, but no one has run it on a real Mac yet (every milestone's Mac manual test is still pending). Doc 08 says no claims that aren't true, so the button's subtitle and the Install heading say so, and the section asks for bug reports.

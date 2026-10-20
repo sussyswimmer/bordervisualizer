@@ -150,6 +150,7 @@ final class NowPlayingService: @unchecked Sendable {
             readCover(of: track, retry: true)
         } else {
             coverFor = track.id
+            log.info("\(track.app, privacy: .public) gives no cover: the manual colors show")
             clearColors() // Spotify: no cover without a network fetch (10-MACOS Q4)
         }
     }
@@ -157,7 +158,7 @@ final class NowPlayingService: @unchecked Sendable {
     private func readCover(of track: Track, retry: Bool) {
         guard coverFor == track.id, albumColorsWanted, Self.isRunning(Self.musicID) else { return }
         events.async { [self] in
-            let cover = Self.musicCover(title: track.title)
+            let cover = Self.musicCover(title: track.title, log: log)
             queue.async { [self] in useCover(cover, of: track, retry: retry) }
         }
     }
@@ -176,6 +177,9 @@ final class NowPlayingService: @unchecked Sendable {
                     track.id.withCString { rl_album_art(loop.handle, buffer.baseAddress, Int32(width), Int32(height), $0) }
                 }
                 if found == 1 { return publish() }
+                log.info("The cover is blank: the manual colors show")
+            } else {
+                log.notice("Music's cover (\(data.count) bytes) couldn't be decoded")
             }
             fallthrough
         case .missing:
@@ -221,7 +225,13 @@ final class NowPlayingService: @unchecked Sendable {
             tell application id "com.apple.Music"
                 if player state is stopped then return missing value
                 if (count of artworks of current track) is 0 then return missing value
-                return {name of current track, raw data of artwork 1 of current track}
+                set art to artwork 1 of current track
+                try
+                    set bytes to raw data of art
+                on error
+                    set bytes to data of art -- some streamed tracks have no raw data
+                end try
+                return {name of current track, bytes}
             end tell
         end timeout
         """)
@@ -237,13 +247,18 @@ final class NowPlayingService: @unchecked Sendable {
         """)
 
     /// Music's current cover, if it still plays `title` (a skip during the read would give the next song's).
-    private static func musicCover(title: String?) -> Cover {
+    private static func musicCover(title: String?, log: Logger) -> Cover {
         var error: NSDictionary?
         guard let result = coverScript?.executeAndReturnError(&error) else {
             let code = error?[NSAppleScript.errorNumber] as? Int
+            let message = error?[NSAppleScript.errorMessage] as? String ?? ""
+            log.notice("Music's cover couldn't be read: \(code ?? 0) \(message, privacy: .public)")
             return code == -1743 ? .denied : .missing // errAEEventNotPermitted: Automation refused
         }
-        guard result.numberOfItems == 2, let data = result.atIndex(2)?.data, !data.isEmpty else { return .missing }
+        guard result.numberOfItems == 2, let data = result.atIndex(2)?.data, !data.isEmpty else {
+            log.info("Music has no cover for this track")
+            return .missing
+        }
         if let title, let playing = result.atIndex(1)?.stringValue, playing != title { return .missing }
         return .data(data)
     }
