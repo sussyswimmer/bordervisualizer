@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a tag vX.Y.Z (v1.0.0, or v1.1.0-beta.1 for a prerelease) builds, tests and packs Rimlight
-# for x64 and ARM64 with build/pack.ps1, then publishes the GitHub release that the README's
+# for x64 and ARM64 with build/pack.ps1, and the Mac app with mac/build.sh, then publishes the GitHub release that the README's
 # download button and the app's auto-update both read (doc 06 §5, doc 07 Phase 6).
 # Pull requests that can break the packaging, and manual runs, are dry runs: the same build and
 # pack, unsigned, kept as a workflow artifact for 7 days. Nothing is published.
@@ -180,10 +180,114 @@ jobs:
           compression-level: 0
           overwrite: true
 
+  mac-build:
+    # The Mac app (docs/10-MACOS.md §6): mac/build.sh builds the universal app with the tag's version and the update
+    # key's public half, and packs RimlightSetup.dmg and the update zip. Like the Windows build job, it runs the
+    # build's code, so it gets no secrets. Pull requests build the Mac app in ci.yml's macos job instead.
+    name: Build and pack (macOS)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      RIMLIGHT_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
+      # Public, not a secret: a repository variable (Settings > Secrets and variables > Actions > Variables).
+      # Without it the Mac app is built with no updater.
+      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test the Core bridge
+        run: dotnet test src/Rimlight.Native.Tests -c Release
+
+      - name: Build and pack
+        run: mac/build.sh
+
+      - name: Test the Swift package
+        run: swift test --package-path mac -Xswiftc -warnings-as-errors -Xcc -Werror
+
+      - name: Keep the Mac downloads
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: |
+            artifacts/mac/*-mac.zip
+            artifacts/mac/*Setup.dmg
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+
+  mac-appcast:
+    # Signs the Mac update with the EdDSA key and writes appcast.xml, the feed every installed copy reads. It holds
+    # the private key, so it builds nothing: it runs Sparkle's sign_update (from its release archive, checked against
+    # a pinned SHA-256) and mac/appcast.sh on the build job's zip. Only for a tagged release with the key set up:
+    #   SPARKLE_PUBLIC_KEY    variable: the public half, from Sparkle's generate_keys
+    #   SPARKLE_PRIVATE_KEY   secret: the private half, from generate_keys -x
+    name: Sign the Mac update
+    needs: mac-build
+    if: github.event_name == 'push' && vars.SPARKLE_PUBLIC_KEY != ''
+    runs-on: macos-26
+    timeout-minutes: 10
+    env:
+      SPARKLE_VERSION: 2.10.0
+      SPARKLE_SHA256: c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the Mac downloads
+        uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: artifacts/mac
+
+      - name: Get Sparkle's signing tool
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/sparkle.tar.xz" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          echo "$SPARKLE_SHA256  $RUNNER_TEMP/sparkle.tar.xz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$RUNNER_TEMP/sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle" ./bin/sign_update
+
+      - name: Write the appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+            echo "::error::The SPARKLE_PUBLIC_KEY variable is set but the SPARKLE_PRIVATE_KEY secret isn't."
+            exit 1
+          fi
+          zip="$(ls artifacts/mac/*-mac.zip)"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$zip")"
+          echo "$SPARKLE_PRIVATE_KEY" | mac/appcast.sh "$RUNNER_TEMP/sparkle/bin/sign_update" "$zip" "$TAG" "$url" \
+            > "$RUNNER_TEMP/appcast.xml"
+          cat "$RUNNER_TEMP/appcast.xml"
+
+      - name: Keep the appcast
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-appcast
+          path: ${{ runner.temp }}/appcast.xml
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
   publish:
     name: Publish the GitHub release
-    needs: pack
-    if: github.event_name == 'push'
+    needs: [pack, mac-build, mac-appcast]
+    # The Windows release never waits on the Mac: a failed Mac build or appcast leaves the Mac files out of this
+    # release (see "Attach the Mac downloads"), and mac-appcast is skipped when the update key isn't set up.
+    if: github.event_name == 'push' && !cancelled() && needs.pack.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -240,6 +344,42 @@ jobs:
           gh release create "$TAG" --draft --verify-tag --title "$app $version" \
             --notes-file "$RUNNER_TEMP/notes.md" "${prerelease[@]}" artifacts/installers/*
           echo "RELEASE_NAME=$app $version" >> "$GITHUB_ENV"
+
+      # Not when the appcast failed: a Mac build whose key doesn't match could never update itself.
+      - name: Download the Mac downloads
+        if: needs.mac-build.result == 'success' && needs.mac-appcast.result != 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          name: mac
+          path: artifacts/mac
+
+      - name: Download the Mac appcast
+        if: needs.mac-appcast.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-appcast
+          path: artifacts/mac
+
+      # The Mac app (docs/10-MACOS.md §6): RimlightSetup.dmg for the README's Mac button, the update zip, and
+      # appcast.xml when the update key is set up. Attached while the release is still a draft.
+      # Every installed Mac copy reads releases/latest/download/appcast.xml, so a release without its own appcast
+      # (a failed Mac job) carries the previous release's forward: it still points at that release's zip, and Mac
+      # copies keep working until the next release has a Mac build.
+      - name: Attach the Mac downloads
+        run: |
+          mkdir -p artifacts/mac
+          if [[ ! -f artifacts/mac/appcast.xml ]]; then
+            if gh release download --repo "$GITHUB_REPOSITORY" --pattern appcast.xml --dir artifacts/mac 2>/dev/null; then
+              echo "::warning::No Mac appcast for $TAG: the previous release's appcast.xml is carried forward."
+            fi
+          fi
+          shopt -s nullglob
+          files=(artifacts/mac/*)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "::warning::No Mac files for $TAG."
+          else
+            gh release upload "$TAG" "${files[@]}"
+          fi
 
       # One Velopack channel per architecture. An installed copy reads only its own channel's feed
       # (releases.win.json or releases.win-arm64.json) from the 10 newest published releases and

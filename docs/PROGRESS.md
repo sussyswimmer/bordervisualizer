@@ -704,8 +704,30 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M4 album-art colors: Music and Spotify through their distributed notifications; Music's cover by Apple event (only while Music runs), decoded to 64 × 64 BGRA and handed to Core's extractor; doc 05 §1's debounce and retry; the Windows tooltip text; the Color page's Now playing — branch `claude/mac-m4-album` — effort: M (notes below; Mac manual test pending)
 - [x] M5 system watchers: sleep and wake, displays asleep, lock, fast user switching, battery and Low Power Mode (Reduce at half scale and 30 fps, or Pause), the per-display full-screen pause, the Dock's room re-read, the tap rebuilt on wake — branch `claude/mac-m5-watchers` — effort: M (notes below; Mac manual test pending)
 - [x] M6 hotkey, login item, single instance: the global shortcut through Carbon (no Accessibility), parsed and formatted by the Windows `HotkeyGesture`; a recorder on the Behavior page; launch at login through SMAppService; one copy at a time (a lock file; a second launch opens Settings or starts the demo in the first) — branch `claude/mac-m6-shell` — effort: M (notes below; Mac manual test pending)
-- [ ] M7 packaging, notarization, updates
+- [x] M7 packaging and updates: `RimlightSetup.dmg` and the update zip from `build.sh` (ad hoc, per Q2); Sparkle 2 with an EdDSA-signed appcast as a release asset; "Check for Updates…" and AutoUpdate; Mac jobs in `release.yml` (H-031) — branch `claude/mac-m7-release` — effort: M (notes below; needs the update key from Maxwell, and a Mac manual test)
 - [ ] M8 README and docs
+
+### M7 notes
+
+- **Downloads:** `mac/build.sh` now also makes `artifacts/mac/RimlightSetup.dmg`: a compressed HFS+ image holding the app and an Applications shortcut, checked with `hdiutil verify`. The zip stays as Sparkle's update archive. `RIMLIGHT_VERSION` sets the version from the tag, as `pack.ps1 -Version` does on Windows.
+- **Updates (`Updater.swift`):**
+  - `SPUStandardUpdaterController`, started once the settings are applied.
+  - `automaticallyChecksForUpdates` and `automaticallyDownloadsUpdates` follow AutoUpdate, and `sendsSystemProfile` is off.
+  - The feed is `releases/latest/download/appcast.xml`. **Check for Updates…** is in the menu and on the About page.
+  - Without a public key in Info.plist there is no updater, no menu item, and the About page says the copy makes no network requests.
+- **Release workflow (Lane A file, H-031):**
+  - `mac-build` (macOS, no secrets) builds, tests and keeps the DMG and zip.
+  - `mac-appcast` (tag only, key set up) checks Sparkle's archive SHA-256, signs and writes `appcast.xml`.
+  - `publish` attaches the Mac files to the draft before it is published. A release without the key still ships the DMG.
+- **Why Sparkle works without a Developer ID:** Sparkle requires either a valid EdDSA signature or a matching code signature, not both (`SUUpdateValidator.m`, 2.x). An ad-hoc copy is checked by EdDSA alone. Sparkle's framework keeps its own signature, which is ad hoc too: its helpers have no Team ID, so its installer asks nothing of the app's signature, and the app has no hardened runtime, so library validation doesn't apply.
+- **Unverified until a real release:** an install from the DMG (Gatekeeper's Open Anyway), and an update from one tagged release to the next. Each update is a new ad-hoc identity, so macOS may ask for the system audio and Automation permissions again (§6, point 2).
+- **Key safety:** `appcast.sh` checks the new signature against `SPARKLE_PUBLIC_KEY` with CryptoKit (`mac/tools/verify-signature.swift`), and checks that the app in the zip carries that key. A key pair that doesn't match fails the release's Mac part rather than shipping copies that can never update. In that case the Mac files are left out of the release.
+- **The Windows release never waits on the Mac.** If the Mac build or appcast fails, the release goes out without the Mac files. The previous release's `appcast.xml` is carried forward, so `releases/latest/download/appcast.xml` keeps answering installed copies.
+- **Installs on quit:** a menu bar app that starts at login rarely quits, so a downloaded update may wait until the next restart or log out. That matches Windows, which applies on restart. Sparkle's gentle reminders are on, so a scheduled update's alert isn't lost behind other apps.
+- **Download counts:** GitHub counts each `appcast.xml` download, so that number roughly counts update checks. Nothing about the Mac is sent.
+- **Pinning:** `mac/Package.resolved` pins Sparkle's commit, and its manifest pins the framework zip's checksum.
+- **Review:** an independent review checked the work against Sparkle 2.10.0's source. Fixed after it: the key pair check, the release not waiting on the Mac, the appcast carried forward, the updater re-applied only when AutoUpdate changes, a quiet `sign_update` failure, and the signing wording.
+- **Tests:** `appcast.sh` with a stand-in signer gives valid XML; Swift `UpdaterTests` cover when a copy can update.
 
 ### M6 notes
 
@@ -934,6 +956,15 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
   - The header lists every status.
   - The intermediate publish folders moved out of `artifacts/`.
   - Kept: `rl_header_abi_version` (it is the C target's one source file), and the 512 px icon until M7 adds a 1024 px one.
+
+## Fix: a settings save that fails is tried again
+
+`SettingsFlowTests.ChangesAreSavedHalfASecondAfterTheLast` failed twice on Windows CI (runs 39194057907 and 39198227918, both on Mac PRs that touch no Windows code), and passed on the same commits otherwise.
+
+- **Cause:** `SettingsService.Flush` logged a failed save and dropped it, so the change waited for the next edit. On Windows a new file is often held for a moment by another process, an antivirus scan for one. The user's last change could then be lost until they changed something else, and the test waited for a file that never came.
+- **Fix:** a failed save keeps the change pending and is tried again after 1 s, up to 5 times. After that the next change tries again, as CORE-API §7.2 asks. Quitting still saves at once.
+- **New test:** `ASaveThatFailsIsTriedAgain`, with a store whose first two saves fail.
+- **Effort:** S.
 
 ## K0 notes
 

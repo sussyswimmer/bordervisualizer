@@ -315,6 +315,15 @@ Doc 05's quirks carry over: debounce 250 ms, retry once after 750 ms when the ar
      - **Stopgap:** sign with a self-made certificate kept as a CI secret. Its designated requirement survives updates. It doesn't help with point 1.
 - **Updates: Sparkle 2.** It's the standard Mac updater: an EdDSA-signed RSS appcast and delta updates, built by `generate_appcast` [3P: sparkle-project.org/documentation].
   - The appcast is a release asset, so the feed URL is `…/releases/latest/download/appcast.xml`. The check runs every 12 h and once at start-up after 30 s, and stays off when `AutoUpdate` is off (doc 06 §5). Sparkle's system-profile reporting stays off, so the update check is all that's sent.
+  - **As built (M7):**
+    - Sparkle 2.10.0 comes through SwiftPM (`Package.resolved` pins the commit), and `build.sh` copies `Sparkle.framework` into the app with Sparkle's own signature, which is ad hoc too.
+    - Ad-hoc signing is enough. Sparkle accepts an update when *either* its EdDSA signature or its code signature checks out (`SUUpdateValidator.m`), and the EdDSA signature always does.
+    - The release workflow's `mac-appcast` job signs the update zip with `sign_update` (the private key comes on stdin), and `mac/appcast.sh` writes a one-item appcast. There are no delta updates, since `generate_appcast` would need the earlier releases' files.
+    - Before signing, `appcast.sh` checks that the signature verifies with the public key and that the app carries that key. A release without its own appcast carries the previous one forward.
+    - A build without `SPARKLE_PUBLIC_KEY` (local and pull-request builds, or before Maxwell sets up the key: H-031) has no updater at all.
+    - The schedule is Sparkle's: every 12 h (`SUScheduledCheckInterval`), counted from the last check. That's close to, but not exactly, Windows' "30 s after start, then every 12 h".
+    - With AutoUpdate on, the update downloads in the background and installs when the app quits, as Velopack applies on restart. With it off, only **Check for Updates…** checks.
+    - **Known limit:** `sparkle:version` is the version without its prerelease part, so a copy on 1.1.0-beta.1 sees 1.1.0 as the same version and is only offered 1.1.1. Prereleases are never in the feed.
   - **Velopack was considered** because Windows uses it. It supports macOS `.app` bundles, signing, notarization and deltas, but makes a `.pkg` rather than a DMG, and its updater would need its C# SDK inside the NativeAOT library [3P: docs.velopack.io]. Sparkle is the Mac convention, and the Windows pipeline stays as it is.
 - **Architectures:** a universal binary (arm64 + x86_64) by default (Q3).
   - NativeAOT publishes each architecture and `lipo` joins them. Swift builds universal with `--arch arm64 --arch x86_64`.

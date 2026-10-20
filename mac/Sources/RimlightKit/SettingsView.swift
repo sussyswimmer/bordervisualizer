@@ -321,10 +321,21 @@ struct AboutPage: View {
                 Link("Source code on GitHub", destination: URL(string: "https://github.com/sussyswimmer/bordervisualizer")!)
                 Text("Free and open source under the MIT License.").foregroundStyle(.secondary)
             }
+            if let checkForUpdates = model.checkForUpdates {
+                Section {
+                    Toggle("Check for updates automatically", isOn: $model.settings.autoUpdate)
+                    Button("Check for Updates…") { checkForUpdates() }
+                } footer: {
+                    Text("Updates download in the background and install when \(Core.appName) quits.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Privacy") {
                 Text("Only your Mac's sound output is captured, through a system audio tap. The microphone is never opened.")
                 Text("Audio is analyzed in memory and immediately discarded. Nothing is recorded or saved.")
-                Text("No telemetry or analytics. This version makes no network requests.")
+                Text(model.checkForUpdates == nil
+                     ? "No telemetry or analytics. This copy makes no network requests."
+                     : "No telemetry or analytics. The only network request is the update check, to GitHub.")
             }
             Section {
                 Button("Show the Settings File in Finder") { AppPaths.revealSettingsFile() }

@@ -1,5 +1,25 @@
 # Handoff
 
+## [OPEN] H-031 · from: claude-code (macOS M7) · to: codex, maxwell · blocking: Mac updates (not the Mac download)
+**Need:**
+1. **Codex:** please review the Mac jobs in `.github/workflows/release.yml` (Lane A) that M7's PR adds.
+   - `mac-build` runs `mac/build.sh` with the tag's version and has no secrets.
+   - `mac-appcast` signs the update zip with Sparkle's `sign_update`, which comes from Sparkle's release archive pinned by SHA-256, and writes `appcast.xml`. It runs only for a tag, and only when the update key is set up.
+   - `publish` attaches `RimlightSetup.dmg`, `Rimlight-mac.zip` and `appcast.xml` while the release is still a draft.
+   - The Windows steps are unchanged, and `publish` still needs only `pack`. A failed Mac build or appcast leaves the Mac files out, and the previous `appcast.xml` is carried forward so installed Macs keep a feed.
+2. **Maxwell:** set up the Mac update key once, on your Mac. Without it, releases still carry the Mac download, but the Mac app is built with no updater and never checks.
+**Repro:** —
+**Proposed:** Maxwell, on your Mac in Terminal:
+1. Download `Sparkle-2.10.0.tar.xz` from github.com/sparkle-project/Sparkle/releases/tag/2.10.0 and double-click it to unpack.
+2. Run `./bin/generate_keys` in the unpacked folder. It saves the key in your keychain and prints the public key (a line ending in `=`).
+3. Run `./bin/generate_keys -x private-key.txt`.
+4. On GitHub, go to Settings › Secrets and variables › Actions:
+   - **Variables:** add `SPARKLE_PUBLIC_KEY` = the public key.
+   - **Secrets:** add `SPARKLE_PRIVATE_KEY` = the contents of `private-key.txt`.
+   - The release checks that the two halves match before shipping.
+5. Delete `private-key.txt`. The copy in your keychain is the backup: if the key is lost, installed copies can't update again.
+The key must be set before the first release that has Mac updates. Copies built without it never check for updates, so their users have to download the next version by hand.
+---
 ## [OPEN] H-030 · from: claude-code (macOS) · to: maxwell · blocking: none (Q0 and Q2 answered)
 **Need:** Six decisions for the Mac app (docs/10-MACOS.md §8): Q0 Swift over the shared C# Core, Q1 the minimum macOS, Q2 an Apple Developer account, Q3 universal or Apple silicon only, Q4 fetching Spotify's album art from Spotify's server, Q5 the private-API workaround for other players.
 **Repro:** docs/10-MACOS.md §8 has each option and why.
