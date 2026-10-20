@@ -15,6 +15,11 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     private static readonly Rgba8 MidGrey = new(128, 128, 128);
     private static readonly Rgba8 White = new(255, 255, 255);
 
+    // A grey image's glow stays below this chroma: no visible tint (Oklab's just-noticeable difference is about 0.02).
+    // These checks used Glow.NeutralChroma, which Maxwell's feedback raised from 0.03 to 0.05 for tinted greys; pure
+    // greys are still held to 0.03.
+    private const float GreyChroma = 0.03f;
+
     private readonly IPaletteExtractor extractor = CoreFactory.CreatePaletteExtractor();
 
     // ---- doc 05 §4 ----
@@ -114,7 +119,7 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         {
             var lch = Lch(color);
             output.WriteLine(lch.ToString());
-            Assert.True(lch.C < Glow.NeutralChroma, $"invented hue: {lch}");
+            Assert.True(lch.C < GreyChroma, $"invented hue: {lch}");
             Assert.InRange(lch.L, Glow.MinLightness - 1e-4f, Glow.MaxLightness + 1e-4f);
         }
     }
@@ -228,8 +233,8 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         output.WriteLine($"flat share {analysis.FlatShare:F3}");
         Assert.False(analysis.IsNoArt);
         var palette = Extract(image);
-        Assert.True(Lch(palette.Primary).C < Glow.NeutralChroma);
-        Assert.True(Lch(palette.Secondary).C < Glow.NeutralChroma);
+        Assert.True(Lch(palette.Primary).C < GreyChroma);
+        Assert.True(Lch(palette.Secondary).C < GreyChroma);
     }
 
     [Theory]
@@ -358,7 +363,7 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         // the grey would (0.141 to 0.188).
         var palette = Extract(ArtImage.Bands(64, 64, (MidGrey, 0.75f), (new Rgba8(0, 0, 255), 0.25f)));
         Assert.True(Lch(palette.Primary).C > 0.1f, $"primary {Lch(palette.Primary)}");
-        Assert.True(Lch(palette.Secondary).C < Glow.NeutralChroma, $"secondary {Lch(palette.Secondary)}");
+        Assert.True(Lch(palette.Secondary).C < GreyChroma, $"secondary {Lch(palette.Secondary)}");
     }
 
     [Fact]
@@ -495,33 +500,46 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(0.05f, 0.12f)]
-    [InlineData(0.022f, 0.022f)]
-    public void DullArtworkIsSaturatedUnlessGrayscale(float chroma, float expected)
+    [InlineData(0.10f, 0.12f)]    // clearly colored: the full raise
+    [InlineData(0.075f, 0.0975f)] // half way: half the raise
+    [InlineData(0.05f, 0.05f)]    // a tint: kept (raised to 0.12 until Maxwell's feedback, see below)
+    [InlineData(0.022f, 0.022f)]  // grayscale: kept
+    public void DullArtworkIsSaturatedOnlyAsFarAsItIsColored(float chroma, float expected)
     {
-        // A dusty rose shaded from L 0.5 to 0.8 (shaded, so the faint one isn't a flat "no art" image).
+        // A dusty rose shaded from L 0.5 to 0.8 (shaded, so the faint one isn't a flat "no art" image). Changed on
+        // purpose (Maxwell's feedback): chroma 0.05 was raised to 0.12, but a black-and-white cover's cool cast
+        // reaches 0.05 and then glowed blue, so a color now keeps its chroma up to Glow.NeutralChroma (0.05) and gets
+        // the full raise from Glow.ColorfulChroma (0.10), easing in between.
         var dusty = ArtImage.Create(64, 64, (x, _) => Rgba8.FromOklab(new OkLch(0.5f + 0.3f * x / 63f, chroma, 20f).ToOklab()));
         var palette = Extract(dusty);
         Assert.Equal(expected, Lch(palette.Primary).C, 4e-3f);
     }
 
-    // ---- "no art" (doc 05 §1): grayscale palette AND mostly one flat color ----
+    // ---- "no art" (doc 05 §1): essentially one flat color AND a nearly grayscale palette ----
+    // Changed on purpose (Maxwell's feedback): no art needed only 60 % of the image to be one flat color, so a
+    // black-and-white cover with text (about 80 % flat black) was no art and showed the manual colors. It now needs
+    // 98 %, a blank image or one with a speck, and a near-neutral palette means below chroma 0.05 (Glow.NeutralChroma)
+    // instead of 0.03. Each test below keeps its case, with the flat part above or below 98 % instead of 60 % and the
+    // tints around 0.05. BlackAndWhiteArtTests has the covers.
 
     [Fact]
-    public void GenericGreyAppIconIsNoArt()
+    public void GreyTileWithAWhiteGlyphIsArtAndGlowsNeutral()
     {
+        // Was GenericGreyAppIconIsNoArt. A 12.5 % glyph on a flat grey tile can't be told from a black-and-white
+        // cover with white text, which must glow neutral rather than show the manual colors.
         var icon = ArtImage.Create(64, 64, (x, y) => x is >= 24 and < 40 && y is >= 16 and < 48 ? White : new Rgba8(70, 70, 72));
-        Assert.Null(extractor.Extract(icon.Bgra, 64, 64, "t"));
+        var palette = Extract(icon);
+        Assert.True(Lch(palette.Primary).C < GreyChroma && Lch(palette.Secondary).C < GreyChroma, $"{Lch(palette.Primary)} / {Lch(palette.Secondary)}");
     }
 
     [Fact]
     public void FlatShareIsMeasuredAgainstTheLargestClusterNotPrimary()
     {
-        // A grey glyph (30 %, Primary: near-black sits at the fitness floor) on a flat near-black icon (70 %).
-        var image = ArtImage.Bands(64, 64, (new Rgba8(8, 8, 8), 0.7f), (MidGrey, 0.3f));
+        // A grey glyph (1.5 %, Primary: near-black sits at the fitness floor) on a flat near-black icon (98.5 %).
+        var image = ArtImage.Bands(64, 64, (new Rgba8(8, 8, 8), 0.985f), (MidGrey, 0.015f));
         var analysis = Analyze(image);
         Assert.True(Oklab.Distance(analysis.PrimarySource, MidGrey.ToOklab()) < 1e-4f, $"primary {analysis.PrimarySource}");
-        Assert.True(analysis.FlatShare >= 0.69f, $"flat share {analysis.FlatShare}");
+        Assert.True(analysis.FlatShare >= 0.98f, $"flat share {analysis.FlatShare}");
         Assert.True(analysis.IsNoArt);
         Assert.Null(extractor.Extract(image.Bgra, 64, 64, "t"));
     }
@@ -529,27 +547,30 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     [Fact]
     public void ColorfulFlatImageIsNotNoArt()
     {
-        var icon = ArtImage.Create(64, 64, (x, y) => x is >= 24 and < 40 && y is >= 16 and < 48 ? White : new Rgba8(200, 30, 60));
+        // A red tile with an 8 × 8 white glyph: flat enough for no art (98.4 %), but colorful. (The glyph was 16 × 32,
+        // which is no longer flat enough to show that the color is what makes it art.)
+        var icon = ArtImage.Create(64, 64, (x, y) => x is >= 28 and < 36 && y is >= 28 and < 36 ? White : new Rgba8(200, 30, 60));
+        Assert.True(Analyze(icon).FlatShare >= PaletteExtractor.MinFlatShare);
         Assert.NotNull(extractor.Extract(icon.Bgra, 64, 64, "t"));
     }
 
     [Theory]
-    [InlineData(0.022f, true)]
-    [InlineData(0.038f, false)]
+    [InlineData(0.042f, true)]
+    [InlineData(0.058f, false)]
     public void NoArtNeedsANearlyGrayscalePalette(float tint, bool noArt)
     {
-        // A flat 80 % background with a faint blue tint, and a white glyph.
+        // A flat 98.5 % background with a faint blue tint, and a small white glyph.
         var background = Rgba8.FromOklab(new OkLch(0.6f, tint, 250f).ToOklab());
-        var analysis = Analyze(ArtImage.Bands(64, 64, (background, 0.8f), (White, 0.2f)));
+        var analysis = Analyze(ArtImage.Bands(64, 64, (background, 0.985f), (White, 0.015f)));
         Assert.Equal(tint < PaletteExtractor.NoArtMaxChroma, analysis.PrimarySource.Chroma < PaletteExtractor.NoArtMaxChroma);
-        Assert.True(analysis.FlatShare >= 0.8f - 1e-3f);
+        Assert.True(analysis.FlatShare >= 0.985f - 1e-3f);
         Assert.Equal(noArt, analysis.IsNoArt);
     }
 
     [Theory]
-    [InlineData(0.55f, false)]
-    [InlineData(0.65f, true)]
-    public void NoArtNeedsAtLeast60PercentOneFlatColor(float flatShare, bool noArt)
+    [InlineData(0.97f, false)]
+    [InlineData(0.99f, true)]
+    public void NoArtNeedsAtLeast98PercentOneFlatColor(float flatShare, bool noArt)
     {
         // A flat light-grey area, and a dark grayscale gradient (L 0.1..0.4, far from the flat color) for the rest.
         var flat = new Rgba8(205, 205, 205);
@@ -572,14 +593,14 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     [InlineData(0.035f, false)]
     public void FlatMeansWithin003OfTheLargestCluster(float spread, bool noArt)
     {
-        // The "flat" background is two greys `spread` apart (36 % and 34 %) around a 30 % white glyph. Within the
-        // 0.03 tolerance they count as one flat color (70 %); beyond it, only the larger one does (36 %).
+        // The "flat" background is two greys `spread` apart (50 % and 48.5 %) around a 1.5 % white glyph. Within the
+        // 0.03 tolerance they count as one flat color (98.5 %); beyond it, only the larger one does (50 %).
         var lighter = Rgba8.FromOklab(new Oklab(0.4f + spread, 0, 0));
         var darker = Rgba8.FromOklab(new Oklab(0.4f, 0, 0));
         float measured = Oklab.Distance(lighter.ToOklab(), darker.ToOklab());
         Assert.True(MathF.Abs(measured - spread) < 0.003f, $"quantized spread {measured}");
 
-        var analysis = Analyze(ArtImage.Bands(64, 64, (darker, 0.36f), (lighter, 0.34f), (White, 0.30f)));
+        var analysis = Analyze(ArtImage.Bands(64, 64, (darker, 0.5f), (lighter, 0.485f), (White, 0.015f)));
         output.WriteLine($"spread {measured:F4}: flat share {analysis.FlatShare:F3}");
         Assert.Equal(noArt, analysis.IsNoArt);
     }
@@ -587,10 +608,10 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
     [Fact]
     public void GreyCoverWithAColoredMotifIsNotNoArt()
     {
-        // 85 % flat grey stays Primary (0.227 to 0.112), but the light teal motif (0.18 away, so it is Secondary)
+        // 98.5 % flat grey stays Primary (0.248 to 0.028), but the light teal motif (0.18 away, so it is Secondary)
         // makes the palette colorful.
         var teal = Rgba8.FromOklab(new OkLch(0.75f, 0.1f, 190f).ToOklab());
-        var analysis = Analyze(ArtImage.Bands(64, 64, (MidGrey, 0.85f), (teal, 0.15f)));
+        var analysis = Analyze(ArtImage.Bands(64, 64, (MidGrey, 0.985f), (teal, 0.015f)));
         Assert.True(analysis.PrimarySource.Chroma < PaletteExtractor.NoArtMaxChroma);
         Assert.True(analysis.FlatShare >= PaletteExtractor.MinFlatShare);
         Assert.False(analysis.IsNoArt);
@@ -604,9 +625,9 @@ public sealed class PaletteExtractorTests(ITestOutputHelper output)
         Assert.Equal(5, PaletteExtractor.ClusterCount);
         Assert.Equal(12, PaletteExtractor.MaxIterations);
         Assert.Equal(0.12f, PaletteExtractor.SecondaryMinDistance);
-        Assert.Equal(0.03f, PaletteExtractor.NoArtMaxChroma);
+        Assert.Equal(0.05f, PaletteExtractor.NoArtMaxChroma); // 0.03 until Maxwell's feedback
         Assert.Equal(0.03f, PaletteExtractor.FlatTolerance);
-        Assert.Equal(0.6f, PaletteExtractor.MinFlatShare);
+        Assert.Equal(0.98f, PaletteExtractor.MinFlatShare);   // 0.6 until Maxwell's feedback
     }
 
     // ---- helpers ----

@@ -65,13 +65,15 @@ public static class CoreFactory
     /// and both sizes positive, otherwise <see cref="ArgumentException"/>; <c>trackId</c> must not be null. Pixels with alpha
     /// below 128 are skipped, and images over 512 × 512 are sampled on a grid.</para>
     /// <para>Output: <see cref="Palette.Primary"/> and <see cref="Palette.Secondary"/> are linear RGB with every channel in
-    /// 0..1 (H-008), glow-ified in OkLCh: lightness 0.55..0.85 and chroma at least 0.12, reduced only where sRGB can't
-    /// hold it. A grayscale artwork color (chroma below 0.03) stays neutral and glows soft white.
-    /// <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
-    /// <para>Returns null for "no art" (doc 05 §1): when no pixel has alpha 128 or more, or when the palette is nearly
-    /// grayscale (Primary and Secondary below chroma 0.03 before glow-ify) and the image is mostly one flat color (at
-    /// least 60 % of the pixels within Oklab distance 0.03 of the largest cluster), as with a player's generic app
-    /// icon. Keep the previous palette, or the manual one, in that case.</para>
+    /// 0..1 (H-008), glow-ified in OkLCh: lightness 0.55..0.85, and chroma at least 0.12 for a clearly colored artwork
+    /// color (chroma 0.10 or more), reduced only where sRGB can't hold it. A near-neutral one (chroma up to 0.05: a grey,
+    /// or a black-and-white cover's faint cast) keeps its chroma and glows soft white or grey, and in between the raise
+    /// eases in. <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
+    /// <para>Returns null for "no art" (doc 05 §1): when no pixel has alpha 128 or more, or when the image is essentially
+    /// one flat color (at least 98 % of the pixels within Oklab distance 0.03 of the largest cluster) and the palette is
+    /// nearly grayscale (Primary and Secondary below chroma 0.05 before glow-ify), as with a blank thumbnail. A
+    /// black-and-white cover with text, or a generic icon with a glyph, is art and glows neutral. Keep the previous
+    /// palette, or the manual one, in that case.</para>
     /// <para>Deterministic, and the extractor holds no state, so calls may run on any thread, even concurrently. One
     /// call took about 1.5 ms for 64 × 64 and under 0.1 s for 512 × 512 on the Linux test machine: run it on the
     /// thread pool, never on the UI or render thread. Scratch comes from the shared array pool, which keeps it per
