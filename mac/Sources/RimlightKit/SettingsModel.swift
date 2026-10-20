@@ -23,7 +23,7 @@ final class SettingsModel: ObservableObject {
     }
     /// What's playing (M4), for the Color page.
     @Published private(set) var nowPlaying: NowPlayingService.Track?
-    /// Music refused the cover (Automation not allowed).
+    /// The player shown refused the cover (Automation not allowed).
     @Published private(set) var automationDenied = false
     /// The album colours the glow has (sRGB), or nil.
     @Published private(set) var albumColors: (Color, Color)?

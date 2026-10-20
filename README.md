@@ -43,7 +43,7 @@ Or let the album art pick the colors, which is the default.
 🎨 &nbsp;**Takes the colors** from the album art.<br>
 ✨ &nbsp;**Draws the glow** on your graphics card. Clicks go straight through.
 
-🔒 No tracking, and nothing leaves your PC except the update check.
+🔒 No tracking. The only network requests are the update check and, on a Mac, Spotify's album cover.
 
 <details>
 <summary><b>How it's built</b></summary>

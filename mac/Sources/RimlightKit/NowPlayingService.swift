@@ -4,10 +4,12 @@ import ImageIO
 import os
 
 /// What's playing, and the album colours (docs/10-MACOS.md §4.2). Music and Spotify announce track changes with
-/// distributed notifications, which need no permission. Music's cover is read with an Apple event, only on a track
-/// change and only while Music is running (an Apple event to a player that isn't running would launch it); that asks
-/// once for Automation permission ("control Music"). Spotify's cover would need a network fetch from Spotify's server,
-/// which Maxwell hasn't allowed (Q4), so Spotify and every other player get the manual colours.
+/// distributed notifications, which need no permission. The cover is read with an Apple event, only on a track change
+/// and only while that player is running (an Apple event to a player that isn't running would launch it); that asks
+/// once per player for Automation permission ("control Music", "control Spotify"). Music hands over the image itself.
+/// Spotify hands over only its address on Spotify's image server, so that one image is downloaded (Maxwell allowed it,
+/// Q4): from Spotify's own image hosts only, over HTTPS, with no cookies or cache, nothing else sent. Every other player
+/// gets the manual colours.
 ///
 /// Doc 05 §1's rules: a change is read 250 ms after the last event; a missing cover keeps the previous colours and is
 /// read once more after 750 ms, then the manual colours show. The state lives on one serial queue; the Apple events run
@@ -25,6 +27,18 @@ final class NowPlayingService: @unchecked Sendable {
 
     static let musicID = "com.apple.Music"
     static let spotifyID = "com.spotify.client"
+    private static let maxCoverBytes = 4 << 20
+
+    /// One ephemeral session for Spotify's covers: no cookies, no disk cache, no credentials.
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        configuration.timeoutIntervalForRequest = 5
+        configuration.timeoutIntervalForResource = 10
+        return URLSession(configuration: configuration)
+    }()
     private static let debounce = 0.25, coverRetry = 0.75
     private static let coverSize = 64 // doc 05 §1: decode to at most 64 x 64
 
@@ -40,10 +54,11 @@ final class NowPlayingService: @unchecked Sendable {
     private var shown: Track?
     private var coverFor: String?           // the track whose cover was last read
     private var pending = 0
-    private var automationDenied = false
+    private var automationDenied = false     // the shown player refused Automation
+    private var deniedBy: String?             // which one
     private var albumColorsWanted = false
 
-    /// `onChange(track, automationDenied)`: the track to show (nil: none) and whether Music refused the cover.
+    /// `onChange(track, automationDenied)`: the track to show (nil: none) and whether its player refused the cover.
     init(loop: CoreLoop, onChange: @escaping @MainActor (Track?, Bool) -> Void) {
         self.loop = loop
         self.onChange = onChange
@@ -132,8 +147,8 @@ final class NowPlayingService: @unchecked Sendable {
         let pick = candidates.first { $0.1.isPlaying } ?? candidates.first
         var changed = pick?.1 != shown
         shown = pick?.1
-        if automationDenied && pick?.0 != Self.musicID {
-            automationDenied = false // only Music's covers need Automation
+        if automationDenied && pick?.0 != deniedBy {
+            automationDenied = false // the warning is about the player that refused
             changed = true
         }
         if changed { publish() }
@@ -143,31 +158,40 @@ final class NowPlayingService: @unchecked Sendable {
             return
         }
         let (bundleID, track) = pick
-        guard track.id != coverFor else { return }
-        if bundleID == Self.musicID {
-            guard albumColorsWanted else { return }
-            coverFor = track.id
-            readCover(of: track, retry: true)
-        } else {
-            coverFor = track.id
-            log.info("\(track.app, privacy: .public) gives no cover: the manual colors show")
-            clearColors() // Spotify: no cover without a network fetch (10-MACOS Q4)
-        }
+        guard track.id != coverFor, albumColorsWanted else { return }
+        coverFor = track.id
+        readCover(of: track, from: bundleID, retry: true)
     }
 
-    private func readCover(of track: Track, retry: Bool) {
-        guard coverFor == track.id, albumColorsWanted, Self.isRunning(Self.musicID) else { return }
+    private func readCover(of track: Track, from bundleID: String, retry: Bool) {
+        guard coverFor == track.id, albumColorsWanted, Self.isRunning(bundleID) else { return }
         events.async { [self] in
-            let cover = Self.musicCover(title: track.title, log: log)
-            queue.async { [self] in useCover(cover, of: track, retry: retry) }
+            if bundleID == Self.musicID {
+                let cover = Self.musicCover(title: track.title, log: log)
+                queue.async { [self] in useCover(cover, of: track, from: bundleID, retry: retry) }
+                return
+            }
+            switch Self.spotifyCoverURL(title: track.title, log: log) {
+            case .denied:
+                queue.async { [self] in useCover(.denied, of: track, from: bundleID, retry: retry) }
+            case .missing:
+                queue.async { [self] in useCover(.missing, of: track, from: bundleID, retry: retry) }
+            case .url(let url):
+                Self.download(url, log: log) { [self] data in
+                    queue.async { [self] in
+                        useCover(data.map(Cover.data) ?? .missing, of: track, from: bundleID, retry: retry)
+                    }
+                }
+            }
         }
     }
 
-    private func useCover(_ cover: Cover, of track: Track, retry: Bool) {
+    private func useCover(_ cover: Cover, of track: Track, from bundleID: String, retry: Bool) {
         guard coverFor == track.id else { return } // another track meanwhile
         switch cover {
         case .denied:
             automationDenied = true
+            deniedBy = bundleID
             coverFor = nil // read again once allowed (recheck)
             clearColors()
         case .data(let data):
@@ -185,7 +209,9 @@ final class NowPlayingService: @unchecked Sendable {
         case .missing:
             // The cover often arrives late (doc 05 §1): keep the colours and read once more, then the manual ones.
             if retry {
-                queue.asyncAfter(deadline: .now() + Self.coverRetry) { [self] in readCover(of: track, retry: false) }
+                queue.asyncAfter(deadline: .now() + Self.coverRetry) { [self] in
+                    readCover(of: track, from: bundleID, retry: false)
+                }
             } else {
                 clearColors()
             }
@@ -270,6 +296,62 @@ final class NowPlayingService: @unchecked Sendable {
         guard state != "stopped" else { return nil }
         return Track(title: result.atIndex(1)?.stringValue, artist: result.atIndex(2)?.stringValue, app: "Music",
                      isPlaying: state == "playing")
+    }
+
+    // MARK: - Spotify's cover
+
+    private enum CoverURL {
+        case url(URL)
+        case missing
+        case denied
+    }
+
+    private static let spotifyScript = NSAppleScript(source: """
+        if application id "com.spotify.client" is not running then return missing value
+        with timeout of 3 seconds
+            tell application id "com.spotify.client"
+                if player state is stopped then return missing value
+                return {name of current track, artwork url of current track}
+            end tell
+        end timeout
+        """)
+
+    /// The address of Spotify's current cover, if it still plays `title`.
+    private static func spotifyCoverURL(title: String?, log: Logger) -> CoverURL {
+        var error: NSDictionary?
+        guard let result = spotifyScript?.executeAndReturnError(&error) else {
+            let code = error?[NSAppleScript.errorNumber] as? Int
+            let message = error?[NSAppleScript.errorMessage] as? String ?? ""
+            log.notice("Spotify's cover couldn't be read: \(code ?? 0) \(message, privacy: .public)")
+            return code == -1743 ? .denied : .missing
+        }
+        guard result.numberOfItems == 2, let text = result.atIndex(2)?.stringValue,
+              let url = URL(string: text), isSpotifyImage(url) else {
+            log.info("Spotify has no cover address for this track")
+            return .missing
+        }
+        if let title, let playing = result.atIndex(1)?.stringValue, playing != title { return .missing }
+        return .url(url)
+    }
+
+    /// Only Spotify's own image hosts, over HTTPS: the address comes from another app, so nothing else is fetched.
+    static func isSpotifyImage(_ url: URL) -> Bool {
+        guard url.scheme == "https", let host = url.host?.lowercased(), url.user == nil else { return false }
+        return host == "i.scdn.co" || host.hasSuffix(".scdn.co") || host.hasSuffix(".spotifycdn.com")
+    }
+
+    /// Downloads one cover; nil on any failure. Calls back on a URLSession queue.
+    private static func download(_ url: URL, log: Logger, done: @escaping @Sendable (Data?) -> Void) {
+        var request = URLRequest(url: url)
+        request.httpShouldHandleCookies = false
+        session.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard error == nil, status == 200, let data, !data.isEmpty, data.count <= NowPlayingService.maxCoverBytes else {
+                log.notice("Spotify's cover couldn't be downloaded (HTTP \(status))")
+                return done(nil)
+            }
+            done(data)
+        }.resume()
     }
 
     /// A cover to at most 64 x 64 BGRA8 pixels, as Core's extractor takes it (doc 05 §1).

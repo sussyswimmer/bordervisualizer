@@ -711,7 +711,7 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 
 - **What he saw:** a black-and-white song glowed light and dark blue. Those are the default manual colours (#7C5CFF / #22D3EE), so no cover was used.
   - Core's fix from PR #32 (05a621f) is merged into the stack, so in Music a black-and-white cover now glows soft white and grey, as on Windows. The Mac calls the same extractor through `rl_album_art`.
-  - Spotify and browsers give the Mac no cover at all: Spotify only offers a web address for its artwork (Q4: a network fetch, which needs Maxwell's yes), and browsers would need a private API (Q5: no).
+  - Maxwell was playing from **Spotify**, which gives the Mac only a web address for its cover. He said yes to fetching it (Q4), so the Mac now asks Spotify for `artwork url` by Apple event (Automation, "control Spotify") and downloads it from Spotify's image hosts only: HTTPS, an ephemeral session, a 4 MB cap, a retry after 0.75 s, then the manual colours. Browsers still give no cover (they would need a private API, Q5: no).
 - **Music:**
   - The cover is read with `raw data` and, for streamed tracks that lack it, `data` as a fallback.
   - Every failure is now logged with its reason (Automation refused, no cover, not decodable, blank), so `log show` tells which one it was.
