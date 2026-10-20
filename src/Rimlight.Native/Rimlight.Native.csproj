@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Mac app's bridge to Core (docs/10-MACOS.md §1): Core and the Windows-free per-frame code, published with
+       NativeAOT as one self-contained shared library that the Swift app calls through a small C ABI (Exports.cs).
+       net10.0 (supported to Nov 2028) over Core's net8.0. Not in Rimlight.sln or Rimlight.Core.slnf: only the macOS CI
+       job builds it. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Trim and AOT analysis at build time, so an AOT-unsafe call fails the build like any other warning. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <PublishAot>true</PublishAot>
+    <NativeLib>Shared</NativeLib>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rimlight.Native.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Rimlight.Core/Rimlight.Core.csproj" />
+  </ItemGroup>
+</Project>

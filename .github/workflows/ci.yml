@@ -133,3 +133,51 @@ jobs:
 
       - name: Test
         run: dotnet test Rimlight.sln -c Release --no-build
+
+  macos:
+    # The native Mac app (docs/10-MACOS.md): Swift over Core compiled with NativeAOT. Its own job, on pull requests
+    # and on demand, so the Linux and Windows jobs and Rimlight.Core.slnf stay as they are. It tests the C# bridge
+    # (JIT), builds the universal app with warnings as errors (mac/build.sh), runs the Swift tests against the AOT
+    # library, and uploads the zipped, ad-hoc-signed app for a manual run.
+    name: Mac app (macOS)
+    if: github.event_name != 'push'
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-mac-${{ hashFiles('**/*.csproj', '**/Directory.*.props') }}
+          restore-keys: nuget-${{ runner.os }}-mac-
+
+      - name: Show the tools
+        run: |
+          dotnet --version
+          xcodebuild -version
+          swift --version
+
+      - name: Test the Core bridge
+        run: dotnet test src/Rimlight.Native.Tests -c Release
+
+      - name: Build the app (universal)
+        run: mac/build.sh
+
+      - name: Test the Swift package
+        run: swift test --package-path mac -Xswiftc -warnings-as-errors -Xcc -Werror
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-app
+          path: artifacts/mac/*-mac.zip
+          if-no-files-found: error

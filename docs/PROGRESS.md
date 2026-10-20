@@ -692,6 +692,46 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] README cut to a short landing page at Maxwell's request ("no one wants to read this much"): an animated header with a wave bar (`assets/header.svg`, `footer.svg`), an 8 s preview and four looks rendered by the real beat engine through a port of `Glow.hlsl` (`tools/readme-art/`), and the FAQ collapsed. Replaces doc 08's longer layout. — effort: S
 - [x] Black-and-white covers glow soft white and grey instead of the manual colors or an invented blue (Maxwell: "a song that is white and black ... put light blue and dark blue"). Near-neutral colors keep their chroma up to 0.05, and only a blank image counts as no art. Muted covers (chroma 0.05–0.10) now glow paler. `wip/bw-album-colors` 05a621f, HANDOFF H-027. — effort: S
 
+## macOS (Claude Code)
+
+The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with NativeAOT. Milestones M0–M8 are in 10-MACOS §7.
+
+- [x] Design: docs/10-MACOS.md, researched against Apple's and Microsoft's documentation on 2026-10-19; HANDOFF H-029 (Lane A items) and H-030 (Maxwell's decisions) — branch `claude/mac-m0-design` — effort: M
+- [x] M0 skeleton + macOS CI job: `src/Rimlight.Native` (C ABI: ABI version, name, version, settings load and save), its tests, the Swift package (`mac/`), `mac/build.sh` (universal, ad-hoc signed, zipped), the `macos` job in ci.yml — branch `claude/mac-m0-skeleton` — effort: M (notes below; Mac manual test pending)
+- [ ] M1 glow on every display with the demo beat
+- [ ] M2 system audio → Core → glow
+- [ ] M3 menu bar, Settings, saved settings
+- [ ] M4 album-art colors
+- [ ] M5 system watchers
+- [ ] M6 hotkey, login item, single instance
+- [ ] M7 packaging, notarization, updates
+- [ ] M8 README and docs
+
+### M0 notes
+
+- **Answers:** Maxwell said "Just build it, no app developer": Swift (Q0) and no Apple Developer account (Q2). The app is signed ad hoc: no hardened runtime yet, since that needs a Developer ID to be useful.
+- **Verified on Linux:**
+  - `dotnet test src/Rimlight.Native.Tests -c Release`: 11 passed.
+  - A NativeAOT publish for linux-x64: no trimming or AOT warnings, a 2.7 MB library exporting the five `rl_*` functions.
+  - A C program compiled against `rimlight_core.h` with `-Wall -Wextra -Werror` called every export through the published library.
+  - The Swift code, the bundle and the Mac publish can only be checked on the macOS job.
+- **Bug found by the C smoke test, fixed before the PR:** saving settings JSON that left a field out turned it off. `{"glow":0.7}` saved `"enabled": false`, because the JSON source generator sets every init-only property of a record and gives a missing one its type's default. The transport now lays the given fields over the serialized defaults first (`FieldsLeftOutKeepTheirDefaults`).
+- **Choices** (simplest, per CLAUDE.md):
+  - Settings cross the ABI as JSON in the file's own format, not a struct (10-MACOS §1.3, changed from the design's sketch). Core's JSON and validator are internal, and a struct can't carry the monitor-ID list simply.
+  - The Swift package links libRimlightCore at build time. `build.sh` builds it first into `mac/.build-core`.
+  - The bundle ID is `io.github.sussyswimmer.` followed by the lower-case `<AppName>`.
+- **CI:** the `macos` job runs on pull requests and `workflow_dispatch` only (not on pushes to main), on `macos-26`.
+- **First macOS run (workflow_dispatch, run 39193560386):** green on the first try, with all three jobs passing. The universal build had zero warnings, the 6 Swift tests passed against the AOT library, and the zipped app is 3.0 MB.
+- **Independent review:** no blockers. Fixed:
+  - `Utf8Text.Read` now uses `CreateReadOnlySpanFromNullTerminated`, which can't read past a page.
+  - Each export has its own try/catch: the shared delegate allocated a closure per call, which M1's per-frame calls must not do.
+  - `build.sh` fails if the development rpath survives in the bundled app.
+  - `CFBundleVersion` drops any prerelease suffix.
+  - "Open Settings Folder" creates the folder first.
+  - The header lists every status.
+  - The intermediate publish folders moved out of `artifacts/`.
+  - Kept: `rl_header_abi_version` (it is the C target's one source file), and the 512 px icon until M7 adds a 1024 px one.
+
 ## K0 notes
 
 - Contracts are defined by doc 09 §3; source specs are unchanged. `AudioTuning` and `AnalyzerDiagnostics` are data containers, not DSP implementations. Doc 03 does not specify a numeric `minFlux`; K0 uses a provisional 0.01 pending C2 tuning.
