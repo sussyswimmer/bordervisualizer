@@ -27,16 +27,24 @@ public sealed class GlowTests(ITestOutputHelper output)
     [Theory]
     [InlineData(0.000f, 0.000f)]
     [InlineData(0.020f, 0.020f)]
-    [InlineData(0.029f, 0.029f)] // just under NeutralChroma: grayscale, never given a hue
-    [InlineData(0.031f, 0.120f)] // just over: raised to MinChroma
-    [InlineData(0.050f, 0.120f)]
+    [InlineData(0.040f, 0.040f)]    // a black-and-white cover's cool cast: kept, a soft white or grey
+    [InlineData(0.050f, 0.050f)]    // NeutralChroma: the last chroma kept as it is
+    [InlineData(0.060f, 0.06624f)]  // the raise eases in: 0.06 + 0.06 × smoothstep(0.2)
+    [InlineData(0.075f, 0.0975f)]   // half way: half the raise
+    [InlineData(0.090f, 0.11688f)]
+    [InlineData(0.100f, 0.120f)]    // ColorfulChroma: the full raise to MinChroma
+    [InlineData(0.110f, 0.120f)]
     [InlineData(0.120f, 0.120f)]
-    [InlineData(0.180f, 0.180f)] // already vivid: kept
-    public void ChromaIsRaisedToAtLeast012UnlessGrayscale(float chroma, float expected)
+    [InlineData(0.180f, 0.180f)]    // already vivid: kept
+    public void ChromaIsKeptWhenNearNeutralAndRaisedTo012WhenColored(float chroma, float expected)
     {
+        // Changed on purpose (Maxwell's feedback): every chroma from 0.03 on was raised to 0.12, so a black-and-white
+        // cover with a slight cool cast (0.03–0.05) glowed blue; 0.029 was kept and 0.031 jumped to 0.12. Now chroma
+        // is kept up to 0.05 and the raise eases in to its full size at 0.10.
         var source = new OkLch(0.7f, chroma, 30f);
         var target = Glow.Target(source.ToOklab());
         Assert.Equal(expected, target.C, 1e-5f);
+        Assert.Equal(expected, Glow.TargetChroma(chroma), 1e-5f);
         // All of these fit sRGB at L = 0.7, hue 30°, so the light keeps that chroma and the source hue.
         var light = Oklab.FromLinearSrgb(Glow.ToLight(source.ToOklab())).ToLch();
         Assert.Equal(expected, light.C, 2e-4f);
@@ -44,9 +52,28 @@ public sealed class GlowTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void TheRaiseEasesInWithNoJump()
+    {
+        // Non-decreasing, never below the input, and never steeper than about 2.2 (its steepest, at 0.065): a
+        // slightly stronger tint gets a slightly stronger glow. The old rule jumped by 0.09 at chroma 0.03.
+        const float step = 0.0005f;
+        float steepest = 0;
+        for (float c = 0; c < 0.2f; c += step)
+        {
+            float here = Glow.TargetChroma(c), next = Glow.TargetChroma(c + step);
+            Assert.True(here >= c, $"{c} lowered to {here}");
+            Assert.True(next >= here, $"falls between {c} and {c + step}");
+            steepest = MathF.Max(steepest, (next - here) / step);
+        }
+        output.WriteLine($"steepest slope {steepest:F3}");
+        Assert.InRange(steepest, 2f, 2.2f);
+    }
+
+    [Fact]
     public void ThresholdsAreTheDocumentedOnes()
     {
-        Assert.Equal(0.03f, Glow.NeutralChroma);
+        Assert.Equal(0.05f, Glow.NeutralChroma);  // 0.03 until Maxwell's feedback
+        Assert.Equal(0.10f, Glow.ColorfulChroma); // new with it
         Assert.Equal(0.12f, Glow.MinChroma);
         Assert.Equal(0.55f, Glow.MinLightness);
         Assert.Equal(0.85f, Glow.MaxLightness);

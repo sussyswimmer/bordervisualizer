@@ -17,7 +17,7 @@ namespace Rimlight.Platform.Media;
 /// one; if several play, Windows' current one) and reads its title and artist. Its thumbnail is read for a new track
 /// and again whenever the properties change (the cover can arrive after the title), not on play/pause: decoded to at
 /// most 64×64, and a picture not shown yet goes to the extractor. Without a usable cover (no thumbnail, or one the
-/// extractor calls "no art", a generic app icon) the previous colors stay and the track is read once more after
+/// extractor calls "no art", a blank picture) the previous colors stay and the track is read once more after
 /// 750 ms; if it still has none, <see cref="AlbumPalette"/> becomes null. A read that fails is tried once more after
 /// 750 ms. Without events a refresh still runs every 30 s, so a session manager whose process went away (an Explorer
 /// restart) is noticed; it is then requested again every 5 s.</para>
@@ -81,7 +81,7 @@ public sealed class NowPlayingService : IDisposable
 
     /// <summary>
     /// The colors of the current track's cover art, or null when there is no session, no art (no thumbnail, or a
-    /// generic app icon) or media sessions are unavailable: the glow then uses the manual colors. After a track change
+    /// blank picture) or media sessions are unavailable: the glow then uses the manual colors. After a track change
     /// the previous track's palette stays until the new one is known. Read by the render thread every frame.
     /// </summary>
     public Palette? AlbumPalette => Volatile.Read(ref albumPalette);
@@ -388,7 +388,7 @@ public sealed class NowPlayingService : IDisposable
         Palette? palette = decoded is null ? null : Extract(decoded);
         if (palette is null)
         {
-            // No usable cover: no thumbnail, one that won't decode, or a generic app icon (the extractor's "no art").
+            // No usable cover: no thumbnail, one that won't decode, or a blank picture (the extractor's "no art").
             // The cover often arrives late (doc 05 §1): keep the previous colors and read once more 750 ms after first
             // finding none. After that the track has no art, and the manual colors show.
             long now = Stopwatch.GetTimestamp();
