@@ -30,7 +30,7 @@ final class LoopBridgeTests: XCTestCase {
         for _ in 0..<30 {
             rl_loop_apply_inputs(loop.handle, now)
             var info = RlFrameInfo()
-            XCTAssertEqual(rl_loop_begin_frame(loop.handle, 1.0 / 60, nil, 0, 0, &info), RL_OK)
+            XCTAssertEqual(rl_loop_begin_frame(loop.handle, 1.0 / 60, nil, 0, 0, 0, &info), RL_OK)
             XCTAssertEqual(info.demo, 1)
             XCTAssertNotNil(rl_loop_gradient(loop.handle))
             for index in 0..<2 {

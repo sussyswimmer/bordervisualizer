@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 2
+#define RL_ABI_VERSION 3
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -124,9 +124,11 @@ int32_t rl_loop_apply_inputs(RlLoop loop, double nowSeconds);
 int32_t rl_loop_input_waits(RlLoop loop, int32_t pace, double elapsedSeconds);
 /// The time step for a frame elapsedSeconds after the last; frameDue 0 when an input brought it forward.
 float rl_loop_frame_dt(RlLoop loop, double elapsedSeconds, int32_t frameDue);
-/// Starts a frame. samples: mono audio drained since the last frame (count 0 for none) at sampleRate.
+/// Starts a frame. samples: mono audio drained since the last frame (count 0 for none) at sampleRate (0 while
+/// nothing is captured). captureGeneration changes whenever the capture opens, closes or restarts: the analysis
+/// starts over.
 int32_t rl_loop_begin_frame(RlLoop loop, float dt, const float *samples, int32_t count, int32_t sampleRate,
-                            RlFrameInfo *info);
+                            int32_t captureGeneration, RlFrameInfo *info);
 /// The 64 RGBA float texels of the palette gradient (linear RGB); the pointer stays valid for the loop's life.
 const float *rl_loop_gradient(RlLoop loop);
 /// What to do with surface index this frame (RL_SURFACE_*), and the constants to draw it with.

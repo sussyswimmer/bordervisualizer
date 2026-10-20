@@ -217,13 +217,14 @@ internal static unsafe partial class Exports
     }
 
     [UnmanagedCallersOnly(EntryPoint = "rl_loop_begin_frame")]
-    public static int LoopBeginFrame(nint loop, float dt, float* samples, int count, int sampleRate, FrameInfo* info)
+    public static int LoopBeginFrame(nint loop, float dt, float* samples, int count, int sampleRate,
+        int captureGeneration, FrameInfo* info)
     {
         try
         {
             if (Loop(loop) is not { } l || info == null || count < 0 || (samples == null && count > 0))
                 return NativeStatus.InvalidArgument;
-            *info = l.BeginFrame(dt, new ReadOnlySpan<float>(samples, count), sampleRate);
+            *info = l.BeginFrame(dt, new ReadOnlySpan<float>(samples, count), sampleRate, captureGeneration);
             return NativeStatus.Ok;
         }
         catch (Exception)

@@ -44,7 +44,7 @@ internal sealed class MacGlowSource
     private int demoPalette;
     private Settings? demoSource;
     private Settings? demoSettings;
-    private int lastSampleRate = FallbackSampleRate;
+    private int captureGeneration = -1;
 
     public MacGlowSource(Settings settings)
     {
@@ -69,11 +69,13 @@ internal sealed class MacGlowSource
     public void PublishAlbum(Palette? palette) => Volatile.Write(ref publishedAlbum, palette);
 
     /// <summary>
-    /// One frame. <paramref name="samples"/>: mono samples drained from the audio ring since the last frame (empty
-    /// when nothing is captured), at <paramref name="sampleRate"/> (0 when unknown).
+    /// One frame. <paramref name="samples"/>: mono samples drained from the audio ring since the last frame, at
+    /// <paramref name="sampleRate"/> (0 while nothing is captured). <paramref name="captureGeneration"/> changes
+    /// whenever the capture opens, closes or restarts on another device or format: the analysis starts over, as the
+    /// Windows app's does on a new <c>LoopbackCapture.Current</c>.
     /// </summary>
     public OverlayFrame NextFrame(float dtSeconds, Settings settings, bool paused, Span<float> gradient,
-        ReadOnlySpan<float> samples, int sampleRate)
+        ReadOnlySpan<float> samples, int sampleRate, int captureGeneration)
     {
         if (!ReferenceEquals(settings, applied)) ApplySettings(settings);
 
@@ -90,14 +92,13 @@ internal sealed class MacGlowSource
         bool listen = !demo && settings.Enabled && settings.Animation == AnimationMode.MusicSync && !paused;
         Listening = listen;
 
-        // A new capture format starts the analysis over, as a new device does on Windows.
-        int rate = sampleRate > 0 ? sampleRate : lastSampleRate;
-        if (rate != lastSampleRate)
+        if (captureGeneration != this.captureGeneration)
         {
-            lastSampleRate = rate;
+            this.captureGeneration = captureGeneration;
             analyzer.Reset();
         }
-        AudioFeatures features = analyzer.Process(listen ? samples : [], rate, dtSeconds);
+        int rate = sampleRate > 0 ? sampleRate : FallbackSampleRate;
+        AudioFeatures features = analyzer.Process(samples, rate, dtSeconds);
         silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
 
         AudioFeatures heard = listen ? features : Silence;
