@@ -76,6 +76,7 @@ internal sealed class MacOverlayLoop
     private bool appliedAudioWanted;
     private double refreshHz = FramePacer.DefaultRefreshHz;
     private bool onBattery;
+    private bool lowPower;
     private bool configured;
 
     private OverlayFrame frame;
@@ -147,11 +148,16 @@ internal sealed class MacOverlayLoop
         pacer.NoteInputChanged(nowSeconds);
     }
 
-    /// <summary>The main screen's refresh rate (0 when unknown) and whether the Mac runs on battery.</summary>
-    public void SetDisplay(double refreshHz, bool onBattery)
+    /// <summary>
+    /// The main screen's refresh rate (0 when unknown), whether the Mac runs on battery, and whether Low Power Mode is
+    /// on. On battery the OnBattery setting applies (Normal, Reduce, Pause); Low Power Mode always reduces (30 fps at
+    /// half scale, 10-MACOS §5) and never pauses.
+    /// </summary>
+    public void SetDisplay(double refreshHz, bool onBattery, bool lowPower = false)
     {
         this.refreshHz = refreshHz;
         this.onBattery = onBattery;
+        this.lowPower = lowPower;
         configured = false;
     }
 
@@ -312,7 +318,7 @@ internal sealed class MacOverlayLoop
         };
     }
 
-    private bool Reduced => OverlayRules.Reduced(applied, onBattery);
+    private bool Reduced => OverlayRules.Reduced(applied, onBattery) || lowPower;
 
     private bool PausedEverywhere()
     {

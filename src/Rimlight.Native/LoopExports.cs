@@ -161,12 +161,12 @@ internal static unsafe partial class Exports
     }
 
     [UnmanagedCallersOnly(EntryPoint = "rl_loop_set_display")]
-    public static int LoopSetDisplay(nint loop, double refreshHz, int onBattery)
+    public static int LoopSetDisplay(nint loop, double refreshHz, int onBattery, int lowPower)
     {
         try
         {
             if (Loop(loop) is not { } l) return NativeStatus.InvalidArgument;
-            l.SetDisplay(refreshHz, onBattery != 0);
+            l.SetDisplay(refreshHz, onBattery != 0, lowPower != 0);
             return NativeStatus.Ok;
         }
         catch (Exception)

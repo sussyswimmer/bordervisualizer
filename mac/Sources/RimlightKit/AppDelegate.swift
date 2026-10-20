@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var model: SettingsModel?
     private var settingsWindow: SettingsWindowController?
     private var media: NowPlayingService?
+    private var watcher: SystemWatcher?
 
     // Menu items whose state follows the settings (menuNeedsUpdate).
     private var glowItem: NSMenuItem?
@@ -68,6 +69,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         media.start()
         media.setAlbumColorsWanted(model.usesAlbumColors)
         self.media = media
+
+        // System events (M5): sleep, displays, lock, power, full-screen windows.
+        let watcher = SystemWatcher(
+            callbacks: .init(
+                paused: { [weak self] paused in
+                    self?.loop?.setPaused(paused)
+                    self?.overlays?.settingsChanged()
+                },
+                power: { [weak self] battery, lowPower in
+                    self?.overlays?.setPower(onBattery: battery, lowPower: lowPower)
+                },
+                fullscreen: { [weak self] displays in self?.overlays?.setFullscreen(displays) },
+                woke: { [weak self] in
+                    self?.overlays?.wake()
+                    self?.tap?.restartAfterWake()
+                },
+                tick: { [weak self] in self?.overlays?.checkLayout() }),
+            screens: { [weak self] in self?.overlays?.overlaidScreens ?? [] },
+            checksFullscreen: { [weak self] in
+                guard let settings = self?.model?.settings else { return false }
+                return settings.pauseInFullscreen && settings.enabled && settings.animation != "Off"
+            })
+        watcher.start()
+        self.watcher = watcher
 
         NSApp.mainMenu = Self.makeMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -177,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func settingsChanged() {
         overlays?.settingsChanged()
         if let model { media?.setAlbumColorsWanted(model.usesAlbumColors) }
+        watcher?.recheck() // "Pause in full-screen apps" applies at once
         updateStatusItem()
     }
 

@@ -2,17 +2,22 @@ import AppKit
 import CRimlight
 import QuartzCore
 
-/// Makes one overlay per chosen screen and keeps them in step with the displays and the settings (main thread). The
-/// render thread draws them.
+/// Makes one overlay per chosen screen and keeps them in step with the displays, the settings and the power state
+/// (main thread). The render thread draws them.
 @MainActor
 final class OverlayController {
     private let loop: CoreLoop
     private let metal: MetalGlow
     private let render: RenderThread
     private var panels: [OverlayPanel] = []
+    private var screenIDs: [String] = []       // the overlays' displays, in surface order
     private var layoutKey = ""
     private var rebuildPending = false
     private var observer: NSObjectProtocol?
+    private var onBattery = false              // on battery (M5)
+    private var lowPower = false               // Low Power Mode (M5)
+    private var refreshHz: Double = 60
+    private var fullscreen: Set<String> = []   // displays a full-screen window covers (M5)
 
     init(loop: CoreLoop, metal: MetalGlow, tap: SystemAudioTap?) {
         self.loop = loop
@@ -33,6 +38,54 @@ final class OverlayController {
         rebuild()
     }
 
+    /// On battery the OnBattery setting applies (Reduce: 30 fps at half scale; Pause); Low Power Mode always reduces
+    /// (10-MACOS §5). Only a change of render scale makes new windows; otherwise the glow carries on unbroken.
+    func setPower(onBattery: Bool, lowPower: Bool) {
+        guard onBattery != self.onBattery || lowPower != self.lowPower else { return }
+        let scaleBefore = renderScale
+        self.onBattery = onBattery
+        self.lowPower = lowPower
+        if renderScale != scaleBefore {
+            rebuild(force: true)
+        } else {
+            render.setDisplay(refreshHz: refreshHz, onBattery: onBattery, lowPower: lowPower)
+        }
+    }
+
+    /// Half render scale (doc 04 §2) under "Reduce on battery" or Low Power Mode. The layer stretches the smaller
+    /// drawable back.
+    private var renderScale: CGFloat {
+        let reduce = loop.settings?.onBattery == "Reduce"
+        return (onBattery && reduce) || lowPower ? 0.5 : 1
+    }
+
+    /// Displays (by UUID) that a full-screen window covers: the glow fades out there (doc 04 §4) and keeps its window.
+    func setFullscreen(_ displays: Set<String>) {
+        guard displays != fullscreen else { return }
+        fullscreen = displays
+        let paused = screenIDs.map { displays.contains($0) }
+        render.setSurfacesPaused(paused)
+    }
+
+    /// The overlaid displays, with their frames and the notch's height, for the full-screen check.
+    var overlaidScreens: [SystemWatcher.Display] {
+        NSScreen.screens.compactMap { screen in
+            guard let id = Self.uuid(of: screen), screenIDs.contains(id) else { return nil }
+            return SystemWatcher.Display(id: id, frame: screen.frame, topInset: screen.safeAreaInsets.top)
+        }
+    }
+
+    /// Re-reads the layout (the Dock moved or auto-hid, which no notification reliably reports, 10-MACOS §3.1).
+    func checkLayout() {
+        guard !rebuildPending else { return } // displays are settling: the debounced rebuild follows
+        rebuild()
+    }
+
+    /// After waking from sleep: displays and their link may have changed under us. Rebuilt once they settle.
+    func wake() {
+        scheduleRebuild()
+    }
+
     /// Displays changed: rebuild after they settle (300 ms, doc 02).
     private func scheduleRebuild() {
         guard !rebuildPending else { return }
@@ -49,32 +102,40 @@ final class OverlayController {
         guard let settings = loop.settings else { return }
         let screens = Self.chosenScreens(settings)
         let frames = screens.map { settings.coverTaskbar ? $0.frame : $0.visibleFrame }
+        let renderScale = self.renderScale
         let key = zip(screens, frames).map { "\(Self.uuid(of: $0.0) ?? "?")@\($0.1)x\($0.0.backingScaleFactor)" }
-            .joined(separator: ";") + (settings.hideFromScreenCapture ? ";hidden" : "")
+            .joined(separator: ";") + (settings.hideFromScreenCapture ? ";hidden" : "") + ";scale\(renderScale)"
         if !force && key == layoutKey { return }
         layoutKey = key
 
         var surfaces: [OverlaySurface] = []
         var newPanels: [OverlayPanel] = []
+        var ids: [String] = []
         for (screen, frame) in zip(screens, frames) {
             let scale = screen.backingScaleFactor
             let panel = OverlayPanel(frame: frame, scale: scale)
             // "Hide from screen capture" (PRD §5, default off); some recorders may still show it (10-MACOS §3.1).
             panel.sharingType = settings.hideFromScreenCapture ? .none : .readOnly
             metal.configure(panel.metalLayer)
+            let full = panel.metalLayer.drawableSize
+            panel.metalLayer.drawableSize = CGSize(width: max((full.width * renderScale).rounded(), 2),
+                                                   height: max((full.height * renderScale).rounded(), 2))
             let size = panel.metalLayer.drawableSize
+            let id = Self.uuid(of: screen) ?? ""
             let info = RlSurface(widthPx: Int32(size.width), heightPx: Int32(size.height),
-                                 pixelsPerPoint: Float(scale), paused: 0)
+                                 pixelsPerPoint: Float(scale * renderScale), paused: fullscreen.contains(id) ? 1 : 0)
             surfaces.append(OverlaySurface(panel: panel, layer: panel.metalLayer, info: info))
             newPanels.append(panel)
+            ids.append(id)
         }
         panels = newPanels
+        screenIDs = ids
 
         // Pacing follows the primary screen (the one with the menu bar), as Windows follows the primary monitor.
         let primary = NSScreen.screens.first
         let link = primary?.displayLink(target: render, selector: RenderThread.tickSelector)
-        let refresh = Double(primary?.maximumFramesPerSecond ?? 60)
-        render.setSurfaces(surfaces, link: link, refreshHz: refresh, onBattery: false)
+        refreshHz = Double(primary?.maximumFramesPerSecond ?? 60)
+        render.setSurfaces(surfaces, link: link, refreshHz: refreshHz, onBattery: onBattery, lowPower: lowPower)
     }
 
     /// The screens the settings choose (doc 06 §1 Monitors): all, the primary, or those whose display UUID is listed.

@@ -149,6 +149,22 @@ public sealed class MacOverlayLoopTests
     }
 
     [Fact]
+    public void LowPowerModeReducesWhateverTheBatterySettingAndNeverPauses()
+    {
+        foreach (BatteryBehavior behavior in new[] { BatteryBehavior.Normal, BatteryBehavior.Pause })
+        {
+            var loop = Started(new Settings { OnBattery = behavior }, demo: true, screens: 1);
+            loop.SetDisplay(60, onBattery: false, lowPower: true);
+            loop.ApplyInputs(now);
+            FrameInfo info = loop.BeginFrame((float)Frame, [], 0);
+            Assert.Equal(0.5f, info.RenderScale);
+            Assert.NotEqual(SurfaceAction.None, loop.PlanSurface(0, out _)); // not paused
+            loop.SurfaceDone(0, true, 0);
+            Assert.Equal(30, loop.EndFrame(now).FullRateHz, 3);
+        }
+    }
+
+    [Fact]
     public void SettingsArePublishedToTheRenderThreadOnItsNextInputs()
     {
         var loop = Started(new Settings(), demo: false, screens: 1);

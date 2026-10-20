@@ -134,7 +134,8 @@ final class RenderThread: NSObject, @unchecked Sendable {
 
     /// Replaces the screens' overlays (main thread, after a display change). `link` comes from the main screen
     /// (NSScreen.displayLink, created on the main thread) and is added to this thread's run loop here.
-    func setSurfaces(_ new: [OverlaySurface], link newLink: CADisplayLink?, refreshHz: Double, onBattery: Bool) {
+    func setSurfaces(_ new: [OverlaySurface], link newLink: CADisplayLink?, refreshHz: Double, onBattery: Bool,
+                     lowPower: Bool) {
         perform { [weak self] in
             guard let self else { return }
             self.link?.invalidate()
@@ -146,7 +147,7 @@ final class RenderThread: NSObject, @unchecked Sendable {
             self.surfaces = new
             let infos = new.map(\.info)
             rl_loop_set_surfaces(self.loop.handle, infos, Int32(infos.count), CACurrentMediaTime())
-            rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0)
+            rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0, lowPower ? 1 : 0)
             // The old panels are closed on the main thread once this thread no longer draws on them.
             let closing = old.map(\.panel).filter { panel in !new.contains { $0.panel === panel } }
             DispatchQueue.main.async {
@@ -156,6 +157,28 @@ final class RenderThread: NSObject, @unchecked Sendable {
             }
             self.pace = RL_PACE_FULL
             self.frame(due: true)
+        }
+    }
+
+    /// The power state changed without changing the render scale: the frame rate cap and "Pause on battery" follow
+    /// on the next frame, and the windows stay as they are.
+    func setDisplay(refreshHz: Double, onBattery: Bool, lowPower: Bool) {
+        perform { [weak self] in
+            guard let self else { return }
+            rl_loop_set_display(self.loop.handle, refreshHz, onBattery ? 1 : 0, lowPower ? 1 : 0)
+            self.handleInputs(force: true)
+        }
+    }
+
+    /// Pauses or resumes the glow on each surface, in surface order (a full-screen window covers its display).
+    func setSurfacesPaused(_ paused: [Bool]) {
+        perform { [weak self] in
+            guard let self else { return }
+            let now = CACurrentMediaTime()
+            for (index, value) in paused.enumerated() {
+                rl_loop_set_surface_paused(self.loop.handle, Int32(index), value ? 1 : 0, now)
+            }
+            self.handleInputs(force: true)
         }
     }
 
@@ -182,9 +205,9 @@ final class RenderThread: NSObject, @unchecked Sendable {
         frame(due: true)
     }
 
-    private func handleInputs() {
+    private func handleInputs(force: Bool = false) {
         let now = CACurrentMediaTime()
-        guard rl_loop_apply_inputs(loop.handle, now) == 1 else { return }
+        guard rl_loop_apply_inputs(loop.handle, now) == 1 || force else { return }
         // At the full rate the next frame draws the change within one interval, so a stream of inputs can't push
         // frames past the cap (FramePacer.InputWaits).
         if rl_loop_input_waits(loop.handle, pace, now - lastFrame) == 1 { return }

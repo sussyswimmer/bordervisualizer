@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 6
+#define RL_ABI_VERSION 7
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -117,7 +117,9 @@ int32_t rl_loop_set_paused(RlLoop loop, int32_t paused);
 int32_t rl_loop_set_surfaces(RlLoop loop, const RlSurface *surfaces, int32_t count, double nowSeconds);
 /// Pauses (1) or resumes (0) the glow on one screen; it fades over 300 ms and keeps its window.
 int32_t rl_loop_set_surface_paused(RlLoop loop, int32_t index, int32_t paused, double nowSeconds);
-int32_t rl_loop_set_display(RlLoop loop, double refreshHz, int32_t onBattery);
+/// The main screen's refresh rate, whether the Mac runs on battery (the OnBattery setting applies), and whether Low
+/// Power Mode is on (always 30 fps at half scale, never paused).
+int32_t rl_loop_set_display(RlLoop loop, double refreshHz, int32_t onBattery, int32_t lowPower);
 /// Takes the inputs published since the last call: 1 when one changed (a frame may be due early), else 0.
 int32_t rl_loop_apply_inputs(RlLoop loop, double nowSeconds);
 /// 1 when an input arriving elapsedSeconds after the last frame should wait for the next frame at this pace.
