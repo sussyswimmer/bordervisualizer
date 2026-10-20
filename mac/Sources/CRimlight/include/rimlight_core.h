@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 7
+#define RL_ABI_VERSION 8
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -189,6 +189,19 @@ int32_t rl_album_palette(RlLoop loop, RlRgb *primary, RlRgb *secondary);
 /// (TrayToolTip.cs). Pass NULL title and artist for no track.
 int32_t rl_tooltip(const char *title, const char *artist, const char *sourceApp, int32_t isPlaying, char *buffer,
                    int32_t capacity);
+
+// ---- Shell (src/Rimlight.Native/ShellExports.cs) ----
+
+static const int32_t RL_HOTKEY_CTRL = 1;  // ⌃
+static const int32_t RL_HOTKEY_ALT = 2;   // ⌥ (Option)
+static const int32_t RL_HOTKEY_SHIFT = 4; // ⇧
+static const int32_t RL_HOTKEY_WIN = 8;   // ⌘ (the settings file says "Win", as on Windows)
+
+/// Parses the ToggleHotkey setting ("Ctrl+Alt+L") with the Windows rules: 1 with the modifiers and the Windows
+/// virtual-key code, 0 for "" (no shortcut) or text that isn't an allowed shortcut. Any thread.
+int32_t rl_hotkey_parse(const char *text, int32_t *modifiers, int32_t *virtualKey);
+/// The setting's text for a shortcut, or RL_INVALID_ARGUMENT if it isn't allowed. Any thread.
+int32_t rl_hotkey_format(int32_t modifiers, int32_t virtualKey, char *buffer, int32_t capacity);
 
 /// GlowConstants.Create alone, for tests: the constants for a light state on a surface.
 int32_t rl_glow_constants(const RlLightState *state, int32_t widthPx, int32_t heightPx, float pixelsPerPoint,

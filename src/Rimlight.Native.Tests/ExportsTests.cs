@@ -15,10 +15,10 @@ public sealed unsafe class ExportsTests : IDisposable
     }
 
     [Fact]
-    public void AbiVersionIsSeven()
+    public void AbiVersionIsEight()
     {
         delegate* unmanaged<int> abi = &Exports.AbiVersion;
-        Assert.Equal(7, abi());
+        Assert.Equal(8, abi());
     }
 
     [Fact]

@@ -287,6 +287,15 @@ struct BehaviorPage: View {
                 Text("In Low Power Mode the glow always saves power.").font(.caption).foregroundStyle(.secondary)
             }
             Section {
+                Toggle("Open at login", isOn: $model.settings.launchAtStartup)
+                if model.loginNeedsApproval && model.settings.launchAtStartup {
+                    Label("Allow \(Core.appName) in Login Items to open it at login.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Button("Open Login Items") { LoginItem.openSettings() }
+                }
+                ShortcutRecorder(model: model)
+            }
+            Section {
                 Toggle("Hide the glow from screen recordings", isOn: $model.settings.hideFromScreenCapture)
             } footer: {
                 Text("Some recording apps may still show it.").font(.caption).foregroundStyle(.secondary)
@@ -402,5 +411,72 @@ enum AudioPrivacy {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+/// The glow's global shortcut (doc 06 §3.5): shows it, records a new one from the next key pressed, or removes it.
+struct ShortcutRecorder: View {
+    @ObservedObject var model: SettingsModel
+    @State private var recording = false
+    @State private var monitor: Any?
+    @State private var refused = false
+
+    var body: some View {
+        LabeledContent("Glow on and off") {
+            HStack {
+                Text(recording ? "Press a shortcut…" : current).monospaced()
+                    .foregroundStyle(recording ? .secondary : .primary)
+                Button(recording ? "Cancel" : "Record") { recording ? stop() : start() }
+                if !model.settings.toggleHotkey.isEmpty && !recording {
+                    Button("Remove") { model.settings.toggleHotkey = "" }
+                }
+            }
+        }
+        // A monitor left running would swallow every key in the app, so recording ends with the view or the focus.
+        .onDisappear { stop() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in stop() }
+        if refused {
+            Text("Use ⌃ or ⌘ with a key, or a function key. ⌘Q, ⌘W, ⌘H, ⌘M, ⌘Tab and ⌘Space stay with macOS.").font(.caption).foregroundStyle(.secondary)
+        }
+        if !recording, let problem = model.hotkeyProblem {
+            Label(problem == .taken ? "Another app uses this shortcut. Choose another."
+                                    : "This shortcut doesn't work on a Mac. Record another.",
+                  systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private var current: String {
+        let setting = model.settings.toggleHotkey
+        if setting.isEmpty { return "None" }
+        return Shortcut(setting: setting)?.display ?? setting
+    }
+
+    private func start() {
+        guard monitor == nil else { return }
+        refused = false
+        recording = true
+        model.recordingShortcut(true)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 /* kVK_Escape */ && event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+                stop()
+                return nil
+            }
+            if let shortcut = Shortcut(keyCode: event.keyCode, flags: event.modifierFlags), let text = shortcut.setting {
+                model.settings.toggleHotkey = text
+                stop()
+            } else {
+                refused = true
+            }
+            return nil // the key belongs to the recorder
+        }
+    }
+
+    private func stop() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+        recording = false
+        model.recordingShortcut(false)
     }
 }
