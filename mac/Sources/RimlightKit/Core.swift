@@ -38,3 +38,9 @@ public enum Core {
         return nil
     }
 }
+
+/// Runs `body` with a C string for `text`, or NULL for nil.
+func withOptionalCString<Result>(_ text: String?, _ body: (UnsafePointer<CChar>?) -> Result) -> Result {
+    guard let text else { return body(nil) }
+    return text.withCString { body($0) }
+}

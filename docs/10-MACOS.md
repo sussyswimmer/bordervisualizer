@@ -249,7 +249,7 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
    - These give `NowPlaying` (title, artist, source app, playing) for the menu bar tooltip and the Color page, with a track ID of `app|artist|title`, as doc 05 §1.
 2. **Artwork via Apple events, only on a track change, and only to a player that is already running.**
    - Rimlight checks `NSRunningApplication.runningApplications(withBundleIdentifier:)` first, because a scripting call launches a player that isn't running [**unverified**; standard practice].
-   - **Music:** `data of artwork 1 of current track` gives the image bytes [**unverified**; M4 tests it on macOS 26 and 27].
+   - **Music:** `raw data of artwork 1 of current track` gives the image file's bytes (JPEG or PNG), which Image I/O decodes [**unverified**; M4 tests it on macOS 26 and 27].
    - **Spotify:** `artwork url of current track` gives an HTTPS URL to Spotify's image server [3P]. Fetching that image is a network call (Q4).
    - **Permission:** an Automation prompt per player ("Rimlight wants to control Music"). It needs `NSAppleEventsUsageDescription` in the plist and the `com.apple.security.automation.apple-events` entitlement under the hardened runtime [Apple].
    - If the user declines, Rimlight falls back to the manual colours, and Settings › Color says why, with a button to the Automation pane.
