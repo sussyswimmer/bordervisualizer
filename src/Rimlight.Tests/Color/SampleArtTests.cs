@@ -62,9 +62,10 @@ public sealed class SampleArtTests(ITestOutputHelper output)
     [Fact]
     public void NoirPhotoGlowsSoftWhite()
     {
+        // 0.03 was Glow.NeutralChroma until Maxwell's feedback raised that to 0.05; a pure grey photo stays below 0.03.
         var palette = Extract("noir-photo");
-        Assert.True(Lch(palette.Primary).C < Glow.NeutralChroma);
-        Assert.True(Lch(palette.Secondary).C < Glow.NeutralChroma);
+        Assert.True(Lch(palette.Primary).C < 0.03f);
+        Assert.True(Lch(palette.Secondary).C < 0.03f);
     }
 
     [Fact]
@@ -85,10 +86,15 @@ public sealed class SampleArtTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void GenericAppIconIsNoArt()
+    public void GenericAppIconGlowsNeutral()
     {
-        var image = Load("generic-app-icon");
-        Assert.Null(CoreFactory.CreatePaletteExtractor().Extract(image.Bgra, image.Width, image.Height, "t"));
+        // Changed on purpose (Maxwell's feedback): this was "no art". A grey tile with a white note glyph (93.4 % one
+        // flat grey) can't be told from a black-and-white cover with white text, which showed the manual colors
+        // instead of a neutral glow. Only a blank image (98 % one flat color) is no art now, so the icon glows in greys
+        // (#717171 / #979797), as neutral as it is.
+        var palette = Extract("generic-app-icon");
+        Assert.True(Lch(palette.Primary).C < 0.03f);
+        Assert.True(Lch(palette.Secondary).C < 0.03f);
     }
 
     private Palette Extract(string name)
