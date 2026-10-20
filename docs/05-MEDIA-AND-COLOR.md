@@ -11,7 +11,7 @@ Use `Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager` (GS
 - Read the thumbnail with `OpenReadAsync()`, decode with `Windows.Graphics.Imaging.BitmapDecoder`, and **downscale while decoding** with `BitmapTransform` (ScaledWidth/Height = 64, Fant interpolation) to `Bgra8`/premultiplied-ignore. Pass raw pixels (`byte[]`, width, height) to Core.
 - **Quirks to handle:**
   - `MediaPropertiesChanged` often fires 2–3 times per track change, sometimes with the thumbnail arriving late. Debounce 250 ms. If the thumbnail is null, retry once after 750 ms.
-  - Some apps send a generic app icon as the thumbnail. If the extracted palette is nearly grayscale and the image is mostly a single flat color, treat it as "no art" and keep the previous palette or use the manual one.
+  - Some apps send a generic app icon as the thumbnail. If the extracted palette is nearly grayscale and the image is mostly a single flat color, treat it as "no art" and keep the previous palette or use the manual one. *Clarification (Maxwell's feedback): "mostly" caught black-and-white covers too. A black cover with white text is about 80 % one flat black, so it showed the manual colors instead of a neutral glow. "No art" is now an image that is essentially one flat color, with at least 98 % of its pixels within Oklab distance 0.03 of it (a blank thumbnail, or one with a speck), and a palette below chroma 0.05. A generic icon with a visible glyph can't be told from such a cover, so it now glows neutral too.*
   - Browser sessions can switch rapidly when several tabs have media. Prefer the session whose PlaybackStatus is Playing. If several are playing, use `GetCurrentSession()`.
 - Expose `NowPlaying(string? Title, string? Artist, string? SourceApp, bool IsPlaying)` for the tray tooltip ("Rimlight — Song · Artist").
 - A track ID for change detection is `$"{SourceAppUserModelId}|{Artist}|{Title}"`.
@@ -29,7 +29,7 @@ Algorithm:
 4. **Primary** = the highest score.
 5. **Secondary** = the highest score among clusters with Oklab distance ≥ 0.12 from Primary. If none qualifies, derive one by rotating Primary's hue by +35° in OkLCh and nudging L by +0.08.
 6. **Glow-ify** both. The light should look like light, not paint, so in OkLCh:
-   - raise chroma to at least 0.12 (unless the source cluster is truly grayscale with chroma < 0.03; then keep it neutral and the glow becomes soft white)
+   - raise chroma to at least 0.12 (unless the source cluster is truly grayscale with chroma < 0.03; then keep it neutral and the glow becomes soft white). *Clarification (Maxwell's feedback): a black-and-white cover with a slight cool cast (chroma 0.03–0.05) was raised to 0.12 and glowed light and dark blue. A color now keeps its chroma up to 0.05, so a grey or a tinted grey glows soft white or grey. It gets the full raise to 0.12 from chroma 0.10, and in between the raise eases in (a smoothstep), so there is no jump.*
    - clamp L to [0.55, 0.85]
    - gamut-map back to sRGB by reducing chroma until it fits
 7. Return colors in **linear** RGB for the shader, and also sRGB hex for the UI.
