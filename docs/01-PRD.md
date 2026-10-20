@@ -30,7 +30,7 @@ In **Music Sync**, when no audio is detected for 2 s, fade over 1.5 s to the `Wh
 - **Override album color**: a toggle that forces Manual colors even when Album Art is selected.
 
 ### 4. Appearance controls
-- **Thickness**: the solid core line, 0–40 px (DIPs), default 6.
+- **Thickness**: the solid core line, 0–40 px (DIPs), default 6. *Clarification (Maxwell's feedback, rounds 1 and 2): the solid line read as "a very obvious line or bar around the screen", and round 1's soft band as "a thin bright line right at the screen edge", so there is no line or band any more. Thickness is the width of a soft shoulder at the edge: the light starts flat, with no edge of its own, and bends into the glow's fade over about that width, so more Thickness keeps the light bright further in. The part that looks even grows only like the square root of Thickness × the glow's reach: at the default Glow on a 1080p screen the light stays within 3 % of the edge for about 4 px at Thickness 6 and 10 px at 40, and on a narrow Glow (10 % or less) a large Thickness draws a soft band. 0 and 1 both draw the narrowest shoulder, one DIP, so the fade starts right at the edge (doc 04 §3 step 2).*
 - **Glow**: how far the light spills inward, 0–100%. 0 means a hairline; 100 means about 35% of the shorter screen dimension.
 - **Brightness**: 10–100%, default 80.
 - **Sensitivity**: how strongly audio drives the light, 0.25×–2×, default 1×.
@@ -57,6 +57,7 @@ In **Music Sync**, when no audio is detected for 2 s, fade over 1.5 s to the `Wh
 ## Privacy (must be true and stated in the README)
 - Only system output audio is captured, via WASAPI loopback. The microphone is never opened.
 - Audio is analyzed in memory and immediately discarded. Nothing is recorded or saved.
+  - *Clarification (Maxwell's feedback, round 2): the debug visualizer's **Record 2 min** (`--debug-visualizer`) saves, only when clicked, the numbers the analyzer and the light computed for each frame (loudness, bass, beats, the light) to a CSV in the logs folder, for a report. It never holds audio samples, a spectrum or anything else the sound could be rebuilt from, and names neither the device nor the track (doc 03 §4).*
 - Track info and artwork are read locally from Windows' media controls and never leave the device.
 - No telemetry or analytics. The only network call is the GitHub update check.
 

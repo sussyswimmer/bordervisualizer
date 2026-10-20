@@ -4,9 +4,9 @@ namespace Rimlight.App.Visualizer;
 
 /// <summary>
 /// The debug visualizer's line to the overlay thread (doc 03 §4, H-004): analyzer snapshots come one way through a
-/// <see cref="TripleBuffer{T}"/>, tuning edits the other way through a latest-wins slot. No locks: the overlay thread
-/// never waits for the UI, and the UI never touches the analyzer. One feed per open visualizer window; hand it to
-/// <see cref="Overlay.MusicGlowSource.SetVisualizer"/>.
+/// <see cref="TripleBuffer{T}"/>, tuning edits and recordings ("Record 2 min") the other way through latest-wins slots.
+/// No locks: the overlay thread never waits for the UI, and the UI never touches the analyzer. One feed per open
+/// visualizer window; hand it to <see cref="Overlay.MusicGlowSource.SetVisualizer"/>.
 /// </summary>
 internal sealed class VisualizerFeed
 {
@@ -24,6 +24,7 @@ internal sealed class VisualizerFeed
         new AnalyzerSnapshot(MaxSpectrumBins, HistoryEntries));
 
     private TuningRequest? pendingTuning; // written by the UI, taken by the overlay thread; the newest wins
+    private AnalysisRecording? pendingRecording; // the same, for "Record 2 min"
     private int lastRequest;              // UI thread only
 
     /// <summary>
@@ -42,6 +43,18 @@ internal sealed class VisualizerFeed
         return id;
     }
 
+    /// <summary>
+    /// UI thread: starts <paramref name="recording"/> on the overlay thread's next frame ("Record 2 min"): from then on
+    /// it gets every frame until it ends (<see cref="AnalysisRecording.End"/>). A newer recording replaces one the
+    /// overlay thread hasn't taken yet, or ends the one it is filling. The recording holds numbers only, never audio.
+    /// </summary>
+    /// <param name="recording">A new recording, its buffer already allocated.</param>
+    public void StartRecording(AnalysisRecording recording)
+    {
+        ArgumentNullException.ThrowIfNull(recording);
+        Volatile.Write(ref pendingRecording, recording);
+    }
+
     /// <summary>UI thread: the newest snapshot, if one arrived since the last call. It stays valid until the next one.</summary>
     /// <param name="snapshot">The newest snapshot, or the last one taken (<see cref="AnalyzerSnapshot.Sequence"/> 0: none yet).</param>
     /// <returns>True when <paramref name="snapshot"/> is new.</returns>
@@ -55,6 +68,10 @@ internal sealed class VisualizerFeed
 
     /// <summary>Overlay thread: the newest tuning request, once; null when there is none.</summary>
     internal TuningRequest? TakeTuning() => Interlocked.Exchange(ref pendingTuning, null);
+
+    /// <summary>Overlay thread: the recording to start, once; null when none was started since the last call.</summary>
+    internal AnalysisRecording? TakeRecording() =>
+        Volatile.Read(ref pendingRecording) is null ? null : Interlocked.Exchange(ref pendingRecording, null);
 
     /// <summary>
     /// Overlay thread: the last request it handled, 0 for none. Kept here rather than in <see cref="AnalyzerTap"/>, so

@@ -687,6 +687,10 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] K10 Integration pass once C13 is merged: run everything for real, fix seams, and file HANDOFF entries for Core issues — `wip/k10-integration` + `wip/k10-fix`, on top of claude/confident-mccarthy-gt8tif — effort: L (notes below; Windows manual test pending)
 - [ ] K11 Hardening on real Windows: sleep/wake, RDP, TDR, hotplug, device switching. Results go in PROGRESS.md. (needs Maxwell's Windows PC; checklist below)
 - [x] K12 `assets/icon.svg`, `assets/banner.svg/png`, README, repo settings text for Maxwell, recording instructions — this branch (claude/confident-mccarthy-gt8tif) — effort: M (`assets/icon.svg` came with C10; notes below; Windows manual test pending: the recordings and the repo settings)
+- [x] Feedback round 1: dynamics, soft edge, Settings failure message + WPF smoke tests — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
+- [x] Feedback round 2: real-music corpus (`tools/corpus/`), dynamics retuned on it, an edge with no rim, Record 2 min — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
+- [x] README cut to a short landing page at Maxwell's request ("no one wants to read this much"): an animated header with a wave bar (`assets/header.svg`, `footer.svg`), an 8 s preview and four looks rendered by the real beat engine through a port of `Glow.hlsl` (`tools/readme-art/`), and the FAQ collapsed. Replaces doc 08's longer layout. — effort: S
+- [x] Black-and-white covers glow soft white and grey instead of the manual colors or an invented blue (Maxwell: "a song that is white and black ... put light blue and dark blue"). Near-neutral colors keep their chroma up to 0.05, and only a blank image counts as no art. Muted covers (chroma 0.05–0.10) now glow paler. `wip/bw-album-colors` 05a621f, HANDOFF H-027. — effort: S
 
 ## K0 notes
 
@@ -1742,6 +1746,1319 @@ Branch `wip/k12-readme-banner`, review fixes on `wip/k12-readme-banner-fix`, mer
   - **When a winget manifest exists:** replace "coming soon".
   - **If the app is renamed:** re-outline the wordmark as the SVG comment describes, then run `build/icons.sh`.
   - **Optional (Lane A):** have release.yml delete vpk's duplicate `Rimlight-win*-Setup.exe` assets before it publishes, so the Releases page shows one installer per architecture. Not done: nothing needs it, and it touches the release path.
+
+## Feedback round 1 (Maxwell's first Windows run)
+
+Maxwell ran the app on Windows and reported, verbatim:
+
+> the border doesn't really sync with the type of music so its still super sharp even when listening to a calm song like noah kahan or hozier for rap I am ok with it bouncing harder but those songs it should be more of a wave. Also the bounces weren't really proportionate with what was happening in the song it would be a super big bounce when the person was whispering. Thirdly there is a very obvious line or bar around the screen I can see the glow I want it to fade in more also theres no settings to change anything
+
+- **Three changes, merged on `claude/confident-mccarthy-gt8tif` in 3a2fd04:**
+  - Dynamics (wave vs bounce, the bounce on a whisper): ee8f7a4.
+  - Soft edge (the line): 5420417.
+  - Settings window (no settings): af5d2a6.
+  - Dynamics and soft edge each had two reviews and a fix round before merging.
+- **Merged state, checked in the docs pass:** `dotnet build Rimlight.sln -c Release` gives 0 warnings. `dotnet test` passes Rimlight.Tests 815, Rimlight.Platform.Tests 368 and Rimlight.IconGen.Tests 89. Rimlight.App.Tests isn't a test project off Windows; on Windows CI it passes 23 of 23 (see Settings window, Verified).
+- **Not changed:** no file under `Contracts/`, and no `AudioTuning` or `Settings` default. Nothing has run on Windows yet; the checklist is at the end of this section.
+
+### Dynamics
+
+Branches `wip/dynamics` (b7e6817, 06bc2fd, 1aad6da) and `wip/dynamics-fix` (2a660d6, e74255d), on 5b387fc. Effort: L.
+
+- **Problem, measured at 5b387fc.** Setup: the real analyzer and light engine through `CoreFactory`, at 60 fps with 10 ms packets, default settings, on the new procedural style tracks.
+  - **Auto-gain flattening (doc 03 §2).** The 4 s peak half-life, +1 dB/s floor and 12 dB minimum range stretched a whispered verse 15 dB under the chorus back over the full range about 6 s after the chorus. In the mid band the range was 19.7 dB at 51 s and back at 12.0 dB at 57 s. The chorus was only 1.19× as bright as the verse after it.
+  - **Voice and guitar fired beats.** In a drumless ballad the 30–150 Hz detector fired 1.1–1.8 times a second, and each stem fired on its own: guitar 1.3–1.9/s, a whispered baritone 1.4/s.
+  - **Every beat was a full bounce.** `Beat` jumped to exactly 1 on each, giving 16–37 full pulses per ballad section.
+  - **Level followed syllables.** Its 30 ms attack tracked syllables and plucks: 6.6–10.2 % of the shown brightness's variance lay above 3 Hz. "Shown" is I × (1 + 0.25·Pulse).
+- **Structure.** Core internals behind the frozen contracts, with internal constants and fixed internal bands. CORE-API §4.2 has the full description.
+  - **`SongLoudness` (new), the song reference:**
+    - **Momentary loudness:** power in fixed 30–150 / 150–2000 / 2000–12000 Hz bands, weighted 0.5 / 1 / 1.5 and smoothed with τ = 0.25 s.
+    - **Reference:** a 0.5 dB histogram that forgets with τ = 10 s. Its 90th percentile is the song's loud parts.
+    - **Position:** 1 at the reference, falling linearly to 0 at 24 dB below it. It is 0 only in near-silence (−80 dBFS, the auto-gain hold level), so quiet playback stays scale-invariant.
+    - **Prior:** until the memory fills, 4 s of virtual loudness at 4 dB above the loudest moment so far.
+    - **Gaps:** 1 s of near-silence, or of no packets, clears the memory and re-arms the prior. A session reference (τ = 30 s, from about 16 s into a song) survives the gap. It then floors the next song's reference and falls 0.2 dB/s.
+    - Subnormal floats are flushed to 0.
+  - **`BeatCharacter` (new), each beat's grade and the music's punch:**
+    - **Kick prominence:** the rise of a fixed 30–100 Hz kick band over the beat's 35 ms onset window (audio time). It is measured in dB against the amplitude of the music above the bass band just before the beat, the larger of a 0.25 s and a 1.5 s average. Kick-likeness = smoothstep(4 dB, 9 dB) of it.
+    - **Punch:** a drive follows the kick-likeness of the recent onsets. It moves half the way toward a more kick-like onset and a tenth of the way toward a less kick-like one. It holds for 3 s after the last kick-like onset, then fades with τ = 2.5 s. Punch = smoothstep(0.3, 0.75, drive).
+    - **Grade** = kick-likeness × punch (as before this onset) × accent × loud × Sensitivity, clamped to 1.
+      - Accent: the rise over 0.85 × the strongest recent kick's rise, which halves every 1.5 s.
+      - Loud: the song position held over the dip between beats, through smoothstep(0.3, 0.6), never under 0.3 × punch.
+      - One kick-like onset in a wave gives no pulse, the next about 0.4, the third full size. The first second after near-silence only listens.
+    - **Beat** is the grade on the frame it rises, then decays with `BeatDecaySeconds` as before.
+  - **`AudioAnalyzer`:**
+    - Level target = min(1, position / 0.8) × (1 − 0.6 × (1 − doc 03's Level target)).
+    - Time constants: `LevelAttackSeconds` × 10^(1 − punch) and `LevelReleaseSeconds` × 5^(1 − punch). That is 0.3 s / 1.25 s with no drums, and doc 03's 30 / 250 ms in a groove and in near-silence.
+    - Tempo: where kicks play (a kick-like onset within 4 s), only kick-like beats at least 0.6× as strong as the strongest recent kick count, timed when they fired (`BeatDetector.AddTempoBeat`). Elsewhere every beat counts, as before.
+    - Detection and `BeatCount` are unchanged.
+  - **`BandAnalyzer`:** `WeightedPower` and `KickBins` use fixed bands, so live-tuning the bass band in the visualizer doesn't change the grading. `BeatResult` gains `KickLevel`.
+  - **`LightEngine`:** the phase push is 0.01 cycles × the height `Beat` rises to (it was 0.01 per beat).
+  - **Visualizer (App):**
+    - `AnalyzerTap` records whether `BeatCount` rose on each call (`AnalyzerSnapshot.Fired`), and the "beat fired" ticks use it (before, they needed Beat ≥ 0.999).
+    - The slider descriptions for the Bass band, Level attack/release, Sensitivity and Beat decay say what each now does.
+  - **`tools/audio-tools/StyleTracks.cs` (new):**
+    - Six procedural songs: CalmBallad, Rap, Edm, BalladWithDrums, FolkBand and PianoBallad.
+    - Each section is mixed to a target RMS, with kick ground truth.
+    - Single stems (`StyleParts`) and `Mix`. Stems are not clipped; a full render is.
+- **Spec clarifications and deviations:**
+  - The dynamics merge put clarifications in doc 03 (§2 auto-gain, the Level envelope, beat step 4, and the §4 tempo) and in CORE-API (§2, §4.1–4.4, §6, §6.1):
+    - Level is judged against a 10 s song reference. Auto-gain stays as written for `Bass` and the contrast within a groove.
+    - Level's time constants are 10× / 5× with no drums.
+    - `Beat` is a 0..1 grade, not always 1. A kick in a loud groove still reads exactly 1.
+    - Where kicks play, the tempo counts only kick-like beats.
+  - **Added in this docs pass, doc 03:**
+    - §2 step 5: Sensitivity also scales each beat's grade (0.5 gives pulses about half as big).
+    - §4: the new constants are internal and have no sliders yet (H-025).
+  - **Volume (doc 03 §2):**
+    - The same song at any steady volume gives the same light: within 0.0002 of Intensity down to −35 dB.
+    - A volume change in the middle of a song can't be told from the music getting quieter or louder. Steps up to about 5 dB barely show in the loud parts (the knee at 0.8). Larger ones settle in up to about 25 s, or 30 s when a step up lands at the start of a quiet verse. Doc 03's auto-gain took 0.7–15 s.
+  - **Not edited:** doc 01 §2 ("a pulse fires on each beat"; the pulse is now graded, and voice, guitar, piano and bass guitar onsets without drums give none) and doc 07 Phase 3 ("a small kick of 0.01 on each beat"; it is now 0.01 × the beat's height). CORE-API §4.2 and §6.1 carry both.
+  - **Rejected: telling a volume step from the music getting quieter** (a histogram shift on a detected gain step). On the style tracks a song's own band balance moves 2–7 dB within 0.8 s. The prototypes missed real steps and flagged section changes. The knee and the groove floor (0.3 × punch) were done instead.
+- **Verified here (Linux).** Style tracks at 60 fps with 10 ms packets, Brightness 0.8, against 5b387fc:
+
+  | Measure | 5b387fc | Now |
+  |---|---|---|
+  | Calm ballad pulses per section | 16–37, all 1.0 | 0 |
+  | Calm ballad brightness variance above 3 Hz | 6.6–10.2 % | 0.2–0.7 % |
+  | Chorus vs the whispered verse after it | 1.19× | 1.58× |
+  | Folk band + bass guitar 6 dB under: chorus pulses ≥ 0.5 | 19–23 | 0 |
+  | Same + brush kit 12 dB under: chorus pulses ≥ 0.5 | 19–20 | 0 (max 0.18), plus 1 full pulse at each chorus entrance |
+  | Same mix, chorus brightness variance above 3 Hz | 13–18 % | 2.3–3.8 % |
+  | Piano ballad pulses per section | 6–7 at 1.0 | 0 |
+  | Kit at the music's level, whispered verse 2 | 14 at 1.0 | mean 0.30, max 0.35 |
+  | Rap kicks with a pulse ≥ 0.7 | 61/61 | 61/61 (58/61 at 44.1 kHz) |
+  | EDM kicks with a pulse ≥ 0.7 | 74/77 | 73–76/77 |
+  | EDM tempo | 246 BPM | 127.8–128.2 at 44.1 and 48 kHz, seeds 1, 5 and 6 |
+  | EDM breakdown pulses | 18 at 1.0 | 0 |
+  | Folk band after itself, verse 1 mean pulse | 1.0 | 0.57 (0.82 as the first song) |
+  | Rap 10 dB quieter after a gap, mean pulse 5–10 s | 1.0 | 0.95 |
+  | Rap 14 dB quieter after a gap, mean pulse 10–20 s | 1.0 | 0.52 (trade-off) |
+  | Rap kicks in the 10 s after −10 dB mid-song, mean pulse | 0.94 | 0.73 |
+  | Volume step, last brightness difference > 0.1: rap −20 / +20 dB | 5.2 / 15.3 s | 23.5 / 6.0 s |
+  | The same, ballad −6 / +6 dB | 0.7 / 1.5 s | 16.9 / 13.6 s |
+
+  - **Kick prominence medians:**
+
+    | Source | dB |
+    |---|---|
+    | 808s | 13.5 (12.2 at 44.1 kHz) |
+    | EDM kicks | 19 |
+    | Acoustic kicks | 9.6 |
+    | Brush kit at the music's level | 17 |
+    | Brush kit 6 / 12 / 20 dB under | 12 / 7 / 4 |
+    | Bass guitar 6 dB under | −3 |
+    | Piano | −9.5 |
+    | Picked guitar | −19 |
+    | Ballad voice and guitar | −31 |
+
+  - **Cost:**
+    - About 1–2 µs a step by operation count.
+    - Side by side, 113–168 µs a frame (analyzer and engine, style track) against 104–146 µs before, in alternating runs: within this machine's noise, so PERF.md is unchanged.
+    - 0 bytes per frame. `AStyleTrackAllocatesNothingPerFrame` and the existing analyzer and engine allocation tests pass.
+  - **Mutations:** of 17, the 16 that still apply each fail at least one test.
+  - **Builds:** Release and Debug have 0 warnings on both branches.
+  - **New tests:**
+    - `MusicDynamicsTests`, `SongLoudnessTests`, `BeatCharacterTests` and `StyleTracksTests` (with `MixPutsEachStemAtItsLevel`).
+    - `AudioAnalyzerTests.OffBeatBassNotesAreBeatsButNotTempo` and `LightEngineTests.AGradedBeatPushesInProportionToItsHeight`.
+    - `VisualizerHandOffTests.TheTapMarksEveryCallThatFiredABeat`.
+  - **Tests changed on purpose:**
+    - `SyntheticAudio.Run` spots a beat by `BeatCount` rising, because `Beat` is now a grade. It takes `pulses:`, and `StrongPulseRate` puts pulse-size assertions back in four `AudioAnalyzerTests`.
+    - WavAnalyze: full pulses ≥ beats − 3.
+    - `FollowsTheRealAnalyzerThroughMusicSilenceAndMusicAgain`: pushes follow the graded rule, with full pulses ≥ beats − 4.
+    - `SoftDrumsBounceSoftly`: the chorus bound is 0.25 (measured 0.18).
+- **Left for later:**
+  - **Windows listening:** the checklist below. Everything was measured on procedural tracks, so real recordings may need threshold tuning.
+  - **Known limits:**
+    - The first song after launch has nothing to be judged against, so a soft kit that stands out of a sparse first verse still bounces (0.82).
+    - Each chorus entrance gives one full pulse.
+    - A bass guitar playing alone, or as loud as the rest of a drumless song, pulses.
+    - A quieter master after a gap dims for up to about 40 s. Most streaming apps normalize loudness, which keeps songs within a few dB of each other.
+    - The tempo of soft-drum or drumless folk is unreliable, as before (for example 38 or 167 BPM).
+    - Detection is unchanged, so its misses are too: 3 of 77 EDM kicks next to off-beat bass notes and 5 of 23 acoustic kicks.
+  - **H-025:** the new constants can't be tuned live, and the visualizer can't show grade, kick-likeness, punch or position.
+  - **H-026:** Codex's review of the Lane A paths.
+
+### Soft edge
+
+Branches `wip/soft-edge` (756fe4f) and `wip/soft-edge-fix` (7ca790c), on 5b387fc. Effort: M.
+
+- **Problem, measured at 5b387fc.** `Glow.hlsl` drew a solid core, `core = 1 − smoothstep(T − 1, T + 1, d)`, then took `max(core, 0.85·glow)`. At the defaults (6 DIP, Glow 0.45, 1080p, Intensity 0.72) the alpha codes ran 184, 184, 184, 184, 184, 155, 121, 116… That is a flat 5 px, then drops of 29 and 34 code values: the bar.
+- **Structure:**
+  - **`GlowProfile` (Platform, new)** holds the profile math. `Glow.hlsl` step 2 mirrors it, and the Settings preview (`GlowRaster`) calls it.
+  - **Band:**
+    - The e-folding distance is b = max(T / 2, 1/8 px), where T is Thickness in surface pixels (DIP × DPI scale × render scale).
+    - The gain is G = 2b·sinh(1 / 2b), the pixel average of exp(−x / b). It is 0 at Thickness 0, and below b = 1/8 px it is scaled by (T / 2) ÷ (1/8).
+    - `band = saturate(G·exp(−d_band / b))`, through its own rounded field with radius min(max(corner, 2b), short side / 2).
+  - **Glow** (K1's shape):
+    - `glow = 0.85·exp(−d_glow / max(spread·(1 + 0.35·Pulse), 0.5))`, through K1's rounded field with radius max(corner, 2·spread).
+    - Spread = max(1 DIP, Glow^1.5 × 0.35 / 3 × short side); it was Glow². The default 0.45 reaches 38 px at 1080p, against 25 before.
+  - **Combine:** `shape = 1 − (1 − glow)(1 − band)`, a screen blend. It never passes 1, and Thickness 0 is exactly the old glow.
+  - **Gain:**
+    - `Gain = SoftClip(Intensity × (1 + 0.25·Pulse))`, computed once a frame on the CPU.
+    - SoftClip(x) = min(x, 0.9) + 0.1·o / (1 + o), with o = max(x − 0.9, 0) / 0.1. That is 0.95 at 1 and 0.978 at 1.25, the largest gain.
+    - The shader draws `alpha = shape × Gain × Visibility` and returns early when that is under 0.5/255. The profile is only ever scaled.
+  - **cbuffer:** still 16 floats, 64 bytes. `BandScalePx`, `BandGain` and `BandRadiusPx` take the slots of `CoreThicknessPx`, `CoreFade` and a pad. `Gain` takes `Intensity`'s. `CornerRadiusPx` stays, and every field radius is at least it.
+  - **Appearance page:** Thickness now reads "How wide the brightest light along the edges is, before it fades into the glow. 0 leaves only the glow."
+  - **Settings preview:** it floors the pulsed spread at the shader's 0.5 px (`GlowProfile.PulsedSpread`; K7 used 1 px).
+  - **Unchanged:** the colour path, the mean-colour blend, the sRGB encode and the dither.
+  - **Candidates:** four profiles were rendered at 1080p (Thickness 0/6/20/40 × Glow 0.2/0.45/0.9, old and new spread):
+    - `0.85·glow + 0.15·band`: Thickness barely did anything.
+    - `0.70·glow + 0.30·band`: a hairline came back, and the glow-only look was 18 % dimmer.
+    - The screen blend: chosen.
+    - A Gaussian band: read as a blurred stroke with a mitre in each corner.
+  - **The first draft rolled off each pixel.** On a full beat at Brightness 100 % that squashed the brightest pixels into a shoulder: up to 16.8 code values of extra drop inside the edge and 49 at the edge, a rim flashing on the beat. The review fix rolls off the gain instead.
+- **Spec clarifications and deviations** (the PRD and doc 04 clarifications were added in this docs pass):
+  - **PRD §4:** Thickness is the width of a soft bright band at the edge that blends into the glow, not a solid line.
+  - **Doc 04 §3 step 2:**
+    - The core smoothstep is gone; band and glow combine by screen blend.
+    - The per-pixel clamp is replaced by a roll-off of the scalar gain on the CPU.
+    - Two rounded distance fields replace the square one (K1 had already rounded the glow's).
+  - **Glow → spread** uses the slider to the power 1.5 instead of K1's 2. The PRD endpoints are unchanged.
+  - **K3's screen-pixel CoreFade** is replaced by the band's pixel-average gain, which keeps a band's light at any render scale. Every measure now converts at the render scale.
+  - **Brightness 100 %:** the gain peaks at 0.95 without a beat (instead of 1) and at 0.978 on a full beat (instead of 1.25). The beat still pushes the glow 35 % further in.
+  - **Lit area:** the default glow lights about 40 % more pixels. At 4K defaults that is 54 % of the screen instead of 38 %.
+- **Verified here (Linux):**
+  - **Shader:** `Glow.hlsl` compiles under DXC 1.8.2407 (`-T ps_6_0` / `vs_6_0`, `-HV 2018`, warnings as errors) and is ASCII-only. There is no SM4 compiler here, so vs_4_0/ps_4_0 was not compiled; the shader uses only SM4-legal intrinsics.
+  - **Cost:** DXC ps_6_0 -O3, up to and including the early-out branch:
+
+    | Shader | Instructions | exp | Divides |
+    |---|---|---|---|
+    | 5b387fc | 81 | 1 | 1 |
+    | Now | 78 | 2 | 2 |
+
+    That is one more exp and one more divide per pixel, both for the band. After the branch: 256 → 255.
+  - **Cross-checks:**
+    - A NumPy port matches `GlowProfile` to four decimals, and a scratch build of the real `GlowRaster` renders the same look.
+    - A reviewer's independent port of both shaders confirmed the bar is gone. At the defaults the drop between pixels only shrinks (9.7, 8.9, 8.1, 7.3…), and the edge pixel is 199 against 204 before, at Intensity 0.8.
+  - **Tests:**
+    - `GlowProfileTests`:
+      - The profile is monotone and brightest at the edge for every Thickness, Glow, Intensity and Pulse. That holds at 100/125/150/200 % DPI and at full and half scale, along the edge and the corner diagonal.
+      - `NoSettingDrawsABar`, at every gain: inside the outermost pixel pair the drop never grows by more than 1.1 code values (worst 1.02); at that pair, by at most 6 (worst 5.86).
+      - `TheDefaultLookFadesWithoutALine`, `TheFadeNeverEasesOffFasterThanItsLights` and the gain roll-off.
+      - The old solid core fails these checks.
+    - `GlowRasterTests`: the preview is within 1 code value of `GlowProfile` and monotone, including Glow 0 on the beat, and allocates 0 bytes per frame.
+    - `GlowShaderTests`: the cbuffer names and offsets match `GlowConstants`, and step 2's formulas match `GlowProfile`'s constants.
+    - Changed on purpose:
+      - `GlowMapsToSpreadAsThePrdSays`: 37–39 px, from 24–26.
+      - `AThinCoreFadesByItsWidthInScreenPixels` is replaced by `AThinBandKeepsItsLightAtAnyScale` and `ThicknessIsTheSoftBandsWidth`.
+      - `HalfScaleHalvesEveryPixelMeasure`, `ValuesAreClamped` and `LooksLike` read the band fields and `Gain`. `Gain(1, 0)` is 0.95.
+  - **Mutations:**
+    - A `max()` combine passed all 84 Glow tests in the draft; it now fails 12.
+    - Swapping `BandGain`/`BandRadiusPx` in the shader, or `SpreadPx`/`Gain` in the struct, fails `GlowShaderTests`.
+  - **Platform.Tests:** 367 on the branch, all passing.
+- **Left for later:**
+  - **Windows:** nothing has run on a real screen yet.
+  - **Corners (pre-existing K1):** outside each rounded field there is a plateau ending in an arc kink, plus a diagonal crease.
+    - At the defaults the glow arc's slope changes by 4.4 code values per diagonal pixel at its 76 px radius; the old core stepped by 27.5.
+    - A smooth clamp of both fields would remove it, but that changes K1's corners and needs its own renders.
+  - **Preview colour:** the preview's mean-colour blend runs in sRGB space (K7), up to 4 code values off at Glow 1.
+  - **At high Glow** the top-left corner (the gradient's seam blend) shows a lighter colour wedge. The colour logic is unchanged.
+  - **Band divide:** storing the band's reciprocal would save it.
+  - **K11 (H-019 item 1):** the larger lit area and the extra exp and divide belong in the GPU/CPU measurement.
+
+### Settings window
+
+Branch `wip/settings-window` (ff5db1c, 7c16c3a), on 5b387fc. Effort: M.
+
+- **Root cause.** No defect was found. The static audit below came back clean. What it did prove is that 5b387fc hid every way Settings can fail:
+  - **(P1)** If WPF-UI didn't load, or building the window threw, the launcher showed the welcome window without its Settings button. Nothing said anything went wrong.
+  - **(P2)** If `Present()` threw, the only trace was "[App] Opening Settings failed" in the log. Nothing was shown.
+  - **(P3)** If a page threw in `SetActive` or `Refresh`, the content area stayed empty: WPF-UI 4.3.0 raises `Navigated` before `UpdateContent`. A `Refresh` that throws also kept that page's edits from ever applying.
+  - **Likely:** one of P1–P3 fired on Maxwell's PC; his log says which.
+  - **Possible:**
+    - Settings opened, and he meant that no setting changes the feel or the edge. The "very obvious line" was the default 6 px solid core; the soft edge above replaces it with a soft band.
+    - The window opened behind other windows (Windows' foreground lock).
+    - A single click, which toggles the glow, instead of a double-click.
+  - **Static audit:**
+    - WPF-UI 4.3.0 and the app's 11 BAML files were decompiled.
+    - The 14 WPF-UI resource keys the app uses exist, and the theme brushes are in all six theme dictionaries.
+    - The pack URIs resolve, and the StaticResource keys and Style TargetTypes match.
+    - Every WPF-UI member and enum value used exists.
+    - The sliders' `ValueChanged` during `InitializeComponent` only reaches `PageEdits.Update`, which ignores edits before the first refresh.
+- **Structure:**
+  - **`SettingsUi/WindowFailure` (new):** a plain `MessageBox`, which needs no WPF-UI styles. It reads "Rimlight couldn't open its settings window. What went wrong: …", followed by:
+    - the outer and innermost exception, up to 600 characters
+    - the log as `%APPDATA%\Rimlight\logs\rimlight.log` (never the expanded path), and the `[Settings]` or `[Visualizer]` and `[UiTheme]` lines to look at
+    - an offer to open the logs folder (Yes)
+
+    It is posted with `BeginInvoke`, one box at a time. `Quiet` is for the tests.
+  - **The settings and visualizer launchers** show it when the styles are missing, or when building or showing the window fails. The full exception is still logged. A window that failed to show is kept and shown again on the next try.
+  - **`SettingsWindow`** runs each page's `SetActive`, `Refresh` and `ShowHotkeyStatus` through `RunPage`. The first failure per page is logged in full and reported; later ones get one line. A navigation failure is reported too.
+  - **`UiTheme`** logs as "[UiTheme]" (it was "[Ui]") and writes "[UiTheme] Loaded the Fluent styles (… theme)." The launcher writes "[Settings] Created the settings window." once.
+  - **The welcome window** is only the first-run welcome now. `ShowWelcome()` is private and always offers Settings.
+  - **Test seams:**
+    - `AboutPage.LoadIcon` uses the assembly-qualified pack URI, so it also resolves in the test host.
+    - `AppController.Unstarted(SettingsService)` is an internal seam.
+    - The App project gains `InternalsVisibleTo Rimlight.App.Tests`.
+  - **`src/Rimlight.App.Tests` (new), 23 WPF smoke tests:**
+    - **Host:** one STA thread with a plain WPF `Application` (OnExplicitShutdown) that runs `UiTheme.Load`. The app's `App` can't be used: its constructor would start the tray, the capture and the overlay.
+    - **Theme (5):** the styles load, every theme key the source uses exists in Light, Dark and HighContrast, and the icon loads.
+    - **Pages (8):**
+      - Each of the six is built, refreshed, started, stopped and laid out at 572×520 and 372×360.
+      - The GlowColorEditor.
+      - Edits apply only after the first refresh.
+    - **Settings window (4):**
+      - Opened through the tray path; the X hides it, and reopening brings back the same window.
+      - Every page in all three themes.
+    - **Other windows (3):** the welcome with and without its button, and the visualizer.
+    - **Failure message (3).**
+    - **How they fail:**
+      - On a dispatcher exception.
+      - On any `[Settings]`, `[UiTheme]`, `[Visualizer]` or `[App]` line containing "fail", "can't", "unhandled", "exception" or "not applied".
+      - Operations time out after 30 s and waits after 15 s.
+    - **Where they run:**
+      - In Rimlight.sln, which CI's "Full solution (Windows)" job tests. They are not in Rimlight.Core.slnf.
+      - Off Windows the project builds with `IsTestProject=false`, because there is no WPF test host there.
+    - **Docs:** CONTRIBUTING (layout, lanes), the doc 02 layout, the doc 09 ownership map, the lane-b labeler and a ci.yml comment.
+- **Spec clarifications and deviations:**
+  - A Settings failure now opens an error box instead of the welcome window. This replaces a K6/K7 behaviour.
+  - The log area "[Ui]" is now "[UiTheme]".
+  - No contract, default value or existing test changed.
+- **Verified here (Linux, SDK 8.0.426):**
+  - Release and Debug builds have 0 warnings, and ff5db1c builds on its own.
+  - `dotnet test Rimlight.sln -c Release` passes.
+  - Rimlight.App.Tests can't run here: off Windows it isn't a test project, and forcing it aborted the run with "Microsoft.WindowsDesktop.App not found".
+  - **Windows CI, 2026-10-17:** a manual run of CI on 3a2fd04 ([run 38992796791](https://github.com/sussyswimmer/bordervisualizer/actions/runs/38992796791)) ran Rimlight.App.Tests in the "Full solution (Windows)" job: **23 passed, 0 skipped**. With the Fluent styles loaded as the app loads them, the settings window, all six pages, the colour editors, the welcome window and the visualizer window build and lay out without a logged failure on windows-latest. So the window itself can be built on Windows; what Maxwell saw still needs his rimlight.log or a description (a hidden tray icon in Windows 11's overflow, a build from the other #25–#30 stack, or something specific to his PC).
+- **Left for later:**
+  - **The cause on Maxwell's PC** is still unknown. It needs his rimlight.log lines (checklist item 1) or the first Windows CI run.
+  - **The first CI run** may hit environment issues:
+    - WPF windows on windows-latest
+    - `UISettings.TextScaleFactor` on Windows Server ("[Settings] Reading the text size failed" would fail the tray-path test)
+    - DWM, Mica and the dark title bar on Server 2022/2025
+  - **Harmless lines:** if CI logs a harmless, environment-only line, loosen the failure rule on purpose and say why.
+  - **The error box has no owner window.** If Windows refuses it foreground rights it can open behind other windows; check this on Maxwell's PC.
+  - **High contrast:** the smoke run uses whichever palette WPF-UI picks on a machine that isn't in high contrast (HCWhite). Real high contrast still needs a manual check.
+  - **If "no settings" meant no setting for the feel:** the motion now follows the music without one, and the edge is soft. A new `Settings` field would be a CONTRACT CHANGE, and live tuning of the dynamics is H-025.
+
+### Windows checklist (round 1)
+
+*Round 2 replaces items 2–8; see "Windows checklist (round 2)" under Feedback round 2.*
+
+**Setup.** Quit the installed Rimlight, then on `claude/confident-mccarthy-gt8tif` run `dotnet run --project src/Rimlight.App -c Release -- --debug-visualizer` (the glow plus the audio visualizer, for item 8). Default settings (Music Sync, Thickness 6, Glow 45 %, Brightness 80 %), a dark wallpaper, system volume about 50 %. Give each song about 30 s: the first second only listens, and the light learns a song's loud parts over its first 15–25 s.
+
+1. **Settings opens.**
+   - Do: double-click the tray icon (a single click turns the glow on or off), or right-click > Settings…. Click each page, close with X and reopen, then switch Windows between dark and light mode.
+   - Expect: "Rimlight Settings" with Appearance, Color, Motion, Displays, Behavior and About, each showing its controls; X only hides it, the same page comes back, and it follows the theme. rimlight.log (tray > Open logs folder) has "[UiTheme] Loaded the Fluent styles (… theme)." at start and "[Settings] Created the settings window." at the first open.
+   - Bug: the small "Rimlight is running" window, an empty right side, nothing at all, or an error box.
+   - If it fails: the box reads "Rimlight couldn't open its settings window. What went wrong: …". Click Yes (it opens the logs folder) and send the box's text with every rimlight.log line that starts with [Settings], [UiTheme] or [App] and contains "failed", "can't" or "Unhandled", plus the first "[App] Rimlight … started: Windows 10.0.NNNNN" line (or the whole file). The 5b387fc build you ran first writes "[Ui]" instead of "[UiTheme]"; its lines help too. If nothing appears and nothing like that is logged, look behind other windows and say what you saw.
+2. **The edge.**
+   - Expect: brightest at the very screen edge, fading smoothly inward: about a third as bright 40 px in and nearly gone by about 150 px on a 1080p screen (twice that on 4K). It bends round the corners, and over a white window it tints smoothly.
+   - Bug: any line, bar or brighter stripe along an edge, an inner outline, or a band that stays flat and then drops. A quarter-circle arc or a 45° crease in a corner is known (pre-existing); report it if you see it at normal viewing distance.
+3. **Thickness and Glow** (Settings > Appearance). Thickness no longer draws a solid line: it sets the width of a soft bright band at the edge.
+   - Do: Thickness 0, 20 and 40, each at Glow 10 % and 45 %; drag Glow from 0 to 100; apply the Minimal preset.
+   - Expect: Thickness 0 leaves only the glow, and more widens the bright part at the edge as a soft gradient (a wide band on a narrow glow may look like a soft shoulder). Glow goes smoothly from a soft hairline to a wide wash. Minimal is a thin soft edge, not a crisp 1 px line (intended). The preview card matches the screen; changes apply live and survive a restart.
+   - Bug: a hard inner edge, a line where the band meets the glow, jumps while dragging, or a preview that clearly differs from the screen.
+4. **Calm songs** (Noah Kahan or Hozier, for example "Stick Season" or "Cherry Wine").
+   - Expect: the glow swells and eases with the phrases, with no bounce on the voice, strums, piano or bass guitar. The chorus is clearly brighter; the next quiet verse eases down over 2–3 s and stays dimmer. Where a full kit comes in, bouncing on its kicks is fine, and it calms down within about 5–8 s after the drums stop.
+   - Bug: a sharp bounce on a sung word, a strum or a piano chord, a big bounce on a whisper, jittery brightness in a quiet verse, or a chorus no brighter than the verse.
+   - Known limits: in the first song after launch a soft kit in a sparse first verse can still bounce, and a chorus coming in gives one bigger pulse.
+5. **Rap and EDM.**
+   - Expect: after the first 2 s, a strong, tight bounce on every 808 or kick. An EDM breakdown has no pulses, only a slow wave, and the first kicks of the drop hit hard at once. At Brightness 100 % the light swells inward on each beat and the outermost pixels get only slightly brighter.
+   - Bug: clearly audible kicks with no bounce, a bounce that lags the kick, bounces on syllables between kicks or on pads in a breakdown, or a brighter rim flashing along the edges on the beat.
+6. **Volume and song changes.**
+   - Expect: a few notches of volume barely show, and the same song at any steady volume looks the same. A big change (50 % → 10 %, or back) shows for up to about 25 s (30 s if it lands at the start of a quiet verse) while kicks keep bouncing at least softly. A quiet song after a loud one starts dimmer and recovers over 25–40 s.
+   - Bug: no recovery after 40 s, or a flash.
+7. **Sensitivity** (Settings > Motion): at 0.5 the bounces are about half as big; at 2 they are full and the light is brighter.
+8. **Visualizer.**
+   - Expect: a "beat fired" tick on every bass onset; in a calm song, ticks with little or no Beat above them are syllables and plucks judged not to be kicks. In rap each tick has Beat near 1, and the BPM is within ±2 of the song's (EDM about 128, not 256). Moving the Bass band sliders (say to 20–200 or 30–250 Hz) doesn't make a calm song bounce or stop rap bouncing on every 808.
+9. **Half scale and mixed DPI,** if you have them. On battery with "Save power" the look is the same at half resolution, with no rim on the beat, and Thickness 1 is still faintly visible. A 100 % monitor next to a 150 % or 200 % one shows the glow proportionally the same on both.
+10. **WPF smoke tests.** Quit Rimlight (the build can't overwrite a running copy's files), then run `dotnet test src/Rimlight.App.Tests -c Release`: it opens every window and settings page. Expect 23 passed; windows flash briefly and one takes focus. A failure's message lists the logged failure lines. CI's "Full solution (Windows)" job runs the same tests.
+
+**Reporting a dynamics issue.** The new constants are internal, so "Copy params as JSON" can't move them (H-025). Send a screen recording with sound (the Snipping Tool's Record, or OBS) that shows the screen edges and ideally the visualizer; the song, artist and timestamp; the system volume and whether it was the first song after launch; and what you expected: a wave, a soft pulse or a hard bounce.
+
+## Feedback round 2 (Maxwell's second Windows run)
+
+Maxwell ran round 1 (6ac553b, this branch) on Windows, after quitting the old copy. He said it "still feels wrong" on all four points, and answered the follow-up questions:
+- Calm songs (Noah Kahan, Hozier) are still sharp.
+- The bounces still aren't proportional to the song.
+- Rap and EDM: "Bounces too small", "Late / off the beat" and "Misses kicks".
+- The edge: a "Thin bright rim", a thin bright line right at the screen edge with the glow fading in behind it.
+
+Round 1 had been tuned on procedural tracks only. Round 2 built a test bed of 15 real Creative Commons recordings, with reference annotations that share no code with Rimlight (`tools/corpus/`). It measured each complaint there and retuned on it.
+
+- **Merged on `claude/confident-mccarthy-gt8tif`:**
+  - Dynamics, with the replay harness `wav-analyze --engine`: b368ec6 (`wip/r2-corpus` a767bca, `wip/r2-dyn`, `wip/r2-dyn-fix`).
+  - The edge: 15d918f (`wip/r2-rim`, `wip/r2-rim-fix`).
+  - Record 2 min: 698786a (`wip/r2-diag`, `wip/r2-diag-fix`).
+  - Reviews: the dynamics and the edge each had two, Record 2 min one. Each part then had a fix round before merging.
+  - `tools/corpus/` came with the docs pass: the track list and the fetch, annotation, replay and metrics scripts, with no audio.
+- **Merged state, checked in the docs pass:**
+  - `dotnet build Rimlight.sln`, Release and Debug from a clean tree: 0 warnings.
+  - `dotnet test Rimlight.sln -c Release` passes Rimlight.Tests 873, Rimlight.Platform.Tests 413 and Rimlight.IconGen.Tests 89. Rimlight.App.Tests runs on Windows CI.
+  - Replaying the whole corpus on the merged build gives exactly the reviewed dynamics branch's numbers, on every class measure.
+- **Not changed:** no file under `Contracts/`, and no `AudioTuning` or `Settings` default. Nothing has run on Windows yet; the checklist is at the end of this section.
+
+**Where it stands.** Measured on the corpus with `tools/corpus/metrics.py`, in frame times without display latency.
+- **Hit:** a pulse of 0.5 or more within −20..+80 ms of an annotated kick.
+- **Bounce depth:** how much brighter the drawn light gets on a kick.
+
+| Measure | Before round 1 (5b387fc) | Round 1 (6ac553b) | Round 2 |
+|---|---|---|---|
+| **Calm, no drums:** pulses ≥ 0.2 a minute | 52 | 0 | 0 |
+| **Calm, no drums:** p95 brightness slope, per second | 1.40 | 0.16 | 0.07 |
+| **Calm, no drums:** brightness against the 3 s loudness, r | 0.24 | 0.57 | 0.78 |
+| **Calm with a folk or rock kit:** bounce depth | 34 % | 12 % | 9 % |
+| **Calm with a folk or rock kit:** brightness against loudness, r | 0.02 | 0.32 | 0.77 |
+| **Rap / EDM:** bounce depth | 28 / 26 % | 18 / 18 % | 36 / 38 % |
+| **Rap / EDM:** kick to pulse peak, median (p90), ms | 27 (41) / 28 (40) | 46 (59) / 53 (66) | 24 (37) / 28 (39) |
+| **Rap / EDM:** hit rate | 72 / 69 % | 55 / 57 % | 74 / 79 % |
+| **Rap / EDM:** false pulses ≥ 0.3 a minute | 17.0 / 22.9 | 2.8 / 7.3 | 15.5 / 14.5 |
+| **Edge** at the defaults, 1080p: fall over the outermost 4 px (in L*) | a solid line | 13.4 % (10.6 %) | 2.4 % (1.8 %) |
+
+**Still short of the brief.** Details are under Dynamics, "Known limits".
+- Rap and EDM hit 74 % and 79 % of kicks, against a 90 % target. Most misses are kicks the detector never fires on, and a song's first groove needs two or three strong kicks.
+- Rap and EDM have about 15 false pulses a minute. About half land on other onsets (snares, syllables), and most of the rest on 808 and bass hits that the annotation doesn't count as kicks.
+- Pulse size follows the moment (the groove's weight and the loudness), not each kick's own strength.
+- In rap, EDM and calm songs with drums, loud parts are only 1.11–1.25× as bright as quiet ones, against a 1.4 target (pop reaches 1.40).
+
+**Decisions for Maxwell** (HANDOFF H-028): how big a folk or rock kit's pulse is, the dip between kicks, and the strong-kick threshold.
+
+### Real-music corpus and replay harness
+
+Branch `wip/r2-corpus` (a767bca), on 6ac553b. Effort: L. Merged with the dynamics (b368ec6). Feedback round 2: Maxwell tested 6ac553b on Windows and said every point still feels wrong. Round 1 was tuned on procedural tracks only, so this round builds a real-music test bed and measures his complaints on it.
+
+#### Corpus
+
+15 Creative Commons tracks, described in `tools/corpus/manifest.json` (id, title, artist, source URL, download URL, licence URL, class, duration, notes). No audio, and nothing derived from it, is in the repository: `tools/corpus/fetch.py` downloads and decodes the tracks into a folder outside it (added in the docs pass, with the scripts below and a README).
+
+- **Sources:** archive.org netlabel and community items, starfrosch "Most Wanted", and ccMixter (its downloads need a Referer header).
+- **Licences:** confirmed from each source's own API (archive.org metadata `licenseurl`, ccMixter `license_url`). They are CC BY 3.0 and 4.0, BY-NC 3.0, BY-NC-SA 3.0 and BY-NC-ND 3.0, all used only for private offline analysis.
+- **Format:** 48 kHz mono 16-bit WAV (channels averaged, soxr resampling), the first 240 s.
+- **Selection:** about 70 candidates were screened with low-band HPSS contact sheets (0-300 Hz percussive and harmonic parts over time).
+
+| Class | Count | Tracks |
+|---|---|---|
+| Calm | 4 | David Rovics "Sugihara" (live, voice and strummed guitar); Derrick Hart "Rest Well"; Josh Woodward "Memorized" and "Only Whispering" |
+| Calm-then-drums | 2 | Derek Clegg "On My Own" (kick from 55 s); Josh Woodward "Private Hurricane" (kit from 108 s, full band from 150 s) |
+| Rap | 4 | Robbero "Ballin" (trap, 808 sections); Donnie Ozone "Clean"; starfrosch feat. Kcentric; starfrosch feat. Kojo Flint (808) |
+| EDM | 2 | Awkward_tom "Breakers Delight" (breakdown 48-66 s, drop 66 s, build and drop at about 158 s); ScOmBer "POWER UP" (breakdown and drop) |
+| Pop and rock | 2 | Josh Woodward "Let It In"; Derek Clegg "The River" |
+| Piano | 1 | Fabrizio Paterlini "Viandanze" |
+
+#### Oracle: `tools/corpus/oracle.py`, one `<id>.oracle.json` per track
+
+Independent of Rimlight's code: librosa 1.0.0, scipy and pyloudnorm, pinned in `tools/corpus/requirements.txt`.
+
+- **Kicks:**
+  - **Detection:** HPSS (margin 3) on an 11.025 kHz STFT with a 2.9 ms hop. The percussive part is summed over 30-130 Hz and its log-level flux is peak-picked.
+  - **Every class:** a candidate is kept when it rises at least 6 dB in the percussive part and at least 1.5 dB in the whole band (so the percussive flicker of a held 808 doesn't count). It must also be within 20 dB of the band's 95th percentile, and its low-passed envelope peak within 12 dB of the strongest kick within 3 s.
+  - **Calm, calm-then-drums and piano** add three tests: a low share of the percussive rise, a 30-65 Hz sub-band test, and a decay test (a kick dies away within 250 ms, a low guitar or piano note rings on).
+  - **Pop** adds the share and sub tests, against bass guitar notes and snare bodies.
+  - **Timing:** in the time domain on the 48 kHz signal (zero-phase low-pass and Hilbert envelope); the onset is where the envelope first rises 20 % of the way to its peak. STFT frames are centred, so the frame time alone would lead the attack by up to half a window.
+  - The module docstring gives every threshold and the measurements behind it.
+- **Beats and tempo:** librosa `beat_track` at its defaults.
+- **Loudness:** BS.1770 K-weighted, momentary (400 ms) and short-term (3 s) LUFS every 50 ms, and integrated loudness.
+- **Broadband onsets:** all other onsets, labelled percussive or tonal.
+- **Sections:** quiet, mid or loud, against the track's 95th-percentile short-term loudness (loud within 4 dB, quiet 10 dB or more under).
+
+**Validation.** Every criterion came from inspecting spectrograms. `plots/oracle_check_*.png` covers one or more tracks per class: 0-300 Hz windows with the kicks marked, plus the inter-kick-interval histogram. I looked at each one.
+- **Rap and EDM:** every mark sits on a visible kick or 808 attack. The histograms are crisp: trap kicks at 1, 2 and 3 beats, the EDM kick on every beat.
+- **Calm-then-drums:** the kit's kicks are marked from where they enter.
+- **Calm:** 0, 0, 1 and 10 kicks. Sugihara's 10 are sporadic low thumps in a live solo set. Earlier versions marked a detuned guitar's 60 Hz notes, which the decay test removed.
+- **Piano:** no kicks.
+- **Against librosa's tempo (`oracle_validation.md`):**
+  - For 7 of the 10 drum tracks, 82-98 % of inter-kick intervals lie on whole or half beats.
+  - The other three: rap-clean 57 % (librosa's tempo is wrong; the track is about 68 BPM), pop-letitin 60 % (triplet feel), rap-kojo 69 % (808 pattern).
+  - 87-94 % of kicks lie within 70 ms of a beat or half-beat (rap-clean 45 %).
+- **Known limits:**
+  - Pop and calm-then-drums are marked for precision over recall (letitin: about two thirds of its kicks).
+  - A ringing low hit in hurricane's calm part is left unmarked.
+  - So false-pulse counts in those classes are upper bounds.
+
+#### Harness: `wav-analyze --engine` (committed)
+
+`dotnet run -c Release --project tools/wav-analyze -- song.wav --engine [--fps 60] [--packet-ms 10] [--jitter 0.1] [--brightness 0.8] [--sensitivity 1] [--tuning t.json]`
+
+- **What it runs:** Bench's `FramePipeline`, the copy of `MusicGlowSource.NextFrame` that `BenchMirrorTests` keeps honest. That is the analyzer, the palette blender and gradient, and the light engine, all through `CoreFactory`. Audio arrives in WASAPI-like 10 ms packets at 60 fps with ±10 % frame jitter.
+- **What it writes:** `song.engine.csv`, one row per frame:
+  - time, samples, level, bass, beat, isSilent, beatCount, fired, flux, threshold and bpm;
+  - intensity, pulse, spread, visibility and phase (the LightState);
+  - position, loudnessDb, referenceDb, punch, drive, kickLike, grade and levelTarget.
+- **Internal values** are read by reflection, one bound delegate each and no boxing, so the same tool replays builds from before or after a change to Core's internals; a value a build doesn't have is left empty. No Contracts change. Bench gives `wav-analyze` InternalsVisibleTo for `FramePipeline`.
+- **Also:** it prints a one-line summary of the light, and still writes the analyzer's PNG plot.
+- **Test:** `WavAnalyzeTests.EngineModeReplaysTheRenderThreadAndWritesTheLight` checks that:
+  - the analyzer columns equal an analyzer-only run on the same feed;
+  - Intensity = Brightness × (0.35 + 0.65 Level) and Pulse = Beat;
+  - samples come in whole 10 ms packets;
+  - every internal column is filled, so a rename in Core can't silently empty them.
+- **Docs:** CONTRIBUTING explains how to replay a real song, and `.gitignore` now keeps `*.wav`, `*.mp3`, `*.flac`, `*.ogg`, `*.m4a` and `*.engine.csv` out of the repository.
+- **Baselines:** the harness was copied into detached worktrees at 5b387fc and 6ac553b (Bench and the tools are identical at both) and run with `tools/corpus/run_harness.sh`. Both worktrees were removed afterwards.
+
+#### Baseline: `tools/corpus/metrics.py`
+
+Frame times only; on Windows add 1-2 frames.
+- **Hit:** a pulse of 0.5 or more peaking within [-20, +80] ms of an oracle kick.
+- **Bounce:** how much brighter the drawn light, SoftClip(Intensity × (1 + 0.25·Pulse)), gets on a kick.
+
+| Class | Build | Detected | Hit | Peak latency, median / p90 | Bounce | False pulses ≥ 0.3 per min | Pulses ≥ 0.2 per min | Variance above 3 Hz (Intensity / drawn) | r(Intensity, loudness) |
+|---|---|---|---|---|---|---|---|---|---|
+| Calm | 5b387fc | – | – | – | – | 51.7 | 52.3 | 4.4 % / 10.4 % | 0.24 |
+| Calm | 6ac553b | – | – | – | – | 0.0 | 0.0 | 0.2 % / 0.2 % | 0.57 |
+| Calm-then-drums | 5b387fc | 94 % | 94 % | 27 / 35 ms | 34 % | 50.9 | 66.2 | 3.0 % / 12.1 % | 0.02 |
+| Calm-then-drums | 6ac553b | 94 % | 32 % | 39 / 45 ms | 12 % | 0.4 | 6.7 | 1.0 % / 4.6 % | 0.32 |
+| Rap | 5b387fc | 72 % | 72 % | 27 / 41 ms | 28 % | 17.0 | 72.0 | 7.2 % / 17.4 % | 0.26 |
+| Rap | 6ac553b | 72 % | 55 % | 46 / 59 ms | 18 % | 2.8 | 48.8 | 4.8 % / 16.9 % | 0.49 |
+| EDM | 5b387fc | 69 % | 69 % | 28 / 40 ms | 26 % | 22.9 | 105.8 | 10.4 % / 25.8 % | 0.41 |
+| EDM | 6ac553b | 69 % | 57 % | 53 / 66 ms | 18 % | 7.3 | 79.1 | 6.9 % / 23.5 % | 0.57 |
+| Pop | 5b387fc | 96 % | 96 % | 28 / 38 ms | 30 % | 42.7 | 98.4 | 5.3 % / 16.5 % | 0.41 |
+| Pop | 6ac553b | 96 % | 38 % | 45 / 53 ms | 12 % | 4.2 | 31.6 | 2.6 % / 10.7 % | 0.65 |
+| Piano | 5b387fc | – | – | – | – | 46.1 | 46.1 | 1.8 % / 5.9 % | 0.28 |
+| Piano | 6ac553b | – | – | – | – | 0.0 | 0.0 | 0.1 % / 0.1 % | 0.63 |
+
+The beat fires 21-29 ms after the kick in both builds. The per-track tables and a table of why each missed kick is missed stayed in the session's scratch files; `metrics.py` regenerates them.
+
+#### Diagnosis, by complaint
+
+1. **Calm songs sharp: not reproduced as motion.**
+   - At 6ac553b drumless calm music has no pulses, 0.1-0.3 % of its variance above 3 Hz, and p95 |dI/dt| of 0.11-0.20 per second.
+   - The light is nearly static and bright instead of a wave: Intensity's 10th to 90th percentile is 0.57-0.74 against a maximum of 0.80. Causes: Level is pinned at full within about 5 dB of the song's loud parts (LevelKnee 0.8, AudioAnalyzer.cs:255), and there is a floor of 0.35 × Brightness (LightEngine.cs:155).
+   - So "sharp" is most likely the hard, constant glow, the edge line (5), and a folk kit bouncing at full size (2).
+2. **Not proportional: reproduced.**
+   - **Pulse size runs against loudness:** r = -0.11 to -0.47 on 7 of the 8 drum tracks with enough hits (edm-breakers +0.32). Kick-likeness (BeatCharacter.KickLike, :242-246) measures a kick against the rest of the mix.
+   - **hurricane:** its sparse kick section bounces at full size, and Level also steps on every kick because punch switches it to the 30 ms attack. Its loud full-band ending doesn't bounce at all.
+   - **pop-letitin:** a full rock kit is graded "no drums" (kick-likeness and punch 0 on 91-95 % of its kicks, hit rate 2 %).
+   - **Re-entries start silent:** after any break of 4 s or more the first 2-4 kicks give 0. EDM drops go 0, 0.30, 0.73, 1. Cause: the grade uses the punch from before the onset (BeatCharacter.cs:114, 216; :54-59, :231).
+3. **Rap and EDM: reproduced on all three counts.**
+   - **Missed, detection (both builds):** 11-38 % of kicks stay below the threshold, reaching 60-90 % of it. The threshold there is about twice mean + 1.5σ, so the median guard sets it (BeatDetector.MedianOnsetRatio = 10, :24, :109-110). Another 3-14 % fall inside the 180 ms refractory time; that default is a frozen contract value, so a fix must be an internal exception.
+   - **Missed, grading (round 1):** kicks over an 808 grade near 0 (kojo: median kick-likeness 0.23, grade 0.08; the rise is measured at BeatCharacter.cs:120-126).
+   - **Small:** a bounce is 18 % brighter, 28 % before round 1. A full pulse is capped near +25 %: Intensity is 0.70-0.76 in a groove, the beat multiplies by 1 + 0.25·Pulse, and the soft clip starts at 0.9 (GlowProfile.cs:44-53, 174-185).
+   - **Late:** the pulse peaks 46-53 ms after the kick, 27-28 ms before round 1. The beat itself fires at 21-29 ms, near the floor. The rest is the grade growing over the 35 ms onset window (BeatCharacter :171-179, :212-223). On screen that is about 65-85 ms.
+   - **False pulses:** fixed by round 1 (17-52 a minute down to 0-7).
+4. **A big bounce on a whisper:** at 6ac553b no pulse of 0.5 or more lands in a quiet section. What remains is the inverse proportionality in 2.
+5. **Edge line: reproduced from the profile math** (`rim_profile.py`, rendering, outside the harness).
+   - At the defaults (1080p, Thickness 6, Glow 0.45), the outermost pixels read 179, 171, 163, 155, 149, 143, 138, against 154, 150, 146, 142, 139, 135, 132 with Thickness 0.
+   - So the band adds 25 code values within 6 px and falls 8.7 per pixel there, against 3.5-4 for the glow alone. The glow alone is also brightest and steepest exactly at the edge.
+   - `CoreThicknessDip` 6 is a frozen default, so the renderer must reinterpret it internally.
+
+**Plots (looked at):**
+- `plots/track_{calm-memorized,rap-ballin,rap-kojo,edm-breakers,drums-hurricane,pop-letitin}.png`: loudness and sections, Intensity, drawn light and Pulse for both builds, oracle kicks, a whole-track view and a 12-20 s zoom.
+- `plots/oracle_check_*.png`.
+
+**Caveats:**
+- Netlabel and ccMixter recordings: the rap is closer to underground hip-hop than to chart trap.
+- MP3 sources.
+- The frame-time model doesn't include Windows display latency.
+- The bounce measure leaves out the 35 % spread push.
+
+### Dynamics
+
+#### First pass [L]
+
+*The review fix below supersedes parts of this pass. Its re-trigger and supersede exceptions inside the refractory time are gone, the groove's weight now keeps folk and rock kits to a soft lift, and the fix's tables replace the ones here.*
+
+Commits f44d35d and 1515662 on `wip/r2-dyn` (branched from a767bca; wip/r2-corpus was already merged). Measured with `wav-analyze --engine`: Bench's FramePipeline at 60 fps ±10 % with 10 ms packets, default settings, Brightness 0.8. Times are frame times; display latency is not included.
+
+Held-out tracks are marked *. Tuned on: calm-memorized, calm-whispering, drums-hurricane, rap-ballin, rap-kojo, edm-breakers and pop-letitin. Caveat: some held-out tracks were looked at during early feature exploration and in one sweep of the calm loudness range. No constant was picked on them.
+
+**Root causes, found in 6ac553b's Core:**
+- **Calm light static.**
+  - Level was min(1, position / LevelKnee 0.8) × (1 − 0.6 × (1 − auto-gain)) (AudioAnalyzer.cs:27, :255, :258), with RangeDb 24 (SongLoudness.cs:54).
+  - The result: a calm song's Intensity stayed within 0.57–0.74 for 80 % of the song.
+- **Late pulses.**
+  - The grade grew over a 35 ms onset window of FFT frames (BeatCharacter.cs:52, :200, :216), so pulses peaked 46–53 ms after the kick, against 21–29 ms for the beat itself.
+- **Missed and zero pulses.**
+  - The median guard ×10 (BeatDetector.cs:24, :110) left 11–38 % of rap and EDM kicks under the threshold.
+  - The 180 ms refractory time (:117) blocked 3–14 %.
+  - Kick-likeness was measured against the current mix, so full choruses graded smaller.
+  - The punch was taken from before the onset, so the first kicks after a break got 0, 0.3, 0.73, then 1.
+- **Weak bounce.** Nothing dipped between kicks, so a full pulse lifted the drawn light only 12–18 %.
+
+**Design (internal, behind the frozen contracts):**
+- **KickEnvelope (new).** A time-domain kick band (Butterworth LP 100 Hz + HP 30 Hz, power over 4 ms) and the music above 150 Hz (0.25 s). It reports rise and prominence in dB.
+- **BeatDetector.**
+  - With prominence ≥ −4 dB, the median guard is 5× instead of 10×.
+  - Inside the refractory time a beat may re-fire for a double kick (≥ 90 ms after, fresh attack, ≥ 3 dB of evidence).
+  - Or it may fire for a kick right after a weaker onset (≥ 50 ms after, 1.3× the flux after a dip).
+- **BeatCharacter (rewritten).**
+  - Grade at the beat = Sensitivity × punch × evidence × size × loud.
+    - Evidence: smoothstep −10..−5 dB of prominence, or 12..20 dB of rise, whichever is larger.
+    - Size: amplitude against recent kicks, smoothstep 0.05..0.3, with a half-life of 4 s.
+    - Loud: song position held 0.75 s, smoothstep 0.25..0.55, floor 0.3 × punch.
+  - A frame later the FFT can raise the grade (prominence 3..9 dB, rise 14..22 dB).
+  - An unmistakable kick (8..14 dB) grades itself without a groove.
+  - The punch comes from strong confirmations (smoothstep 4.5..10.5 dB, count fading with τ = 3 s, groove smoothstep 1.1..1.8). Weak confirmations keep a groove going at a drum part's rate, up to its memory.
+  - A beat that re-fires within 0.18 s counts once.
+  - The punch holds 3 s, then releases with τ = 2.5 s.
+  - The first second after near-silence is never graded.
+- **AudioAnalyzer.**
+  - Level is a two-stage envelope of the song position: 1 s / 1.6 s with no drums, 0.15 s / 0.8 s in a groove.
+  - The pump is Level × (1 − 0.4 × punch × (1 − pump)), with τ = 0.3 s.
+- **SongLoudness.** Range 18 dB.
+
+**Per class (5b387fc / 6ac553b / now):**
+
+| Class | Build | Kicks | Detected | Hit rate | Latency med / p90 ms | Pulse on hits mean / p10 | Bounce depth | False ≥0.3 /min (on nothing) | Pulses ≥0.2 /min | I var >3 Hz | p95 dI/dt | r(I, loudness) | Loud / low |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| calm | 5b387fc | 11 | 82 % | 82 % | 31 / 51 | 1.00 / 1.00 | 28 % | 51.7 (16.5) | 52.3 | 4.4 % | 1.06 | 0.24 | 1.24 |
+| calm | 6ac553b | 11 | 82 % | 0 % | – | – | 1 % | 0.0 | 0.0 | 0.2 % | 0.16 | 0.57 | 1.46 |
+| calm | now | 11 | 82 % | 0 % | – | – | 0 % | 0.0 | 0.0 | 0.0 % | 0.07 | 0.78 | 1.63 |
+| calm-then-drums | 5b387fc | 114 | 94 % | 94 % | 27 / 35 | 1.00 / 1.00 | 34 % | 50.9 (23.6) | 66.2 | 3.0 % | 0.75 | 0.02 | 0.93 |
+| calm-then-drums | 6ac553b | 114 | 94 % | 32 % | 39 / 45 | 0.87 / 0.73 | 12 % | 0.4 (0.0) | 6.7 | 1.0 % | 0.20 | 0.32 | 1.01 |
+| calm-then-drums | now | 114 | 98 % | 78 % | 27 / 36 | 0.98 / 0.98 | 41 % | 9.0 (4.4) | 24.4 | 5.3 % | 0.40 | 0.43 | 1.13 |
+| rap | 5b387fc | 1108 | 72 % | 72 % | 27 / 41 | 1.00 / 1.00 | 28 % | 17.0 (8.7) | 72.0 | 7.2 % | 1.04 | 0.26 | 1.00 |
+| rap | 6ac553b | 1108 | 72 % | 55 % | 46 / 59 | 0.97 / 0.94 | 18 % | 2.8 (1.1) | 48.8 | 4.8 % | 0.53 | 0.49 | 1.05 |
+| rap | now | 1108 | 88 % | 78 % | 25 / 37 | 0.98 / 0.93 | 38 % | 30.7 (18.0) | 94.9 | 14.0 % | 1.05 | 0.43 | 1.10 |
+| edm | 5b387fc | 945 | 69 % | 69 % | 28 / 40 | 1.00 / 1.00 | 26 % | 22.9 (11.4) | 105.8 | 10.4 % | 1.20 | 0.41 | 1.16 |
+| edm | 6ac553b | 945 | 69 % | 57 % | 53 / 66 | 0.95 / 0.80 | 18 % | 7.3 (2.1) | 79.1 | 6.9 % | 0.65 | 0.57 | 1.21 |
+| edm | now | 945 | 89 % | 84 % | 28 / 40 | 1.00 / 1.00 | 37 % | 30.1 (16.7) | 131.6 | 23.1 % | 1.92 | 0.42 | 1.24 |
+| pop | 5b387fc | 461 | 96 % | 96 % | 28 / 38 | 1.00 / 1.00 | 30 % | 42.7 (13.7) | 98.4 | 5.3 % | 1.07 | 0.41 | 1.20 |
+| pop | 6ac553b | 461 | 96 % | 38 % | 45 / 53 | 0.88 / 0.68 | 12 % | 4.2 (0.3) | 31.6 | 2.6 % | 0.38 | 0.65 | 1.28 |
+| pop | now | 461 | 97 % | 91 % | 28 / 37 | 0.97 / 0.92 | 44 % | 32.4 (11.1) | 88.4 | 13.5 % | 0.64 | 0.46 | 1.27 |
+| piano | 5b387fc | 0 | – | – | – | – | – | 46.1 | 46.1 | 1.8 % | 0.77 | 0.28 | 1.09 |
+| piano | 6ac553b | 0 | – | – | – | – | – | 0.0 | 0.0 | 0.1 % | 0.19 | 0.63 | 1.18 |
+| piano | now | 0 | – | – | – | – | – | 0.0 | 0.0 | 0.0 % | 0.07 | 0.69 | 1.32 |
+
+(5b387fc pulsed on every onset, calm songs included. That is why its hit rates are high and its false pulses and calm pulses are high too.)
+
+**Kicks per track (5b387fc / 6ac553b / now):**
+
+| Track | Build | Kicks | Detected | Hit rate | Latency med / p90 ms | Pulse on hits mean / p10 | Bounce depth | False ≥0.3 /min (on onset / on nothing) |
+|---|---|---|---|---|---|---|---|---|
+| drums-onmyown* | 5b387fc | 53 | 96 % | 96 % | 27 / 34 | 1.00 / 1.00 | 30 % | 45.9 (26.8 / 19.2) |
+| drums-onmyown* | 6ac553b | 53 | 96 % | 11 % | 42 / 46 | 0.77 / 0.55 | 5 % | 0.0 |
+| drums-onmyown* | now | 53 | 100 % | 81 % | 27 / 35 | 0.98 / 0.96 | 43 % | 7.3 (3.3 / 4.0) |
+| drums-hurricane | 5b387fc | 61 | 92 % | 92 % | 28 / 36 | 1.00 / 1.00 | 38 % | 54.7 (27.7 / 27.0) |
+| drums-hurricane | 6ac553b | 61 | 92 % | 51 % | 37 / 44 | 0.96 / 0.89 | 19 % | 0.8 (0.8 / 0.0) |
+| drums-hurricane | now | 61 | 97 % | 75 % | 27 / 36 | 0.99 / 1.00 | 40 % | 10.3 (5.5 / 4.8) |
+| rap-ballin | 5b387fc | 274 | 78 % | 78 % | 21 / 38 | 1.00 / 1.00 | 28 % | 8.1 (4.0 / 4.0) |
+| rap-ballin | 6ac553b | 274 | 78 % | 64 % | 46 / 56 | 0.98 / 0.97 | 21 % | 2.3 (0.9 / 1.4) |
+| rap-ballin | now | 274 | 89 % | 82 % | 14 / 30 | 0.99 / 1.00 | 44 % | 9.3 (5.2 / 4.0) |
+| rap-clean* | 5b387fc | 279 | 54 % | 54 % | 29 / 43 | 1.00 / 1.00 | 27 % | 10.6 (5.5 / 5.0) |
+| rap-clean* | 6ac553b | 279 | 54 % | 41 % | 47 / 60 | 0.97 / 0.92 | 16 % | 2.8 (1.5 / 1.3) |
+| rap-clean* | now | 279 | 76 % | 61 % | 26 / 39 | 0.99 / 1.00 | 29 % | 14.1 (3.3 / 10.8) |
+| rap-kcentric* | 5b387fc | 356 | 83 % | 83 % | 29 / 40 | 1.00 / 1.00 | 28 % | 26.3 (5.9 / 20.5) |
+| rap-kcentric* | 6ac553b | 356 | 83 % | 78 % | 45 / 58 | 0.99 / 1.00 | 22 % | 5.2 (3.6 / 1.6) |
+| rap-kcentric* | now | 356 | 97 % | 97 % | 29 / 41 | 1.00 / 1.00 | 42 % | 30.3 (5.2 / 25.0) |
+| rap-kojo | 5b387fc | 199 | 68 % | 68 % | 29 / 43 | 1.00 / 1.00 | 28 % | 24.1 (17.0 / 7.1) |
+| rap-kojo | 6ac553b | 199 | 68 % | 23 % | 48 / 62 | 0.92 / 0.83 | 10 % | 1.3 (1.0 / 0.3) |
+| rap-kojo | now | 199 | 86 % | 63 % | 27 / 41 | 0.92 / 0.64 | 32 % | 66.6 (34.6 / 32.0) |
+| edm-breakers | 5b387fc | 496 | 79 % | 79 % | 28 / 43 | 1.00 / 1.00 | 27 % | 21.0 (13.7 / 7.3) |
+| edm-breakers | 6ac553b | 496 | 79 % | 68 % | 52 / 66 | 0.95 / 0.78 | 20 % | 5.1 (4.8 / 0.3) |
+| edm-breakers | now | 496 | 94 % | 90 % | 28 / 40 | 1.00 / 1.00 | 38 % | 21.3 (13.2 / 8.1) |
+| edm-powerup* | 5b387fc | 449 | 59 % | 59 % | 27 / 36 | 1.00 / 1.00 | 26 % | 24.7 (9.3 / 15.4) |
+| edm-powerup* | 6ac553b | 449 | 59 % | 44 % | 53 / 66 | 0.96 / 0.82 | 17 % | 9.6 (5.5 / 4.0) |
+| edm-powerup* | now | 449 | 84 % | 76 % | 28 / 41 | 1.00 / 1.00 | 36 % | 38.8 (13.6 / 25.2) |
+| pop-letitin | 5b387fc | 202 | 91 % | 91 % | 29 / 41 | 1.00 / 1.00 | 26 % | 67.3 (41.8 / 25.5) |
+| pop-letitin | 6ac553b | 202 | 91 % | 2 % | 47 / 56 | 0.87 / 0.68 | 2 % | 2.8 (2.8 / 0.0) |
+| pop-letitin | now | 202 | 93 % | 82 % | 29 / 41 | 0.96 / 0.83 | 38 % | 56.2 (35.5 / 20.7) |
+| pop-river* | 5b387fc | 259 | 100 % | 100 % | 27 / 34 | 1.00 / 1.00 | 33 % | 18.2 (16.1 / 2.0) |
+| pop-river* | 6ac553b | 259 | 100 % | 66 % | 44 / 51 | 0.89 / 0.69 | 21 % | 5.5 (5.0 / 0.5) |
+| pop-river* | now | 259 | 100 % | 98 % | 27 / 35 | 0.99 / 1.00 | 50 % | 8.6 (7.1 / 1.5) |
+
+**Wave, smoothness and proportionality per track (5b387fc / 6ac553b / now):**
+
+| Track | Pulses ≥0.2 /min | I var >3 Hz | p95 dI/dt /s | r(I, loudness) | Loud / low |
+|---|---|---|---|---|---|
+| calm-sugihara* | 54.2 / 0.0 / 0.0 | 3.8 / 0.2 / 0.0 % | 1.16 / 0.16 / 0.04 | −0.13 / 0.06 / 0.52 | – (mid) |
+| calm-restwell* | 17.3 / 0.0 / 0.0 | 6.9 / 0.3 / 0.0 % | 0.81 / 0.11 / 0.03 | 0.62 / 0.90 / 0.89 | 1.47 / 1.94 / 2.21 |
+| calm-memorized | 85.5 / 0.0 / 0.0 | 2.8 / 0.1 / 0.0 % | 0.96 / 0.18 / 0.10 | 0.03 / 0.55 / 0.87 | 1.00 / 1.11 / 1.28 |
+| calm-whispering | 48.2 / 0.0 / 0.0 | 4.2 / 0.1 / 0.0 % | 1.30 / 0.20 / 0.09 | 0.45 / 0.76 / 0.82 | 1.27 / 1.31 / 1.41 |
+| drums-onmyown* | 62.8 / 3.6 / 22.5 | 2.8 / 0.4 / 4.1 % | 0.61 / 0.18 / 0.39 | −0.05 / 0.21 / 0.35 | 0.83 / 0.92 / 1.03 |
+| drums-hurricane | 68.8 / 9.1 / 26.0 | 3.2 / 1.5 / 6.6 % | 0.88 / 0.23 / 0.41 | 0.10 / 0.42 / 0.51 | 1.03 / 1.11 / 1.23 |
+| rap-ballin | 70.0 / 58.7 / 78.9 | 6.9 / 4.5 / 15.6 % | 0.96 / 0.54 / 0.64 | 0.29 / 0.55 / 0.45 | 0.99 / 1.02 / 1.09 |
+| rap-clean* | 48.2 / 33.5 / 58.5 | 4.0 / 2.0 / 9.0 % | 1.06 / 0.53 / 0.59 | 0.11 / 0.36 / 0.48 | 0.90 / 1.00 / 1.12 |
+| rap-kcentric* | 122.3 / 97.9 / 142.8 | 7.2 / 6.0 / 20.0 % | 1.08 / 0.60 / 2.34 | 0.28 / 0.48 / 0.37 | – (mid) |
+| rap-kojo | 58.7 / 17.3 / 108.2 | 10.8 / 6.5 / 11.2 % | 1.07 / 0.45 / 0.63 | 0.37 / 0.59 / 0.42 | 1.12 / 1.13 / 1.09 |
+| edm-breakers | 120.6 / 94.0 / 136.6 | 11.3 / 6.9 / 22.2 % | 1.29 / 0.73 / 2.06 | 0.35 / 0.51 / 0.46 | 1.23 / 1.32 / 1.35 |
+| edm-powerup* | 91.0 / 64.3 / 126.6 | 9.4 / 6.9 / 23.9 % | 1.11 / 0.57 / 1.79 | 0.48 / 0.63 / 0.39 | 1.09 / 1.10 / 1.13 (mid) |
+| pop-letitin | 113.7 / 5.5 / 103.1 | 4.1 / 0.3 / 11.2 % | 1.10 / 0.23 / 0.66 | 0.43 / 0.65 / 0.42 | 1.13 / 1.16 / 1.15 |
+| pop-river* | 83.2 / 57.7 / 73.6 | 6.4 / 4.9 / 15.8 % | 1.05 / 0.53 / 0.62 | 0.40 / 0.65 / 0.51 | 1.28 / 1.40 / 1.38 |
+| piano-viandanze* | 46.1 / 0.0 / 0.0 | 1.8 / 0.1 / 0.0 % | 0.77 / 0.19 / 0.07 | 0.28 / 0.63 / 0.69 | 1.09 / 1.18 / 1.32 |
+
+(The HF share and dI/dt rise on drum tracks because the light now dips between kicks. That is intended for drum music only.)
+
+**Tuning set against held-out tracks:**
+- **Hit rates.** Tuning set: hurricane 75, ballin 82, kojo 63, breakers 90, letitin 82 %. Held out: onmyown 81, clean 61, kcentric 97, powerup 76, river 98 %.
+- **Calm r(I, loudness).** Tuning set: memorized 0.87, whispering 0.82. Held out: restwell 0.89, sugihara 0.52, piano 0.69.
+- No sign of overfitting. The weakest tracks, clean and kojo, are on opposite sides of the split.
+
+**Alternatives measured and rejected:**
+- **A pump that keeps the average brightness.** Loud/low ratio: rap 1.23, EDM 1.37, pop 1.42. But the bounce depth fell to 24–34 %.
+- **The same pump, deeper (0.55).** Bounce depth 28–39 % and ratios 1.19–1.39, but the verse would bounce harder than the hook.
+- **Kick-likeness 3..9 dB.** Rap 80 %, kojo 76 %, but the bass guitar under the folk chorus started a groove (punch 0.78, 19 pulses).
+- **A longer loudness hold, 0.5 → 0.75 s.** Neutral on the corpus; kept.
+
+**Tests changed on purpose (reason in each comment):**
+- **SongLoudnessTests:** expectations are written in terms of RangeDb.
+- **MusicDynamicsTests:**
+  - Measure uses a Hann window for the "above 3 Hz" share (the rectangular DFT read slow ramps as high frequencies).
+  - SoftDrumsBounceSoftly became ASoftKitIsTheBeatAndBouncesWithTheMoment. No measure of the kick separates that kit from real rap and EDM kicks: their kick-band peaks against the song are −6.6, −7.3 and −6.5 dB.
+  - ASmallVolumeNudgeLeavesTheLoudPartsAsBright became ASmallVolumeNudgeKeepsTheBounceAndSettles (the knee is gone).
+  - AWhisperedVerse… stops 0.25 s before the chorus pickup. Its bound is now 0.55 for the swells, and the verse kicks are checked at the 0.3 floor.
+  - The −10 dB volume step's minimum mean pulse went from 0.6 to 0.5 (measured 0.60).
+  - New: InAGrooveThePulseLandsOnTheFrameItsBeatFires (61 of 61) and AGroovePumpsTheLightBetweenKicks (55 % on average, 41 % at least).
+- **WavAnalyzeTests:** counts pulse peaks of 0.95 or more instead of exactly 1.0000 (measured 38 of 39 beats at 0.96 or more, 28 exactly 1).
+- **BeatCharacterTests:** rewritten for the new design (25 → 29 tests).
+- **New files:** KickEnvelopeTests (6) and BeatDetectorTests (8).
+
+**Cost** (Bench on this machine, same machine for both):
+- Analyzer one-step mean: 40–45 µs → 46–50 µs (0.27 → 0.30 % of a core).
+- `frame --packet-ms 10`: 74 → 77 µs (0.44 → 0.47 %).
+- Still 0 B per frame.
+
+**Simplest-option choices, noted here per CLAUDE.md:**
+- The loud hold covers 80 BPM.
+- A beat that re-fires within the refractory time counts once.
+- The first second after digital silence is never graded, even with a punch held over from the last song.
+
+#### Review fix [L]
+
+Branch `wip/r2-dyn-fix`, on `wip/r2-dyn` (1515662):
+- cd3e2ad `fix(audio)`
+- f5562f9 `fix(visualizer)`
+- 078016e `docs(audio)`
+
+It answers round 2's review: 1 blocker, 6 majors, 7 minors and 1 nit. The round-2 tables above use r2-dyn as "now"; the tables here supersede them.
+
+Measured as before:
+- `wav-analyze --engine` (Bench's FramePipeline), 60 fps ±10 %, 10 ms packets.
+- Default settings, Brightness 0.8.
+- Frame times, without display latency.
+- The same 15 recordings; held-out tracks are marked *. No audio or corpus file is in the repository.
+
+**Changes.** All are Core internals behind the frozen contracts; nothing under `Contracts/` changed.
+- **Noise (majors 2 and 10).**
+  - BeatDetector's looser median guard is ×5 instead of ×10 when KickEnvelope's prominence is ≥ −4 dB. It now also needs music: `OnsetContrast` ≥ `MusicContrast` 0.23.
+  - `OnsetContrast` is the coefficient of variation of the relative spectral flux from 150 Hz to 12 kHz over 4 s. Noises read at most 0.19; the corpus's music reads 0.23 or more 93–100 % of the time.
+  - BeatCharacter lets a beat confirm a groove only if it passed doc 03's own threshold (`BeatResult.Strict`) or came in music. It grades nothing instantly outside music.
+- **Beat spacing (majors 11 and 4).**
+  - Round 2's re-trigger and supersede exceptions are gone. `BeatRefractorySeconds` is a hard minimum again, as its XML doc, the slider and CORE-API say.
+  - `BeatCharacter.EventSeconds` (0.18 s) only matters with a spacing tuned under it, where a flam counts once toward the groove's rate.
+- **Light grooves (the blocker).**
+  - `BeatCharacter.Weight` = smoothstep(−7 dB, 0 dB) of the kick band's mean power (KickEnvelope, 30–100 Hz) over the music above 150 Hz.
+  - Rap and EDM grooves read +2 to +5 dB; folk and rock kits read −8 to −12 dB.
+  - It starts as a 1.5 s average from zero. Once the punch reaches 0.5 it switches to an 8 s average that moves only while the punch is ≥ 0.5, so a breakdown keeps it. 1 s of near-silence clears it.
+  - The grade is × (`LightGain` 0.5 + 0.5 × Weight). The pump depth and Level's groove speed scale by Punch × Weight.
+- **Drops and re-entries (major 5).**
+  - The groove's memory holds 30 s (`MemoryHoldSeconds`), then fades with τ 4 s.
+  - It comes back on the first trusted kick confirmation, or on a kick in music with ≥ 18 dB of rise and ≥ 0 dB of prominence. That can happen as the kick fires or at the FFT re-grade a frame later (`Resume`).
+  - The pump's depth is × engaged². Engaged is the groove's own recent pulse at Sensitivity 1, held 1.5 s and released over 0.5 s. So the light never dims before a groove's first pulse.
+- **Off-beat flashes (major 4).** For `MaskSeconds` (0.3 s) after a pulse ≥ 0.5 at Sensitivity 1, a beat needs a fresh attack to pulse: × smoothstep(10, 20 dB) of KickEnvelope's rise.
+- **Loudness (major 3, minor 7).**
+  - The groove's floor (`LoudFloor` 0.3 × punch) fades with the held position, × smoothstep(0.1, 0.3). It is whole 12.6 dB under the loud parts and gone at 16.2 dB.
+  - The held position is now the largest over the last 0.75 s (15 blocks of 50 ms).
+  - Round 2's hold renewed only on a new maximum. In a steady groove a kick a hair under the held one let it run out, so every other kick was graded from the dip before it.
+- **Sensitivity.** The pump, the engagement and the mask read `RawBeat`, the grade at Sensitivity 1. Sensitivity now scales Level and the pulses exactly as doc 03 says, and no longer changes the pump.
+- **Diagnostics (minor 13).**
+  - `BeatResult.Threshold` is the threshold applied for the step, and `BeatResult.Strict` says whether doc 03's own threshold passed. ThresholdHistory and the plot use it.
+  - `wav-analyze --engine` adds prominenceDb, riseDb, onsetContrast, weight, pumpDip and memory (30 columns).
+- **Smaller.**
+  - `BandAnalyzer.UpperBins` is new.
+  - KickEnvelope reports each call's mean band powers.
+  - `AudioFrontEnd.LevelTarget` is documented as a diagnostic; only wav-analyze reads it.
+  - The weight's fast average starts from zero.
+  - `BeatStats.Tempo` no longer throws when no interval is near the median (wav-analyze crashed on some noises).
+- **App (minor 14, f5562f9).**
+  - The Level attack and release tooltips give the code's factors: 5× and 3.2× in a heavy groove, about 33× and 6.4× with no drums or a light kit.
+  - The three Level mix sliders say they don't change the light.
+  - Peak half-life, floor rise and minimum range say they shape Bass only.
+- **Docs (minor 9 and nit 15, 078016e).** CORE-API §4.2 and doc 03 now say:
+  - 15 recordings, tuned on 7 and checked on 8, not blindly.
+  - The onset contrast and the hard spacing.
+  - The weight, memory, mask, fading floor, sliding hold and engaged pump.
+  - Results per class.
+
+**Per class.** Builds: 5b387fc (before round 1), 6ac553b (round 1), r2-dyn (1515662) and now (078016e).
+- Hit: a pulse ≥ 0.5 within −20..+80 ms of an annotated kick.
+- Bounce depth: how much brighter the drawn light, SoftClip(I × (1 + 0.25·Pulse)), gets on a kick.
+- In brackets: false pulses that land on an annotated non-kick onset.
+
+| Class | Build | Kicks | Detected | Hit rate | Latency med / p90 ms | Pulse on hits mean / p10 | Pulse on all kicks | Bounce depth | False ≥0.3 /min (on onsets) | Pulses ≥0.2 /min | Shown var. >3 Hz | p95 dShown/dt /s | r(I, loudness) | Loud / low |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| calm | 5b387fc | 11 | 82 % | 82 % | 31 / 51 | 1.00 / 1.00 | 0.82 | 28 % | 51.7 (35.2) | 52.3 | 10.4 % | 1.40 | 0.24 | 1.24 |
+| calm | 6ac553b | 11 | 82 % | 0 % | – | – | 0.00 | 1 % | 0.0 | 0.0 | 0.2 % | 0.16 | 0.57 | 1.46 |
+| calm | r2-dyn | 11 | 82 % | 0 % | – | – | 0.00 | 0 % | 0.0 | 0.0 | 0.0 % | 0.07 | 0.78 | 1.63 |
+| calm | now | 11 | 82 % | 0 % | – | – | 0.00 | 0 % | 0.0 | 0.0 | 0.0 % | 0.07 | 0.78 | 1.63 |
+| calm-then-drums | 5b387fc | 114 | 94 % | 94 % | 27 / 35 | 1.00 / 1.00 | 0.94 | 34 % | 50.9 (27.3) | 66.2 | 12.1 % | 1.28 | 0.02 | 0.93 |
+| calm-then-drums | 6ac553b | 114 | 94 % | 32 % | 39 / 45 | 0.87 / 0.73 | 0.33 | 12 % | 0.4 (0.4) | 6.7 | 4.6 % | 0.28 | 0.32 | 1.01 |
+| calm-then-drums | r2-dyn | 114 | 98 % | 78 % | 27 / 36 | 0.98 / 0.98 | 0.80 | 41 % | 9.0 (4.6) | 24.4 | 13.0 % | 0.91 | 0.43 | 1.13 |
+| calm-then-drums | now | 114 | 94 % | 47 % | 27 / 46 | 0.50 / 0.50 | 0.37 | 9 % | 11.4 (5.1) | 24.9 | 2.9 % | 0.31 | 0.77 | 1.25 |
+| rap | 5b387fc | 1108 | 72 % | 72 % | 27 / 41 | 1.00 / 1.00 | 0.72 | 28 % | 17.0 (8.4) | 72.0 | 17.4 % | 1.86 | 0.26 | 1.00 |
+| rap | 6ac553b | 1108 | 72 % | 55 % | 46 / 59 | 0.97 / 0.94 | 0.56 | 18 % | 2.8 (1.7) | 48.8 | 16.9 % | 1.23 | 0.49 | 1.05 |
+| rap | r2-dyn | 1108 | 88 % | 78 % | 25 / 37 | 0.98 / 0.93 | 0.78 | 38 % | 30.7 (12.7) | 94.9 | 22.7 % | 2.64 | 0.43 | 1.10 |
+| rap | now | 1108 | 83 % | 74 % | 24 / 37 | 0.99 / 0.98 | 0.74 | 36 % | 15.5 (8.0) | 74.1 | 23.6 % | 2.10 | 0.40 | 1.11 |
+| edm | 5b387fc | 945 | 69 % | 69 % | 28 / 40 | 1.00 / 1.00 | 0.69 | 26 % | 22.9 (11.5) | 105.8 | 25.8 % | 2.57 | 0.41 | 1.16 |
+| edm | 6ac553b | 945 | 69 % | 57 % | 53 / 66 | 0.95 / 0.80 | 0.55 | 18 % | 7.3 (5.2) | 79.1 | 23.5 % | 1.69 | 0.57 | 1.21 |
+| edm | r2-dyn | 945 | 89 % | 84 % | 28 / 40 | 1.00 / 1.00 | 0.84 | 37 % | 30.1 (13.4) | 131.6 | 32.3 % | 4.32 | 0.42 | 1.24 |
+| edm | now | 945 | 86 % | 79 % | 28 / 39 | 1.00 / 1.00 | 0.79 | 38 % | 14.5 (5.6) | 110.0 | 32.4 % | 2.70 | 0.37 | 1.20 |
+| pop | 5b387fc | 461 | 96 % | 96 % | 28 / 38 | 1.00 / 1.00 | 0.96 | 30 % | 42.7 (29.0) | 98.4 | 16.5 % | 2.23 | 0.41 | 1.20 |
+| pop | 6ac553b | 461 | 96 % | 38 % | 45 / 53 | 0.88 / 0.68 | 0.38 | 12 % | 4.2 (3.9) | 31.6 | 10.7 % | 0.68 | 0.65 | 1.28 |
+| pop | r2-dyn | 461 | 97 % | 91 % | 28 / 37 | 0.97 / 0.92 | 0.90 | 44 % | 32.4 (21.3) | 88.4 | 24.1 % | 1.83 | 0.46 | 1.27 |
+| pop | now | 461 | 96 % | 84 % | 28 / 37 | 0.50 / 0.50 | 0.45 | 11 % | 27.2 (18.8) | 82.8 | 10.4 % | 0.68 | 0.81 | 1.40 |
+| piano | 5b387fc | 0 | – | – | – | – | – | – | 46.1 (38.6) | 46.1 | 5.9 % | 1.13 | 0.28 | 1.09 |
+| piano | 6ac553b | 0 | – | – | – | – | – | – | 0.0 | 0.0 | 0.1 % | 0.19 | 0.63 | 1.18 |
+| piano | r2-dyn | 0 | – | – | – | – | – | – | 0.0 | 0.0 | 0.0 % | 0.07 | 0.69 | 1.32 |
+| piano | now | 0 | – | – | – | – | – | – | 0.0 | 0.0 | 0.0 % | 0.07 | 0.69 | 1.32 |
+
+Light kits (calm-then-drums and pop) now top out at `LightGain` 0.5 on purpose. The review's blocker counts pop-river, a folk-rock song, as one of them.
+- Their hit rate (≥ 0.5) therefore counts only kicks at the light kit's full size, and it swings with tiny changes: 42–72 % for calm-then-drums across the robustness runs.
+- Their real measures are pulse on all kicks (0.37–0.45) and bounce depth (9–11 %, at most half of rap's 36 %).
+- This overrides the brief's pop target of a mean pulse ≥ 0.8 on hits.
+
+**Brief's targets, now.**
+
+| Target | Now | Met |
+|---|---|---|
+| Rap / EDM latency ≤ 30 ms median, ≤ 50 ms p90 | 24 / 28 ms median, 37 / 39 ms p90 | yes |
+| Rap / EDM pulse on hits mean ≥ 0.8, p10 ≥ 0.5 | mean 0.99 / 1.00, p10 0.98 / 1.00 | yes |
+| Rap / EDM hit rate ≥ 90 % | 74 / 79 % | no |
+| False pulses: a few a minute | 15.5 / 14.5 a minute | no |
+| Calm songs: no pulses, smooth, r(I, loudness) ≥ 0.6 | no pulses; p95 slope 0.07 per second (round 1: 0.16); r ≥ 0.6 on 4 of 5 (sugihara*, a live solo set, 0.52) | yes |
+| Loud / low ≥ 1.4 | calm 1.63 and pop 1.40 (yes); calm-then-drums 1.25, EDM 1.20, rap 1.11 (no) | partly |
+| Pulse size grows with the kick's loudness | only by section | no |
+| No beats on noise or silence | none (one swelling brown noise: 3 a minute, as in round 1) | yes |
+| Zero allocations per frame | 0 B | yes |
+
+**Drum tracks, r2-dyn → now.** The calm and piano tracks are unchanged on every measure:
+- No pulses on any of them.
+- r(I, loudness): sugihara* 0.52, restwell* 0.89, memorized 0.87, whispering 0.82, viandanze* 0.69.
+
+| Track | Kicks | Detected | Hit rate | Pulse on all kicks | Bounce depth | False ≥0.3 /min | p95 dShown/dt /s | r(I, loudness) | Loud / low |
+|---|---|---|---|---|---|---|---|---|---|
+| drums-onmyown* | 53 | 100 → 96 % | 81 → 13 % | 0.82 → 0.33 | 43 → 8 % | 7.3 → 4.6 | 0.90 → 0.22 | 0.35 → 0.78 | 1.03 → 1.17 |
+| drums-hurricane | 61 | 97 → 92 % | 75 → 77 % | 0.78 → 0.41 | 40 → 10 % | 10.3 → 16.6 | 0.93 → 0.39 | 0.51 → 0.77 | 1.23 → 1.32 |
+| rap-ballin | 274 | 89 → 87 % | 82 → 81 % | 0.83 → 0.81 | 44 → 43 % | 9.3 → 5.5 | 1.68 → 1.67 | 0.45 → 0.36 | 1.09 → 1.10 |
+| rap-clean* | 279 | 76 → 69 % | 61 → 52 % | 0.61 → 0.52 | 29 → 28 % | 14.1 → 7.1 | 1.58 → 1.46 | 0.48 → 0.46 | 1.12 → 1.13 |
+| rap-kcentric* | 356 | 97 → 94 % | 97 → 92 % | 0.97 → 0.92 | 42 → 41 % | 30.3 → 12.0 | 5.35 → 3.52 | 0.37 → 0.38 | – |
+| rap-kojo | 199 | 86 → 78 % | 63 → 64 % | 0.64 → 0.63 | 32 → 31 % | 66.6 → 35.6 | 1.97 → 1.74 | 0.42 → 0.41 | 1.09 → 1.09 |
+| edm-breakers | 496 | 94 → 90 % | 90 → 85 % | 0.90 → 0.85 | 38 → 39 % | 21.3 → 5.1 | 4.67 → 2.96 | 0.46 → 0.45 | 1.35 → 1.33 |
+| edm-powerup* | 449 | 84 → 82 % | 76 → 72 % | 0.77 → 0.72 | 36 → 36 % | 38.8 → 23.9 | 3.97 → 2.44 | 0.39 → 0.28 | 1.13 → 1.06 |
+| pop-letitin | 202 | 93 → 92 % | 82 → 70 % | 0.81 → 0.40 | 38 → 10 % | 56.2 → 46.4 | 1.92 → 0.69 | 0.42 → 0.70 | 1.15 → 1.28 |
+| pop-river* | 259 | 100 → 100 % | 98 → 95 % | 0.97 → 0.49 | 50 → 12 % | 8.6 → 8.1 | 1.73 → 0.66 | 0.51 → 0.91 | 1.38 → 1.51 |
+
+**Tuned against held-out.** Tuned on calm-memorized, calm-whispering, drums-hurricane, rap-ballin, rap-kojo, edm-breakers and pop-letitin.
+- The check is not blind: every run printed both sets.
+- This fix tried `RateSeconds` 4 and reverted it, because held-out drums-onmyown drove the choice.
+- The weight's −7..0 dB range sits between the classes as measured on all 10 drum tracks.
+
+| Group | Build | Kicks | Detected | Hit rate | False ≥0.3 /min | Bounce depth (track mean) |
+|---|---|---|---|---|---|---|
+| heavy (rap, EDM), tuned | 6ac553b | 969 | 77 % | 57 % | 2.9 | 17 % |
+| heavy (rap, EDM), tuned | r2-dyn | 969 | 91 % | 82 % | 33.3 | 38 % |
+| heavy (rap, EDM), tuned | now | 969 | 87 % | 80 % | 15.8 | 38 % |
+| heavy (rap, EDM), held out | 6ac553b | 1084 | 65 % | 55 % | 5.9 | 18 % |
+| heavy (rap, EDM), held out | r2-dyn | 1084 | 86 % | 79 % | 27.5 | 36 % |
+| heavy (rap, EDM), held out | now | 1084 | 82 % | 73 % | 14.5 | 35 % |
+| light kit (folk, rock, pop), tuned | 6ac553b | 263 | 91 % | 14 % | 1.8 | 10 % |
+| light kit (folk, rock, pop), tuned | r2-dyn | 263 | 94 % | 81 % | 33.3 | 39 % |
+| light kit (folk, rock, pop), tuned | now | 263 | 92 % | 71 % | 31.5 | 10 % |
+| light kit (folk, rock, pop), held out | 6ac553b | 312 | 99 % | 57 % | 3.1 | 13 % |
+| light kit (folk, rock, pop), held out | r2-dyn | 312 | 100 % | 95 % | 8.0 | 46 % |
+| light kit (folk, rock, pop), held out | now | 312 | 99 % | 81 % | 6.6 | 10 % |
+
+**The review's cases, r2-dyn → now:**
+- **Noise.** 18 signals of 60 s each:
+  - brown noise at two levels and with two corners;
+  - high-passed brown noise at three levels;
+  - an MP3-like brown noise and a red one;
+  - ocean-like swells, and a swelling brown noise;
+  - four pink noises, a 50 Hz hum, and white noise.
+
+  r2-dyn fired 12–86 beats and up to 49 full pulses a minute on 16 of them. Now 17 give no beat and no pulse. The swelling brown noise fires 3 beats a minute, as in round 1, with no pulse ≥ 0.2; its punch reaches 1.0 once for 4.7 s.
+- **Double flashes.**
+  - Beats under 175 ms after the one before: 589 → 2 of 4941 (frame times).
+  - Full pulses within 150 ms of another: 218 → 0 (round 1: 9).
+- **Beat spacing tuned to 0.4 s** (edm-breakers, pop-letitin, rap-kojo): beats closer than 0.38 s went 74 / 105 / 137 → 0 (closest 0.395–0.399 s).
+- **hurricane.**
+  - Full-band ending (203–240 s): mean pulse 0.05 (punch 0.05) → 0.35 (punch 0.75).
+  - Sparse kit section (110–150 s): 0.82 → 0.41.
+  - Both are light-kit sized now.
+- **Loud vs mid sections.** Loud sections now pulse at least as much as mid ones on every drum track.
+
+  | Track | Mean pulse at kicks, mid / loud | Intensity after 20 s, loud / mid (r2-dyn) |
+  |---|---|---|
+  | onmyown* | 0.29 / 0.33 | 0.72 / 0.68 (0.64 / 0.65) |
+  | hurricane | 0.38 / 0.47 | – |
+  | letitin | 0.38 / 0.43 | 0.73 / 0.70 (0.64 / 0.63) |
+  | river* | 0.40 / 0.49 | 0.75 / 0.77 (0.64 / 0.70) |
+  | ballin | 0.20 / 0.92 | – |
+  | clean* | 0.43 / 0.68 | – |
+  | breakers | 0.61 / 0.94 | – |
+  | powerup* | 0.03 / 0.76 | – |
+- **The held-out EDM drop** (powerup*, 161.5 s).
+  - The first kick goes from 0.01 to 1.00, and so do the next two.
+  - The off-beats between them are masked (0.20 and 0.11).
+  - The shown light stays ≥ 0.60; r2-dyn fell to 0.55.
+  - Sudden dims across the corpus (a fall ≥ 0.10 within 50 ms with no pulse): 8 → 1. The one left is in edm-breakers at 3.3 s and was there in round 1 too.
+- **rap-kojo's re-entries.**
+  - At 100, 134, 167, 183 and 217 s: full from the first or second kick (r2-dyn: 0.00–0.42 for 3–4 kicks).
+  - At 33 s: 0.09, 0.89, 0.89, 0.14.
+  - The song's first groove at 17 s is under limits below.
+- **kcentric, 169.94–170.62 s.** Three full re-fires on a held bass note became one 0.85 (170.39 s, 0.45 s after the kick, outside the mask) and two masked at 0.13.
+- **Fades to −36 dB.**
+  - kcentric's kicks at 160–170 / 170–180 s: 0.30 / 0.30 → 0.07 / 0.00.
+  - powerup's at 210–220 / 220–230 s: 0.26 / 0.29 → 0.07 / 0.00.
+- **A synthetic kick under calm-restwell** at −12 / −6 / −3 / 0 dB bounces 0.0 / 0.2 / 0.7 / 15.5 %. The review measured 38 % at 0 dB on r2-dyn. The punch still switches on between −3 and 0 dB (0.05 → 0.98), and the weight (0.38) keeps the bounce small.
+- **Beats at or under the plotted threshold:** 22.9 % → 1.0 % (6ac553b: 0.9 %, because several analysis steps share a frame).
+- **Style tracks.**
+  - Rap: every kick ≥ 0.7 (61/61, mean 1.00). EDM: 73/77 (mean 0.97).
+  - Ballad, folk band with bass guitar, and piano ballad: no pulse.
+  - The folk band's kit at 0 / −6 / −12 / −20 dB: chorus pulses 0.89 / 0.67 / 0.54 / none (weight 0.91 / 0.49 / 0.14).
+- **Robustness**, on an intermediate build within 1–2 points of the final. At 30 fps, 144 fps, with 50 ms packets and with jitter seed 2:
+  - rap stays at 73–75 % hits and EDM at 78–79 %, with 13.0–15.8 false pulses a minute;
+  - with 50 ms packets the latency is 43 / 66 ms, bounded by the packets.
+
+**Alternatives measured and rejected in this fix:**
+- **The review's size curve** (0.25..0.9 of the reference kick, minor 6).
+  - Rap: pulse on hits p10 0.95 → 0.79, on all kicks 0.75 → 0.67.
+  - EDM: p10 1.00 → 0.75, all kicks 0.81 → 0.71.
+  - False pulses only went 23.3 → 23.0 and 27.9 → 27.4 a minute.
+  - Real kicks vary 6–12 dB in the kick band within a groove, so the curve mostly shrank real kicks.
+- **A rise-based strong confirmation** (major 3's proposal).
+  - At the corpus's fired beats, the kick band rises ≥ 14 dB over its own level on 50 % of beats in drumless calm songs and piano (≥ 18 dB on 30 %). In hurricane's full-band ending the shares are 58 % and 24 %. So it would start grooves in calm songs.
+  - Rise separates only with prominence (medians −10.4 / −1.6 / +4.0 dB for calm music, the ending, and rap and EDM kicks). So rise is used only to resume a remembered groove, together with prominence ≥ 0 dB.
+- **Masking groove confirmations** as well as pulses: it cost real kicks, so it was reverted.
+- **`RateSeconds` 4:** reverted (see above).
+- **The review's adaptive prominence for noise** (≥ 6 dB over its 2 s median): its own port kept only 57–100 % of annotated kicks. The onset contrast was chosen instead.
+
+**Tests changed on purpose in this fix.** Each comment says why.
+- `MusicDynamicsTests`:
+  - `ACalmBalladNeverBouncesAndMovesSlowly`: the share above 3 Hz ≤ 1.5 % → 0.2 %, and the p95 slope ≤ 0.35 → 0.15 per second (major 12; measured 0.00 % and 0.03–0.12 per second).
+  - The ballad's drums entering: full pulses ≥ detected − 2 → pulses ≥ detected − 3, with peaks 0.3..LightGain + 0.05. The ballad kit is a light groove, and without the re-fire exceptions the detector finds 18 of 23 kicks, as before round 2.
+  - `ASoftKitIsTheBeatAndBouncesWithTheMoment` (chorus pulses ≥ 0.9) → `ASoftKitUnderAFolkBandBouncesSoftly` (the blocker):
+    - chorus mean 0.3..LightGain + 0.1 (measured 0.54);
+    - bounce ≤ half the rap's (14 % vs 55 %);
+    - a kit 20 dB under: no pulse over 0.3 (was: at most one).
+  - Volume change: −10 dB is unchanged (≥ 0.5, measured 0.66). For −20 dB, "the next 10 s ≥ 0.15" → "0–10 s ≤ 0.15 and 30–40 s ≥ 0.8". This follows minor 7: a −20 dB step now looks like a fade. Measured per 10 s: 0.03, 0.00, 0.61, 1.00.
+  - Comment-only updates where measurements moved: EDM kicks ≥ 0.7 on 72–77 of 77 (r2-dyn 75–76), and the whispered verse's floor 0.13 (was 0.30).
+  - New: `AnOceanRecordingNeverBuildsAGroove` (−20 / −30 dBFS) and `TheDropAfterTheBreakdownHitsOnItsFirstKick`.
+- `BeatCharacterTests`:
+  - The loudness rows now fade the floor: position 0.25 → 0.253, 0.2 → 0.15, 0.1 and 0 → 0 (all were 0.3).
+  - The whisper case: 0.3 → 0.15.
+  - New: `TheGroovesWeightScalesItsPulse`, `TheWeightIsTheGroovesHeldThroughABreakdownAndClearedBetweenSongs`, `WithinMaskSecondsOfAFullPulseABeatNeedsAFreshAttack`, `OnNoiseOnlyBeatsThatPassedDoc03sThresholdBuildAGroove`, `AGrooveComesBackOnTheFirstKickAfterABreakdown` and `EveryKickOfASteadyGrooveIsGradedFromTheMomentBeforeItsDip`.
+  - The helpers now feed band powers and the music flag.
+- `BeatDetectorTests`:
+  - `ADoubleKickFiresAgainInsideTheRefractoryTime` and `AKickRightAfterAWeakerOnsetReplacesIt` went with the exceptions (major 11); `NoTwoBeatsComeCloserThanTheBeatSpacing` replaces them.
+  - `EvidenceOfAKickLowersTheMedianGuard` became `InMusicEvidenceOfAKickLowersTheMedianGuard`, plus `OnASteadyNoiseTheEvidenceLowersNothing`.
+  - New: `OnsetContrastTellsMusicFromASteadyNoise` and `OnsetContrastIgnoresTheMusicStartingOrStopping`.
+- `AudioAnalyzerTests`, new:
+  - `NoBeatsOnPinkOrBrownNoise` (6 cases);
+  - `TheTunedBeatSpacingHoldsOnMusic` (0.18 and 0.4 s);
+  - `TheWaveIsSlowWithoutDrumsAndQuickInAGroove`, Level's step response. The review's mutations m02, m03 and m11 each fail it.
+- `WavAnalyzeTests`: 24 → 30 columns, each checked as filled.
+- `SyntheticAudio` gains `BrownNoise`, `PinkNoise` and `Scaled`.
+- **Round 2's own changed expectations.** Its notes listed seven; the full list:
+  - `SongLoudnessTests` written in terms of `RangeDb`.
+  - `Measure()`'s Hann window.
+  - `SoftDrumsBounceSoftly` → `ASoftKitIsTheBeatAndBouncesWithTheMoment` (now replaced again, above).
+  - `ASmallVolumeNudgeLeavesTheLoudPartsAsBright` → `ASmallVolumeNudgeKeepsTheBounceAndSettles`.
+  - `AWhisperedVerse…` stops 0.25 s before the pickup, with a 0.55 bound.
+  - The −10 dB step's mean pulse 0.6 → 0.5.
+  - WavAnalyze full pulses ≥ 0.95 instead of exactly 1.
+  - `BeatCharacterTests` rewritten.
+  - New: `KickEnvelopeTests`, `BeatDetectorTests`, `InAGrooveThePulseLandsOnTheFrameItsBeatFires` and `AGroovePumpsTheLightBetweenKicks`.
+
+**Cost.** Bench, alternating runs on this shared machine:
+
+| Measure | Now | r2-dyn |
+|---|---|---|
+| Frame (`--packet-ms 10`) | 83–128 µs (0.50–0.77 % of a core) | 78–128 µs (0.47–0.77 %) |
+| Analyzer step | 48–77 µs | 53–70 µs |
+| Idle analyzer step | 3.4 µs | 1.9 µs |
+| Allocations per frame | 0 B | 0 B |
+
+The idle step costs more because the onset contrast's upper-band loop also runs on silent steps. PERF.md is unchanged.
+
+**Known limits:**
+- **Rap and EDM hit rates are 74 % and 79 %** (target 90 %; r2-dyn 78 / 84 %).
+  - Detection misses 17 % of rap kicks and 14 % of EDM kicks.
+  - The hard spacing alone loses 86 (4.2 %) of the kicks r2-dyn fired on; 37 % of those come right after a beat that fired 20–60 ms early.
+  - Detected kicks graded under 0.5: rap 99 (57 before a groove forms, 37 masked); EDM 69 (32 before a groove forms, 23 masked, 9 with weak evidence).
+- **A song's first groove still needs two or three strong kicks.** rap-clean*'s opening never forms one. rap-kojo's builds at 20.9 s, so its first four kicks from 16.7 s get 0; r2-dyn built it at 18.4 s from a re-fired beat.
+- **False pulses ≥ 0.3** are 15.5 a minute on rap and 14.5 on EDM, about half of them on annotated onsets.
+  - pop's 27.2 are light-kit sized (≤ 0.5), and the pop oracle marks only about two thirds of the kicks.
+  - hurricane went 10.3 → 16.6 because its full-band ending now pulses. That is 23 more where the oracle marks 1 kick, and the review measured those events as kick-like.
+- **Pulse size follows the moment** (the groove's weight, the loudness, the mask), not each kick's strength. Per-track r(pulse, loudness) is −0.32..0.55.
+- **Volume.** A −10 dB step mid-song reads 0.50 / 0.53 / 0.66 over 0–10 / 10–30 / 30–60 s (round 1: 0.56 / 0.65 / 0.74). A −20 dB step looks like a fade: no bounce for about 20 s.
+- **The first song after launch** judges a quiet intro against itself: kcentric with its first 30 s at −15 dB pulses 0.88. The first 10 s of a fade (down to −12 dB) keep full kicks.
+- **Swelling brown noise** brings the punch to 1.0 for 4.7 s once. There is no pulse and no dip, but Level runs at groove speed for those seconds.
+- **powerup*'s build** (159.2–161.1 s) pulses 0.26–1.0 once the memory resumes, and the pump dips the light to about 0.55 between those pulses. It is probably a filtered build kick that the oracle doesn't mark.
+- **The held-out check isn't blind,** and no fresh tracks were added.
+
+Plots, per-track tables and scripts stayed in the session's scratch files. `tools/corpus/` reproduces the tables.
+
+**HANDOFF:** H-027 (to Codex), and progress notes on H-026, H-025 and H-023, written in the docs pass.
+
+### Edge with no rim
+
+#### First pass [M]
+
+Branch `wip/r2-rim` (c41bd73), on 6ac553b. Effort: M.
+
+**Problem (round 1 at 6ac553b, measured).** At the defaults (Thickness 6, Glow 45 %, Intensity 0.72), round 1's soft band, exp(−d/(T/2)) screen-blended with the exponential glow, was steepest at the very edge. That squeezed the brightest light into the outermost pixels against the bezel: a thin bright line with the glow fading in behind it. Perceived brightness was measured as CIE L* of the glow composited the way DWM does in SDR: premultiplied 8-bit, blended in sRGB-encoded space, with the shader's dither. Backgrounds were dark (#181818) and mid (#808080). Glow colours were white, orange #FF8C46 and blue #286EE6.
+
+| Defaults | Round 1 | Round 2 |
+|---|---|---|
+| Edge pixel, 1080p/100 % (codes) | 179.2 | 156.0 |
+| Slope at d = 0, 1080p/100 % | −9.2 codes/px (−5.0 %/px) | 0 |
+| Slope at d = 0, 1440p/150 % | −6.1 (−3.3 %/px) | 0 |
+| Slope at d = 0, 4K/200 % | −4.6 (−2.5 %/px) | 0 |
+| Codes lost over the first 4 px, 1080p/100 % | 13.4 % | 2.4 % |
+| L* lost over the first max(4 px, T/2), white over dark, 1080p/100 % | 10.6 % | 1.9 % |
+| Same, 1080p/150 % | 11.2 % | 2.1 % |
+| Same, 1440p/150 % | 10.0 % | 1.6 % |
+| Same, 4K/200 % | 9.1 % | 1.2 % |
+| Same, mid background (white) | 4.2–5.2 % | 0.5–0.9 % |
+| Steepest drop, 1080p/100 % | 8.7 codes/px, at the edge pair (2.1× the glow's 4.1) | 3.0 codes/px, about 10 px in |
+| Growth of the drop per screen px, worst over every gain | negative (convex everywhere) | 0.81 |
+| Plain exponential (round 1 at Thickness 0): first 4 px | 7.6 % codes, 5.9 % L*, slope −2.6 %/px | — |
+
+**Formula (`GlowProfile`, mirrored by `Glow.hlsl` step 2 and `GlowRaster`):**
+- `glow = 0.85 · exp(−(sqrt(d² + w²) − w) / s)`, then `a = glow · Gain · Visibility`. Gain, SoftClip, the early-out, the dither, the sRGB encode and the colour path are unchanged.
+- `w = ShoulderFor(Thickness px, px/DIP) = max(Thickness px, 1 DIP) · (1 + 0.35·Pulse)`. The default 6 DIP is unchanged and now means the shoulder's width. Thickness 0 still gives a one-DIP shoulder, so its slope at the edge is still zero.
+- `s = max(SpreadPx · (1 + 0.35·Pulse), 0.5)`, as before. Glow → spread is unchanged.
+- Near the edge the hyperbola is about d²/2w (zero slope). Further in it is about d − w: the exponential glow, moved w further in.
+  - Its slope is never more than 0.85/s.
+  - At d = w its relative rate of fall has eased to 71 % of the exponential's.
+  - It is C∞ and has exactly one inflection, so there is no step, kink or ring anywhere.
+- The beat scales w and s by the same factor, so the whole light swells inward. The edge only gets brighter through Gain, and the shape never gains a rim.
+- One rounded field replaces round 1's two (band and glow): `GlowRadius = clamp(max(corner, 2s + w), ≤ short side / 2)`.
+  - Because f′(0) = 0, the corner plateau outside the arc now meets the arc smoothly. Round 1 noted an arc kink there as a pre-existing K1 issue; it is gone.
+- cbuffer: `ShoulderPx` replaces `BandScalePx`, `BandGain` and `BandRadiusPx`, and `Pad0`/`Pad1` keep it at 64 bytes. OverlaySurface is unchanged.
+
+**Candidates (same numbers at the defaults, renders below):**
+- **Hyperbolic (chosen):** C∞, and the cheapest at one sqrt.
+- **Quadratic-then-linear ("Huber"):** C1 only; the curvature jumps at d = w.
+- **log-cosh:** costs an exp and a log.
+
+All three keep the first 4 px within 2 % L* at the defaults. A shoulder flat all the way to w with a sharp knee was rejected. On a narrow glow it becomes a bar: the knee's drop growth is 3× the hyperbola's at the defaults, and that is exactly the round-0 complaint.
+
+**Shader cost.** DXC 1.8 ps_6_0 −O3, up to and including the early-out branch: 57 instructions against 78, one exp against two, one divide against two, and two sqrts (unchanged). After the branch: 256 against 255. Both shaders compile with `-HV 2018 -WX` for ps_6_0 and vs_6_0, and the file is ASCII-only. No SM4 compiler is available here; sqrt is SM4-legal.
+
+**Cross-checks:**
+- A NumPy model matches C# `GlowProfile` within 0.00006 code values.
+- The final PNGs are rendered from C# alpha dumps (`xcheck/`), and the preview PNG from the real `GlowRaster`.
+
+**Tests (Platform.Tests 368 → 380):**
+- **GlowProfileTests, rewritten:**
+  - `TheDefaultEdgeIsAFlatSoftShoulder`: the round-2 acceptance. Codes and L* stay within 3 % over max(4 px, T/2) on dark and mid backgrounds in three colours, on 12 surfaces including half scale and 1440p/150 %, at every gain. The edge pair also falls more slowly than the next pair.
+  - `TheSlopeAtTheEdgeIsZeroAtEverySetting`.
+  - `TheDefaultLookFadesWithoutALine`: the drop grows by at most 1 code value per screen pixel, the outermost pair included.
+  - `NoSettingDrawsALine`, for every setting:
+    - no drop larger than the glow's steepest;
+    - drop growth at most the shoulder's curvature 0.85·gain/(w·s);
+    - at most one inflection.
+  - `TheseChecksCatchRoundOnesBandAndTheSolidCore`: round 1's band, the plain exponential, the K1 solid core and a hard-kneed shoulder each fail.
+  - `ClippingEachPixelWouldDrawALineOnTheBeat`.
+  - `ThicknessIsTheWidthOfTheFlatShoulder`.
+  - `TheLightKeepsItsShapeAtEveryScale`: half scale is exactly the full-scale light, and 4K/200 % equals 1080p/100 %.
+  - `TheBeatSwellsTheWholeLightInward…`.
+  - `TheFieldIsRoundedForTheWholeLight`.
+- **Expectations changed on purpose:**
+  - **`TheDefaultLookFadesWithoutALine`** used to require the drop never to grow (≤ 0.1). A shoulder must grow its drop from 0, so the bound is now 1 code value per screen pixel, outermost pair included.
+  - **`NoSettingDrawsABar`** had absolute bounds (≤ 1.1 inside, ≤ 6 at the outermost pair). It is replaced by `NoSettingDrawsALine`'s three scale-relative bounds above.
+  - **`TheFadeNeverEasesOffFasterThanItsLights`** was specific to exponentials. It is replaced by the one-inflection check.
+  - **`ScreenBlendNeverPassesOne…`, `AThinBandKeepsItsLightAtAnyScale` and the old solid-core test** went with the band. They are replaced by `TheLightKeepsItsShapeAtEveryScale` and the round-1 test.
+  - **GlowConstantsTests:** `ThicknessIsTheSoftBandsWidth` becomes `ThicknessIsTheShouldersWidth`. Half scale checks `ShoulderPx`. An infinite thickness gives the one-DIP shoulder. `LooksLike` checks the shoulder and the field radius.
+  - **GlowShaderTests:** the step-2 strings are updated, and no "Band" may remain in the shader.
+  - **GlowRasterTests:** expectations come from `Glow(d, w, s)`, with an added case (T20, G1, P0.5) and the new `ThePreviewSkipsOnlyPixelsUnderHalfACodeValue`.
+- **Mutations (10), each failing at least one test:**
+  - round 1's band in `Glow`
+  - a plain exponential
+  - a hard knee
+  - max(Gaussian band, glow)
+  - no one-DIP floor
+  - a beat that doesn't widen the shoulder
+  - a field radius without w
+  - the raster ignoring the beat on the shoulder
+  - the raster cutoff ignoring w
+  - constants skipping `ShoulderFor`
+
+**Deviations / spec clarifications:**
+- Thickness now means the width of the flat soft shoulder. PRD §4 and doc 04 §3 step 2 are updated.
+- The Appearance description now reads "How far the light stays even along the edges before it softly fades into the glow. 0 starts the fade right at the edge."
+- The edge peak is now 0.85 × gain at every Thickness. Round 1's band lifted it to about 0.98. The default edge is 13 % dimmer (156 vs 179 codes at Intensity 0.72), the same as round 1 at Thickness 0.
+- Past the shoulder the tail is the same exponential, w further in: at the defaults it is about 17 % brighter at a given depth. The lit area grows by about w per edge (early-out at about 224 px against 218 at 1080p).
+- The even part grows like sqrt(w·s), not w. Within 3 % of the edge at 1080p/100 %:
+  - 2 px at Thickness 0, 4 px at 6, 7 px at 20, 10 px at 40;
+  - within 10 %: 5, 8, 13 and 18 px.
+
+  The whole fade moves w further in. That is deliberate: with a small s, a knee sharp enough to stay flat all the way to w is a bar.
+- No `Contracts/` file and no `Settings` default changed.
+
+**PNGs and scripts** (round 1 against round 2 at 1080p/100, 1440p/150 and 4K/200 %, the perceived-brightness profile, the Settings preview) stayed in the session's scratch files.
+
+**Verified here (Linux, SDK 8.0.426):**
+- `dotnet build Rimlight.sln` with `--no-incremental`: Release and Debug both 0 warnings, 0 errors.
+- `dotnet test Rimlight.sln -c Release`: Rimlight.Tests 815/815, Rimlight.Platform.Tests 380/380, Rimlight.IconGen.Tests 89/89.
+- Rimlight.App.Tests isn't a test project off Windows. Its tests don't read the changed description.
+
+#### Review fixes
+
+Branch `wip/r2-rim-fix` (618a6bb), on `wip/r2-rim` (c41bd73). Effort: S. The pixels drawn are unchanged: only copy, docs, comments and tests changed. Glow.hlsl changed only in comments; its DXIL under DXC 1.8 ps_6_0 -O3 is identical to c41bd73's. ps_6_0 and vs_6_0 compile with -HV 2018 -WX, and the file is still ASCII-only.
+
+- **Thickness copy (findings 1 and 5, minor).** The flat part of `exp(-(sqrt(d²+w²)-w)/s)` is about sqrt(0.06·w·s), not w. Measured at 1080p/100 %, Intensity 0.72. Each cell is the first pixel under 97 % and 90 % of the edge pixel, then the first pixel under half; "down at d = T" is the drop T px in:
+
+  | Glow | Thickness 0 | Thickness 6 | Thickness 20 | Thickness 40 | Down at d = T, Thickness 40 |
+  |---|---|---|---|---|---|
+  | 10 % | 1/1, 4 | 1/2, 6 | 2/4, 11 | 3/6, 15 | 98 % |
+  | 45 % | 2/5, 27 | 4/8, 32 | 7/13, 42 | 10/18, 53 | 35 % |
+  | 100 % | 5/14, 88 | 8/18, 93 | 13/27, 105 | 18/35, 121 | 12 % |
+
+  - **Settings now reads:** "How wide the soft, bright part along the edges is. More keeps the light bright further in; 0 starts the fade right at the edge."
+  - **Docs:** PRD §4, doc 04 §3 step 2 (a new bullet), the GlowProfile remarks and the Glow.hlsl and GlowConstants comments say three things:
+    - The shoulder bends over about w.
+    - The even part grows like sqrt(0.06 w spread).
+    - When w ≫ spread, the shoulder is a soft half-Gaussian band with sigma = sqrt(w·spread). At Thickness 40 and Glow 10 % that is 12.6 px.
+  - **Rejected remap:** w = T²/(0.06 s) would be about 700 px at Thickness 40 on the default Glow. A sharp knee instead would be a bar.
+- **Thickness 0 = Thickness 1 (finding 6, nit).** The docs now say they are the same one-DIP shoulder.
+  - **Why the floor stays at one DIP:**
+    - A half-DIP floor would make them differ by up to 3 codes on the default Glow and up to 26 at Glow 0.
+    - At half render scale on the default Glow, it would make Thickness 0 fall fastest at the outermost pair again: 1.02× the next pair at 1080p/100 % half and 1.04× at 768p half. The one-DIP floor gives 0.95 and 0.97.
+- **Low-res screens (finding 2, nit).** These are the default edge's numbers at 100 %, the worst over every gain of the tests. "Codes" is the drop over the first 4 px. "L*" is the worst over dark and mid backgrounds in white, orange and blue. "Growth" is the largest growth of the drop, in codes per screen pixel:
+
+  | Screen | Codes | L* | Growth |
+  |---|---|---|---|
+  | 1920x1080 | 2.40 % | 1.90 % | 0.81 |
+  | 1600x900 | 2.88 % | 2.28 % | 0.97 |
+  | 1366x768 | 3.36 % | 2.67 % | 1.13 |
+  | 1280x800 | 3.23 % | 2.56 % | 1.08 |
+  | 1280x720 | 3.58 % | 2.84 % | 1.20 |
+  | Any of these at half scale | ≤ 2.44 % | — | ≤ 0.88 |
+
+  - The worst growth comes at Brightness 100 % with no beat; at the default 80 % it is about 1.0.
+  - Zoomed 6x and contrast-stretched, the 720p and 768p edges are an even plateau with a smooth fade. Round 1 shows a bright stripe in the outermost column at every resolution.
+  - `GlowProfileTests.Surfaces()` gains 1366x768 and 1280x720 at 100 %, full and half scale.
+- **Corner crease (finding 3, nit): rejected as out of scope.** It is K1's and unchanged. Max second difference across the diagonal past the field radius, round 1 against round 2 (1080p, white on dark luma codes/px²):
+  - idle: 0.50 against 0.50
+  - beat: 0.83 against 0.85
+  - Neon beat: 1.25 against 1.28
+  - Glow 20 % beat: 2.84 against 2.86
+
+  Round 2 cut the arc/plateau kink from 1.6–4.4 to 0.2–1.3. A 3·spread + w field would enlarge the bright corner plateau (34 → 50 px along the diagonal at the defaults) and needs its own renders. It stays in Left for later.
+- **CHANGELOG:** the [Unreleased] edge bullet mentions the rim and the soft, bright part.
+- **HANDOFF:** H-023's round-1 line about `CoreThicknessDip` now describes the shoulder (docs pass).
+- **Tests (Platform.Tests 380 → 396).**
+  - **Expectations changed on purpose:**
+    - **`TheDefaultEdgeIsAFlatSoftShoulder`:** the code-value proxy bound is 3.7 % below 1080 px, 3 % elsewhere. Why: on 720p/768p at 100 % the default glow is narrower in pixels but the shoulder is still 6 px, so codes fall 3.4–3.6 %. The brief's acceptance, L* ≤ 3 %, is unchanged on every surface.
+    - **`TheDefaultLookFadesWithoutALine`:** the growth bound is 1.25 below 1080 px, 1 elsewhere. Why: measured up to 1.20 at Brightness 100 %. It is the shoulder's smooth bend, within `NoSettingDrawsALine`'s curvature bound, which still applies to these surfaces.
+    - **`ThicknessIsTheWidthOfTheFlatShoulder`** is renamed `ThicknessWidensTheShoulderAndPushesTheFadeIn`, with the new upper bound flat ≤ sqrt(0.07·w·s) + 1.
+  - **New coverage:** 16 theory cases (4 surfaces × 4 theories).
+  - **Mutation:** a hard knee, `exp(-max(d - w, 0)/s)`, fails the new upper bound ("thickness 6: flat for 7 px").
+- **Verified (Linux, SDK 8.0.426):**
+  - `dotnet build Rimlight.sln --no-incremental`: Release and Debug both 0 warnings, 0 errors (11 projects).
+  - `dotnet test Rimlight.sln -c Release`: Rimlight.Tests 815/815, Rimlight.Platform.Tests 396/396, Rimlight.IconGen.Tests 89/89.
+  - Rimlight.App.Tests isn't a test project off Windows. Its tests move ThicknessSlider but don't read the description.
+- **PNGs** (720p, 768p and 1080p corner crops, a 6× edge zoom) and scripts stayed in the session's scratch files.
+- **Left for later:**
+  - The K1 corner crease.
+  - Thickness 0–2 look almost the same at any floor, because the hyperbola's shoulder is sub-visible below about 2 DIP.
+
+### Record 2 min (diagnostics recorder) [M]
+
+Branch `wip/r2-diag` (e181ea6, 4acfa84, cd7a766), on 6ac553b. Effort: M.
+
+- **Why.** Round 1 tuned the dynamics on procedural tracks only, and Maxwell's real songs still feel wrong on every point. This gives him one click that saves what the app computed from a real song on his PC, with no audio, so the next tuning round can work from his music.
+
+#### Structure
+
+**`Visualizer/AnalysisRecording` (App, new, no WPF).** One `RecordedFrame` per overlay frame:
+- `time`: seconds since the click, the sum of dt including this frame, as wav-analyze counts frame time.
+- `dt`, and `samples`: how many new mono samples the analyzer got (a count only).
+- `Level`, `Bass`, `Beat`, `IsSilent`, `BeatCount`.
+- `flux` and `threshold`: the newest history entries.
+- `EstimatedBpm`.
+- The light state the frame returned to the overlay: `Intensity`, `Pulse`, `Spread`, `Visibility`, `Phase`. These are the engine's values; an overlay paused on its own monitor fades them further there.
+- `FollowsMusic`: music sync, glow on, not paused, no demo.
+
+Buffer and endings:
+- The UI thread allocates the whole buffer: 120 s × 240 fps = 28,800 frames at 72 B, about 2 MB.
+- It ends with the frame that reaches 120 s (`TimeLimit`), or when the buffer is full (`BufferFull`, above 240 fps; Native on a 360 Hz display stops at 80 s), on `Stop()` (`Stopped`), or when the tap lets go (`Dropped`). It never wraps.
+
+Threads:
+- The overlay thread is the only writer. It fills `frames[count]`, then publishes `count + 1` with `Volatile.Write`, and never writes a published frame again.
+- So the UI can read any published prefix at any time, and stopping needs no handshake. A frame being written lies past the count the UI read and is ignored.
+- `End` is published after the last count.
+
+**`VisualizerFeed.StartRecording` / `TakeRecording`.** A latest-wins slot, like the tuning request: `Volatile.Write` on the UI side, and on the overlay side `Interlocked.Exchange` behind a `Volatile.Read` check.
+
+**`AnalyzerTap.Record`.** Takes a newly started recording, then appends every frame, not only snapshot frames. `Detach`, attaching a different feed, and a newer recording all drop the current one.
+
+**`MusicGlowSource`, the only seam.** The tap's `Record` call moved from just after `analyzer.Process` to just after `engine.Update`. It now also gets `in state`, `count` and `listen`: one line removed, two added. Behaviour is unchanged, because the tap only reads the analyzer's diagnostics and the features.
+
+**`Visualizer/AnalysisRecordingCsv` (App, new, no WPF).** Writes `%APPDATA%\Rimlight\logs\analysis-YYYYMMDD-HHMMSS.csv`:
+- If the name is taken it adds `-2`, `-3`…; a half-written file is deleted.
+- UTF-8 without a BOM, invariant culture.
+- Header comments, one `# key: value` each:
+  - A title line, then `privacy`.
+  - `app`: version and 7-character commit, e.g. `Rimlight 0.1.0+6ac553b`.
+  - `started` (local time), `length`, `ended`.
+  - `frameRate`: measured, plus `fpsCap`.
+  - `capture`: format, capture and analysis rates, and samples dropped during the recording.
+  - `settings`: enabled, animation, whenSilent, brightness, glow, coreThicknessDip, cornerRadiusDip, primaryRatio, sensitivity, fpsCap, onBattery, pauseInFullscreen.
+  - `tuning`: the analyzer's whole tuning as compact H-015 JSON; `wav-analyze --tuning` and `TuningJson.Parse` read it.
+  - `demo`.
+  - `captureAtEnd`, `settingsAtEnd`, `tuningAtEnd`, `demoAtEnd`: only when they changed during the recording.
+  - `columns`.
+- Header row: `time,dt,samples,level,bass,beat,isSilent,beatCount,flux,threshold,bpm,intensity,pulse,spread,visibility,phase,followsMusic`.
+- Formats: time and dt F6; level, bass, beat and the light values F4; phase F5; flux and threshold G6; bpm F2.
+- It never writes the device or track name, like the log.
+
+**`VisualizerWindow`.** A "Recording" section above "Tuning": the privacy text, **Record 2 min**, **Stop**, **Open folder**, and a status line.
+- **Record** is enabled once the first snapshot arrives, while the overlay feeds the window and nothing is recording or saving.
+- Progress updates 10 times a second: "Recording: 0:42 of 2:00, 2,520 frames. Numbers only, no sound."
+- **Saving.** When the overlay thread ends the recording, or on Stop, the file is written on the thread pool. The window then says "Saved 2:00 (7,200 frames) as %APPDATA%\Rimlight\logs\analysis-….csv. Send it with the song's name and where in the song you started." and shows **Open folder**.
+- **Open folder** runs Explorer with `/select`, falling back to `AppLog.OpenFolder`.
+- **Closing.** Closing the window (Esc, X or Quit) saves at once on the UI thread. A tray notification gives the path unless the app is exiting.
+- **Minimized.** A recording that finishes while minimized also sends a tray notification. A recording with no frames saves nothing and says so.
+- Log lines start with `[Visualizer]`: "Recording the analysis…", "Saved an analysis recording of 120.0 s (7200 frames) as %APPDATA%\…", and "Saving the analysis recording failed: …".
+
+**`tools/audio-tools/RecordingCsv` (new).** Reads the file by column name, in any order and any case, skipping unknown columns.
+- Required: time, level, bass, beat, isSilent, beatCount, flux, threshold.
+- Defaults for the rest: dt from the times, light NaN, followsMusic true.
+- `Comment(key)` returns a header value.
+- `ToAnalysis()` returns an `AnalysisResult` with beats at the rows where beatCount rose; a fall is an analyzer reset (device change).
+- Errors name the file, line and column. A wav-analyze CSV is refused because it has no beatCount.
+
+**`wav-analyze plot <recording.csv> [--out] [--plot] [--range a:b] [--width px]` (`RecordingPlot.cs`, new).**
+- Draws the same four panels as a WAV analysis through the unchanged `PlotRenderer`.
+- The subtitle has the app, start, capture, tuning overrides and settings.
+- `WavAnalyzeCli` only gains the verb, the usage lines, and `ParseRange` made internal.
+
+**Reading it in Python.**
+- `pandas.read_csv(path, comment="#")`.
+- Or `np.genfromtxt([l for l in open(path) if not l.startswith("#")], delimiter=",", names=True)`. genfromtxt's `names=True` alone would take the first comment line as the names.
+
+#### Spec clarifications and deviations
+
+- **K8 "runs only while shown and not minimized".** A running recording keeps the visualizer attached while minimized: audio requested, Observed motion, timer running, plots not drawn. That way Maxwell can watch the glow. Afterwards a minimized window detaches as before.
+- **"The UI thread writes a CSV".** The UI thread starts and reports the save. The formatting runs on the thread pool, so the plots don't stall (up to about 3.5 MB at 240 fps). The one exception is a closing window, which saves at once on the UI thread so a quitting app doesn't lose the recording.
+- **Extra columns.** `samples` (count), `bpm` and `followsMusic` go beyond the task's list.
+- **Privacy wording.** The README privacy bullet now reads "The sound is never recorded or saved. Only the audio visualizer for developers (`--debug-visualizer`) can save the numbers it computed, like loudness and beats, to a file on your PC, when you click **Record 2 min**." Clarifications were added to doc 01 privacy and doc 03 §4. CONTRIBUTING got the visualizer bullet, `wav-analyze plot`, and a request for a recording in "Reporting a bug with logs".
+- **Unchanged.** No file under Contracts/, no Core file, no default and no Settings field.
+
+#### Verified here (Linux, SDK 8.0.426)
+
+- **Builds.** `dotnet build Rimlight.sln -c Release --no-incremental` and `-c Debug --no-incremental` give 0 warnings and 0 errors. e181ea6 on its own also builds and passes its tests.
+- **`dotnet test Rimlight.sln -c Release`.**
+  - Rimlight.Tests 819/819 (815 + 4).
+  - Rimlight.Platform.Tests 383/383 (368 + 15).
+  - Rimlight.IconGen.Tests 89/89.
+  - Rimlight.App.Tests builds only off Windows; it gains three assertions in `TheVisualizerOpens` (Record and Stop disabled, Open folder hidden, without the overlay).
+- **`AnalysisRecordingTests` (Platform.Tests, 14 new).**
+  - Buffer order and the analyzer's clock.
+  - A full buffer never wraps.
+  - It ends with the frame that reaches 2 minutes: 7,200 frames at 60 fps.
+  - Stop keeps what the recording has; a bad dt counts as 0.
+  - `Append` allocates 0 B over 5,000 frames.
+  - Two threads, 100,000 frames: no half-written frame is ever seen and the count never goes back.
+  - **Real `MusicGlowSource` through GlowRig:**
+    - The recorded light equals the `OverlayFrame.State` of all 600 frames exactly.
+    - The sample counts equal what was delivered.
+    - The last frame's features, flux, threshold, beat count and BPM equal the last snapshot's, and the beat-count rises equal the snapshot's 240 beat ticks.
+    - 0 B per frame over a whole 2-minute recording (7,200 frames) and after it ends.
+    - A newer recording or a detach drops the old one.
+    - followsMusic is 0 while paused, in Idle Glow and in the demo, while the analysis goes on.
+  - **Header:** every key; no device name; the AtEnd lines only on a change; the tuning JSON reads back.
+  - **Round trip** through the tools' reader under a comma-decimal culture.
+  - **Save:** the file name comes from the start time, `-2` on a collision, no BOM, and `DisplayPath`.
+  - New theory case "visualizer, recording" in `MusicGlowSourceTests.AFrameAllocatesNothingInAnyMode`: 0 B over 3,000 frames, with all 4,500 frames recorded.
+- **`RecordingPlotTests` (Rimlight.Tests, 4 new).**
+  - Plotting a 20 s offline run written in the app's format: 39 beats from the beatCount rises, 80 px per second, `--range`, `--width` and `--plot`.
+  - Reader: columns by name, defaults, and a reset.
+  - Errors carry line numbers; a wav-analyze CSV and an empty file are refused.
+  - The help text.
+- **Sample.** GlowRig's 124 BPM loop ran through the real frame source for 2 minutes: 7,200 frames, 822,890 bytes. `wav-analyze plot` on it gives 248 beats and 124.0 BPM. Setting RIMLIGHT_SAMPLE_RECORDING to a folder makes that test keep its CSV.
+
+#### Left for later
+
+- **Windows.** Nothing ran on Windows: the window's layout and flows, Explorer `/select`, the tray notifications, and CPU while recording minimized.
+- **No light panel.** `wav-analyze plot` has no panel for the light state, such as Intensity × Visibility × (1 + 0.25·Pulse). `PlotRenderer` was left alone because the parallel `--engine` replay work is likely to add light output; it should use the same column names.
+- **Song alignment.** The CSV's time starts at the click, not at the start of the song. Ask for the song position, or cross-correlate the recorded flux with an offline analysis of the same song.
+
+#### Review fixes
+
+Branch `wip/r2-diag-fix` (29859c5, e2c84fd), on `wip/r2-diag` cd7a766. Effort: S. All six findings (2 minor, 4 nit) were verified and fixed. Two optional extras were declined (see below).
+
+- **The guidance stays on screen.** The first progress update used to replace Record's guidance about 33 ms after it appeared. The guidance is now part of the progress line: "Recording: 0:42 of 2:00, 2,520 frames. Minimize this window to watch the glow meanwhile; Stop, or closing this window, ends the recording early and saves it. Numbers only, no sound."
+- **The file says why it ended.** `RecordingEnd` gains `Closed` and `Error`, and `AnalysisRecording.Stop(reason)` takes `Stopped` (the Stop button), `Closed` or `Error`; the first reason stays. The overlay thread ends with that reason, also when it drops a recording after the stop. A recording that reached 2 minutes or filled its buffer keeps that reason. The header's ended line now reads one of: "when Stop was clicked", "when the visualizer's window closed (Esc, its close button or Rimlight quitting)", "when the visualizer stopped after an error (the log says which)".
+- **Samples are counted at the capture rate.** `RecordingCsv.ToAnalysis().SampleRate` now comes from "captured at N Hz", falling back to captureAtEnd and then 0. Before, it took the analysis rate, which is half of a 96 kHz capture's and a quarter of a 192 kHz one's. The CSV's columns line and the docs now say the samples column counts at the capture rate.
+- **The file says how to load it.** A new `# reading:` header line before `# columns:` says that `pandas.read_csv(path, comment="#")` reads the file. `numpy.genfromtxt(..., names=True)` needs the # lines dropped first, otherwise it takes the first comment line as the column names; this was reproduced on the sample. `wav-analyze --help` and the writer's XML docs say the same.
+- **Tuning is locked while recording.** The sliders, Reset and Paste are disabled while a recording runs, because the rows don't mark when the tuning changed. Copy stays available, and a note under the tuning buttons explains the lock. *Deviation from doc 03 §4 ("live-editable"), recorded in its round-2 clarification.*
+- **`wav-analyze --help`:** the plot command's description now starts at column 44, like the other commands'.
+- **Test expectations changed on purpose:**
+  - `# ended: stopped by hand` is now `# ended: when Stop was clicked`, because Stopped now means only the Stop button. Closing the window and an error get their own lines, asserted in the same test.
+  - The header has 13 comment lines instead of 12 (the new `# reading:` line).
+  - The existing assertions that SampleRate is 48000 still hold, because those tests capture at 48 kHz.
+- **New tests:**
+  - Platform.Tests: `ItEndsWithTheReasonTheVisualizerStoppedItFor`, `TheSamplesCountAtTheCaptureRate`.
+  - Rimlight.Tests: `TheSampleRateIsTheOneTheSamplesCountIn`, and `TheHelpNamesThePlotCommand` now checks the column.
+- **Declined:**
+  - A `fired` column: it is just the rise of beatCount, one line in any script.
+  - A per-frame change-counter column: it would need Settings passed into the overlay-thread code, and nothing marks the remaining changes better than the header's AtEnd lines do.
+- **Sample:** regenerated (823,115 bytes, 7,200 frames, 248 beats, 124.0 BPM). Its data rows are byte-identical to cd7a766's sample. The header differs only in the new `# reading:` line and the capture-rate wording.
+- **Not run on Windows:** the progress text, the lock and the ended lines after a real Stop, Esc or close.
+
+### Windows checklist (round 2)
+
+This replaces items 2–8 of round 1's checklist. Round 1's item 1 (Settings opens) and item 10 (WPF smoke tests) still apply. So does item 9 (half scale and mixed DPI), except that Thickness 1 now looks the same as 0.
+
+**Setup.**
+- Quit Rimlight (tray > Quit).
+- Pull `claude/confident-mccarthy-gt8tif` and run `dotnet run --project src/Rimlight.App -c Release -- --debug-visualizer`. That gives the glow plus the audio visualizer, which item 10 needs.
+- Use default settings: Music Sync, Thickness 6, Glow 45 %, Brightness 80 %, Sensitivity 1.
+- Use a dark wallpaper and a system volume of about 50 %.
+- Give each song 20–30 s: the light learns a song's loud parts over its first 15–25 s.
+
+1. **The edge, at the defaults.** Look from normal distance, then up close. Then drag a white or light-grey window against the screen edge.
+   - Expect: the light is soft and even right against the bezel, then fades smoothly inward. At 1080p it is about a third as bright about 40 px in, and twice that far on 4K. Compared with round 1 the very edge is a little dimmer and softer, and the glow reaches slightly further in.
+   - Bug: a thin bright line in the outermost pixels, a stripe or inner outline anywhere, or a band that stays flat and then drops.
+   - Known: a faint 45° crease across a corner (K1). Report it only if you see it at normal viewing distance.
+2. **Thickness and Glow** (Settings > Appearance).
+   - Do: Thickness 0, 20 and 40 at Glow 45 %; Thickness 20–40 at Glow 10 %; Glow 10, 45 and 100 % at Thickness 6.
+   - Expect:
+     - Thickness 0 and 1 look the same, with the fade starting right at the edge and no crisp line.
+     - More Thickness widens the soft, bright part and moves the glow further in. It still fades: at 40 it is visibly dimmer 40 px in.
+     - At Glow 10 % a large Thickness draws a soft band along the edges.
+     - Glow goes smoothly from a narrow soft edge to a wide wash.
+     - The Thickness text reads "How wide the soft, bright part along the edges is. More keeps the light bright further in; 0 starts the fade right at the edge."
+     - The preview card matches the screen.
+   - Bug: a hard inner edge or bar at any setting, a line where the bright part ends, or jumps while dragging.
+3. **A calm song with a kit** (Noah Kahan "Stick Season" or "Dial Drunk", Hozier "Too Sweet" or "Take Me to Church").
+   - Expect: the verses swell and ease like a slow wave. Once the kit plays, each kick gives a small, soft lift, about a quarter of a rap bounce, and the light doesn't dip between kicks. When the drums stop, the light settles back into the wave within about 5–8 s.
+   - Bug: the kit bouncing as hard as rap, the glow pumping darker between kicks, two flashes on one kick, or flicker in a quiet verse.
+   - If the kit now feels too faint, say so. It is one constant (H-028).
+4. **A calm song without drums** (Hozier "Cherry Wine", or a piano piece).
+   - Expect: no pulses at all. The glow follows the phrases, with swells taking 1–2 s, and a chorus is clearly brighter than a quiet verse.
+   - Bug: any bounce on a voice, a strum, a piano chord or a bass note, or a jittery glow.
+5. **Rap with 808s.**
+   - Expect: within the first few kicks, a strong, tight bounce on every kick. The light dips between kicks, and the edge brightens only slightly. There is no second flash on the same hit. Hi-hats and syllables between kicks give no flash, or a small one.
+   - Bug: a bounce that lags the kick, clearly audible kicks in a steady verse with no bounce, full-size flashes between kicks, two flashes on one kick, or a bright rim flashing along the edges on the beat.
+   - Known: a song's very first groove can take a few seconds to start, longer on an 808-heavy intro. Some kicks still get no full bounce (about 1 in 4 on the rap test tracks).
+6. **EDM with a breakdown and a drop.**
+   - Expect: the breakdown calms to a wave with no pulses. The drop's first kick hits at full size, and the light never blinks darker as the drop lands.
+   - Bug: the drop's first two or three kicks are small, the light blinks dark about a second into the drop, or the breakdown's pads pulse.
+   - Known: kicks in the build-up right before the drop may already pulse.
+7. **Brown noise, rain or ocean sounds** (a sleep or focus video).
+   - Expect: no pulses. The glow drifts slowly with the sound.
+   - Bug: any rhythmic pulsing or flashing.
+8. **Fades and volume.**
+   - Expect: in a fade-out, the bounces shrink and stop over its last seconds.
+   - Expect: cutting the volume by about 10 dB mid-song (50 % → 15 %) dims the glow, the kicks keep bouncing, and the brightness comes back over about 30 s.
+   - Expect: a bigger cut (below 10 %) reads like a fade. The bounce stops for about 20 s, then returns.
+   - Bug: small pulses going on through a nearly silent fade, or no recovery after 40 s.
+9. **Sensitivity** (Settings > Motion).
+   - Expect: at 0.5 the bounces are about half as big and the glow is dimmer. At 2 the bounces are full and the glow is brighter. The dip between kicks is the same at every setting.
+10. **The visualizer and Record 2 min.**
+    - Expect: each "beat fired" tick's flux sits above the threshold line, which now shows the threshold actually used. With "Beat spacing" at 400 ms, no two ticks are closer than 0.4 s. The Level mix sliders say they no longer change the light.
+    - Record: play a song and click **Record 2 min**.
+      - The line under the buttons counts up: "Recording: 0:05 of 2:00, … frames. Minimize this window to watch the glow meanwhile; …".
+      - The tuning sliders, Reset and Paste JSON are greyed out, and Copy still works.
+      - The glow looks exactly as it does without recording.
+    - Minimize the window and wait. After 2:00 a tray notification names `%APPDATA%\Rimlight\logs\analysis-YYYYMMDD-HHMMSS.csv`. Restore the window: **Open folder** selects the file in Explorer.
+    - Stop after 10 s, and close with Esc while recording. Each saves at once. The file's `# ended:` line says "when Stop was clicked" or "when the visualizer's window closed …".
+    - Open a file in Notepad. It has `#` lines (version, capture format, frame rate, settings, tuning), then numbers only: no song title, artist or device name.
+    - Bug: Record never enables while music plays, no file after "Saved", the window freezes while saving, the glow changes while recording, or anything but numbers after the `#` lines.
+
+**Reporting a dynamics or edge issue.** For each song that still feels wrong:
+- Click **Record 2 min** at the part that feels most wrong, and send the CSV.
+- Give the song, the artist, where in the song you clicked Record (m:ss), and the system volume. Say whether it was the first song after starting Rimlight.
+- Say what looked wrong and when, and what you expected: a wave, a soft lift or a hard bounce. For example: "0:45–1:10: bounces late and too small".
+- A screen recording with sound (the Snipping Tool's Record, or OBS) that shows the edges still helps, especially for the edge.
+- Optional, but it replays exactly what you heard:
+  1. Convert the song to a WAV outside the repository.
+  2. Run `dotnet run -c Release --project tools/wav-analyze -- song.wav --engine`.
+  3. Send the `.engine.csv` and the PNG. Never commit them or the WAV.
 
 ## Lane B notes
 

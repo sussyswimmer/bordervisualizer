@@ -84,6 +84,29 @@ public sealed class VisualizerHandOffTests
     }
 
     [Fact]
+    public void TheTapMarksEveryCallThatFiredABeat()
+    {
+        // Maxwell's feedback, round 1: Beat is each beat's grade now, not 1 on every beat, so the flux plot's beat ticks
+        // come from BeatCount rising. Attached from the first frame, the fired entries add up to the analyzer's count.
+        var settings = new Settings();
+        using var rig = new GlowRig(settings);
+        var feed = new VisualizerFeed();
+        rig.Source.SetVisualizer(feed);
+        double now = 0;
+        AnalyzerSnapshot? latest = null;
+        for (int i = 0; i < VisualizerFeed.HistoryEntries; i++)
+        {
+            rig.Frame(now += 1 / 60.0, 1 / 60f, settings, false);
+            if (feed.TryTake(out AnalyzerSnapshot snapshot)) latest = snapshot;
+        }
+        Assert.NotNull(latest);
+        float fired = latest.Fired.Take(latest.HistoryLength).Sum();
+        Assert.True(latest.BeatCount >= 4, $"{latest.BeatCount} beats");
+        Assert.Equal(latest.BeatCount, fired);
+        Assert.All(latest.Fired.Take(latest.HistoryLength), f => Assert.True(f is 0 or 1));
+    }
+
+    [Fact]
     public void ATuningAppliesBeforeTheAnalyzerRunsAndTheSettingKeepsItsSensitivity()
     {
         var settings = new Settings { Sensitivity = 1.5f };

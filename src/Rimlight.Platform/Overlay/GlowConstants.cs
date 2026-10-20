@@ -18,39 +18,25 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     private const float ValueTolerance = 0.5f / 255;
     private const float PhaseTolerance = 0.0002f;
 
-    // PRD §1: "Glow: how far the light spills inward. 0 means a hairline; 100 means about 35% of the shorter screen
-    // dimension." Spill is taken as three e-folding distances (the glow is down to 5% there), and the slider is
-    // squared so it feels even: the default 0.45 reaches about 7% of the shorter side (25 px e-folding at 1080p).
-    private const float FullSpill = 0.35f;
-    private const float EFoldingsPerSpill = 3;
-
     public float ScreenWidthPx;
     public float ScreenHeightPx;
     public float CornerRadiusPx;
-    public float CoreThicknessPx;
+    public float ShoulderPx;   // the soft shoulder at the edge (GlowProfile.ShoulderFor): the thickness, >= 1 DIP
 
     public float SpreadPx;
-    public float Intensity;
+    public float Gain;         // Intensity x the beat's gain, rolled off under 1 (GlowProfile.Gain); scales the profile
     public float Pulse;
     public float Phase;
 
     public float Visibility;
     public float ColorRadiusPx;
-    public float GlowRadiusPx;
-    public float CoreFade;
+    public float GlowRadiusPx; // corner radius of the light's distance field (GlowProfile.GlowRadius)
+    public float Pad0;         // unused: keeps MeanColor in the last register, where HLSL packs it
 
     public float MeanRed;
     public float MeanGreen;
     public float MeanBlue;
-    public float Padding1;
-
-    // Glow (0..1) to the glow's e-folding distance in pixels on a surface whose shorter side is shortSidePx. At 0 a
-    // hairline halo of one DIP.
-    internal static float SpreadFor(float glow, int shortSidePx, float scale)
-    {
-        float g = Clamp01(glow);
-        return Math.Max(scale, g * g * FullSpill / EFoldingsPerSpill * shortSidePx);
-    }
+    public float Pad1;         // unused
 
     // Converts a frame's light state to pixels for one surface. widthPx/heightPx: the swap chain's size; dpiScale =
     // monitor DPI / 96; renderScale: swap-chain pixels per screen pixel (1, or about 0.5 at half scale); meanColor is
@@ -61,30 +47,30 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         float scale = dpiScale * renderScale; // swap-chain pixels per DIP
         int shortSide = Math.Min(widthPx, heightPx);
         float minHalf = 0.5f * shortSide;
-        float spreadPx = SpreadFor(state.Spread, shortSide, scale);
+        float spreadPx = GlowProfile.SpreadFor(state.Spread, shortSide, scale);
         float cornerPx = Math.Clamp(Finite(cornerRadiusDip) * scale, 0, minHalf);
-        float coreDip = Math.Max(0, Finite(state.CoreThicknessDip));
-        float corePx = coreDip * scale;
+        // Thickness is the width of the soft shoulder at the edge (GlowProfile). It converts at the render scale
+        // like every other measure, so at half scale the same light lands in half as many pixels.
+        float shoulderPx = GlowProfile.ShoulderFor(Math.Max(0, Finite(state.CoreThicknessDip)) * scale, scale);
         return new GlowConstants
         {
             ScreenWidthPx = widthPx,
             ScreenHeightPx = heightPx,
             CornerRadiusPx = cornerPx,
-            CoreThicknessPx = corePx,
+            ShoulderPx = shoulderPx,
             SpreadPx = spreadPx,
-            Intensity = Clamp01(state.Intensity),
+            // The gain scales the whole profile, so the light keeps its shape at any brightness and beat; rolled off
+            // under 1, it never needs clipping per pixel (GlowProfile.Gain).
+            Gain = GlowProfile.Gain(Clamp01(state.Intensity), Clamp01(state.Pulse)),
             Pulse = Clamp01(state.Pulse),
             Phase = Fraction(state.Phase),
             Visibility = Clamp01(state.Visibility),
             // The colour path's corner radius keeps the perimeter coordinate continuous through the corners, outside
-            // a thick core too; its seam lies deeper, where the shader has blended to the mean colour. It uses the
+            // a wide shoulder too; its seam lies deeper, where the shader has blended to the mean colour. It uses the
             // unpulsed spread, so colours don't shift with the beat.
-            ColorRadiusPx = Math.Min(Math.Max(Math.Max(cornerPx, 6 * spreadPx), 2 * corePx), minHalf),
-            // Rounded glow field: no 45-degree crease where two edges' glows meet (deviation from doc 04 §3).
-            GlowRadiusPx = Math.Min(Math.Max(cornerPx, 2 * spreadPx), minHalf),
-            // A core thinner than a pixel fades with its width in screen pixels, not swap-chain pixels: at half scale
-            // a 1-DIP line covers half a swap-chain pixel, stretched over two screen pixels, and keeps its light.
-            CoreFade = Math.Min(coreDip * dpiScale, 1),
+            ColorRadiusPx = Math.Min(Math.Max(Math.Max(cornerPx, 6 * spreadPx), 2 * shoulderPx), minHalf),
+            // Rounded field: no 45-degree crease where two edges' light meets (deviation from doc 04 §3).
+            GlowRadiusPx = GlowProfile.GlowRadius(cornerPx, spreadPx, shoulderPx, minHalf),
             MeanRed = Finite(meanColor.R),
             MeanGreen = Finite(meanColor.G),
             MeanBlue = Finite(meanColor.B),
@@ -110,22 +96,22 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     // still reaches the screen once it adds up.
     public readonly bool LooksLike(in GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
-        CornerRadiusPx == other.CornerRadiusPx && CoreThicknessPx == other.CoreThicknessPx && CoreFade == other.CoreFade &&
-        SpreadPx == other.SpreadPx && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
-        Near(Intensity, other.Intensity) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
+        CornerRadiusPx == other.CornerRadiusPx && ShoulderPx == other.ShoulderPx && SpreadPx == other.SpreadPx &&
+        ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
+        Near(Gain, other.Gain) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
         Near(MeanRed, other.MeanRed) && Near(MeanGreen, other.MeanGreen) && Near(MeanBlue, other.MeanBlue) &&
         PhaseNear(Phase, other.Phase);
 
     public readonly bool Equals(GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
-        CornerRadiusPx == other.CornerRadiusPx && CoreThicknessPx == other.CoreThicknessPx &&
-        SpreadPx == other.SpreadPx && Intensity == other.Intensity && Pulse == other.Pulse && Phase == other.Phase &&
+        CornerRadiusPx == other.CornerRadiusPx && ShoulderPx == other.ShoulderPx &&
+        SpreadPx == other.SpreadPx && Gain == other.Gain && Pulse == other.Pulse && Phase == other.Phase &&
         Visibility == other.Visibility && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
-        CoreFade == other.CoreFade && MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue;
+        MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue;
 
     public override readonly bool Equals(object? obj) => obj is GlowConstants other && Equals(other);
 
-    public override readonly int GetHashCode() => HashCode.Combine(ScreenWidthPx, ScreenHeightPx, SpreadPx, Intensity, Pulse, Phase, Visibility);
+    public override readonly int GetHashCode() => HashCode.Combine(ScreenWidthPx, ScreenHeightPx, SpreadPx, Gain, Pulse, Phase, Visibility);
 
     private static float Finite(float value) => float.IsFinite(value) ? value : 0;
 

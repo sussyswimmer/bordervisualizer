@@ -67,7 +67,7 @@ internal sealed class OverlaySurface : IDisposable
             gpu.Composition.CreateTargetForHwnd(hwnd, true, out compositionTarget).CheckError();
             visual = gpu.Composition.CreateVisual();
             // At half scale the visual stretches the swap chain over the window: filter it, and keep its outermost
-            // pixels (the core line) solid instead of fading them into the edge.
+            // pixels (the brightest light) solid instead of fading them into the edge.
             visual.SetBitmapInterpolationMode(BitmapInterpolationMode.Linear).CheckError();
             visual.SetBorderMode(BorderMode.Hard).CheckError();
             visual.SetTransform(ScaleTransform()).CheckError();

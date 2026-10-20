@@ -1,22 +1,23 @@
 // Rimlight edge glow (doc 04 section 3). One full-screen triangle per overlay; every pixel is computed from the
 // constant buffer and the 64-texel palette gradient. Compiled at runtime as vs_4_0 / ps_4_0 (feature level 10.0+).
-// The C# mirror of this constant buffer is GlowConstants.cs: keep the two in sync. Keep this file ASCII-only.
+// The C# mirror of this constant buffer is GlowConstants.cs: keep the two in sync. The edge profile (step 2) is
+// GlowProfile.cs, which the Settings preview runs on the CPU: keep that in sync too. Keep this file ASCII-only.
 
 cbuffer Light : register(b0)
 {
     float2 ScreenPx;        // swap chain size in pixels
-    float  CornerRadiusPx;  // shape corner radius; 0 = square corners
-    float  CoreThicknessPx; // solid line; 0 = none
+    float  CornerRadiusPx;  // shape corner radius; 0 = square corners. The radii below are at least this
+    float  ShoulderPx;      // width of the soft shoulder at the edge: the Thickness setting, at least one DIP
     float  SpreadPx;        // glow reach (e-folding distance)
-    float  Intensity;       // 0..1
+    float  Gain;            // Intensity x the beat's 1 + 0.25 Pulse, rolled off under 1 (GlowProfile.Gain)
     float  Pulse;           // 0..1 beat kick
     float  Phase;           // 0..1 gradient rotation
-    float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Intensity
+    float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Gain
     float  ColorRadiusPx;   // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
-    float  GlowRadiusPx;    // corner radius of the glow field (>= CornerRadiusPx), see PSMain step 2
-    float  CoreFade;        // 0..1: a core thinner than a screen pixel fades with its width in screen pixels
+    float  GlowRadiusPx;    // corner radius of the light's field (>= CornerRadiusPx), see PSMain step 1
+    float  Pad0;            // unused
     float3 MeanColor;       // average of the gradient, linear RGB; the colour deep inside, see PSMain step 4
-    float  _pad1;
+    float  Pad1;            // unused
 };
 
 // 64 x 1, linear RGB. Texel i is the colour at perimeter position u = (i + 0.5) / 64 before Phase is applied
@@ -123,19 +124,27 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float2 p = position.xy; // pixel centre, origin at the top-left
     float2 halfSize = 0.5 * ScreenPx;
 
-    // 1. Distance to the edge: 0 at the edge, growing inward.
-    float d = -SdRoundBox(p - halfSize, halfSize, CornerRadiusPx);
+    // 1. Distance to the edge: 0 at the edge, growing inward, through a rounded field. With the square field of
+    // doc 04 the two edges' light would meet in a visible 45-degree crease; rounded (radius >= the shoulder plus two
+    // e-folding distances), it bends softly round the corners.
+    float glowDistance = max(-SdRoundBox(p - halfSize, halfSize, GlowRadiusPx), 0);
 
-    // 2. Shape: an antialiased solid core plus an exponential glow; the beat pushes the glow further in.
-    // The glow's distance field has rounded corners (radius >= 2 x spread): with the square field of doc 04 the two
-    // edges' glows meet in a visible 45-degree crease; rounded, the light pools softly into the corners.
-    float core = (1 - smoothstep(CoreThicknessPx - 1, CoreThicknessPx + 1, d)) * CoreFade;
+    // 2. Shape (GlowProfile.cs): one light, flat at the edge and fading smoothly inward, with no line anywhere. Doc
+    // 04's solid core stepped from 1 to about 0.6 at its inner edge (a bar), and round 1's exponentials were steepest
+    // at the very edge, which packed the brightest light into the outermost pixels (a thin bright line). The distance
+    // is eased through a hyperbola, sqrt(d^2 + w^2) - w: about d^2 / 2w near the edge, so the light starts with zero
+    // slope (a soft shoulder that bends into the fade over about w = Thickness, and stays within 3% of the edge for
+    // about sqrt(0.06 w spread)), and about d - w further in, the exponential glow. The beat widens the shoulder and
+    // the spread alike, swelling the whole light inward.
     // SpreadPx is at least one DIP, which is half a swap-chain pixel at half render scale; the floor only guards the
     // division and must not widen that hairline halo.
     float spread = max(SpreadPx * (1 + 0.35 * Pulse), 0.5);
-    float glowDistance = max(-SdRoundBox(p - halfSize, halfSize, GlowRadiusPx), 0);
-    float glow = exp(-glowDistance / spread);
-    float a = saturate(saturate(max(core, glow * 0.85)) * Intensity * (1 + 0.25 * Pulse)) * Visibility;
+    float shoulder = ShoulderPx * (1 + 0.35 * Pulse);
+    float glow = 0.85 * exp(-(sqrt(glowDistance * glowDistance + shoulder * shoulder) - shoulder) / spread);
+    // Intensity and the beat's gain can pass 1 (Brightness above 80% on a strong beat); the CPU rolls the gain off
+    // under 1 instead of clipping here, so the profile is only ever scaled: clipping (or a per-pixel knee) would
+    // squash the brightest pixels into a brighter rim flashing on the beat (GlowProfile.Gain).
+    float a = glow * Gain * Visibility;
     // Far inside: below half a code value. The test is on the undithered alpha so whole waves skip together; the
     // only output lost is a sparse speckle of dithered 1/255 pixels.
     [branch] if (a < 0.5 / 255)

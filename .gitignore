@@ -482,3 +482,11 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Rimlight: music and replays of it never go in the repository (wav-analyze --engine, the real-music corpus).
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.engine.csv

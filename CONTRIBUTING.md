@@ -28,7 +28,7 @@ dotnet run --project src/Rimlight.App -- --debug-visualizer
 dotnet run --project src/Rimlight.App -- --demo
 ```
 
-- **`--debug-visualizer`** opens a small window with the live spectrum, Level, Bass, Beat, the beat threshold, a beat counter and the estimated BPM. Sliders change every audio tuning parameter live, and **Copy params as JSON** copies them so you can share a tuning.
+- **`--debug-visualizer`** opens a small window with the live spectrum, Level, Bass, Beat, the beat threshold, a beat counter and the estimated BPM. Sliders change every audio tuning parameter live, and **Copy params as JSON** copies them so you can share a tuning. **Record 2 min** saves what the analyzer and the light computed for every frame as `analysis-YYYYMMDD-HHMMSS.csv` in the logs folder: numbers only, never sound. `wav-analyze plot` draws it like a WAV analysis.
 - **`--demo`** drives the glow with a synthetic 120 BPM beat and cycles through a few palettes, so you can check visuals without playing music.
 
 Close any installed copy of Rimlight first: only one instance runs at a time, and a second launch just opens the running one's Settings.
@@ -41,9 +41,12 @@ Close any installed copy of Rimlight first: only one instance runs at a time, an
 dotnet build Rimlight.Core.slnf -c Release
 dotnet test Rimlight.Core.slnf -c Release
 dotnet run --project tools/wav-analyze -- --help         # beats, BPM, CSV and a PNG plot for a WAV file
+dotnet run --project tools/wav-analyze -- plot analysis-20261018-153012.csv   # the plot of a Record 2 min file
 ```
 
-The full solution also builds on Linux (the Windows projects set `EnableWindowsTargeting`), but the app itself only runs on Windows.
+To see what the glow would do with a real song, convert it to WAV (for example `ffmpeg -i song.mp3 -ac 1 -ar 48000 song.wav`) and run `dotnet run -c Release --project tools/wav-analyze -- song.wav --engine`. It replays the song through what the overlay's render thread runs each frame (the analyzer, palette blender and light engine, as the app's `MusicGlowSource` calls them, on 10 ms packets at 60 fps) and writes `song.engine.csv`: one row per frame with the analyzer's output, the light (Intensity, Pulse, Visibility, Phase) and the analyzer's internal dynamics (song position, punch, kick-likeness, each beat's grade). `--help` lists the columns. Keep music files out of the repository.
+
+The full solution also builds on Linux (the Windows projects set `EnableWindowsTargeting`), but the app itself only runs on Windows. So do its WPF smoke tests (`Rimlight.App.Tests`), which build and show the settings, welcome and visualizer windows: `dotnet test Rimlight.sln` skips them on Linux and macOS, and CI runs them on Windows.
 
 ## Project layout
 
@@ -58,6 +61,7 @@ src/
   Rimlight.Tests/         xUnit tests for Core and the tools
   Rimlight.Platform.Tests/
                           xUnit tests for the Windows-free parts of Platform and App (run on Linux too)
+  Rimlight.App.Tests/     WPF smoke tests: every window and settings page built and shown (Windows only)
   Rimlight.Bench/         Benchmarks and long soak runs
 tools/                    Offline tools: WAV analyzer, synthetic test tracks, icon generator
 build/                    Packaging and release scripts
@@ -74,7 +78,7 @@ Rimlight is built in two lanes that meet only at the interfaces in `src/Rimlight
 | Lane | Owns | Checked by |
 |---|---|---|
 | **A: Engine & Pipeline** | `Rimlight.Core` (except `Contracts/`), `Rimlight.Tests`, `Rimlight.Bench`, `tools/`, `build/`, `.github/`, the community files | Unit tests, benchmarks, CI on Linux and Windows |
-| **B: Windows & Experience** | `Rimlight.Platform`, `Rimlight.App`, `Rimlight.Platform.Tests`, `assets/`, `README.md` | Unit tests of the Windows-free parts, running the app on Windows, manual test checklists |
+| **B: Windows & Experience** | `Rimlight.Platform`, `Rimlight.App`, `Rimlight.Platform.Tests`, `Rimlight.App.Tests`, `assets/`, `README.md` | Unit tests of the Windows-free parts, WPF smoke tests in CI on Windows, running the app on Windows, manual test checklists |
 
 - **Contracts are frozen.** Platform and App use only `CoreFactory` and the interfaces in `Contracts/`, never Core internals. Changing a contract takes a `CONTRACT CHANGE` entry in [docs/HANDOFF.md](docs/HANDOFF.md) that the maintainer approves first.
 - **Keep a pull request inside one lane.** If you need something from the other lane, add an entry to [docs/HANDOFF.md](docs/HANDOFF.md) (the format is in doc 09 §5) and work around it locally until it lands.
@@ -123,6 +127,8 @@ Logs make most bugs quick to find. Rimlight keeps them in `%APPDATA%\Rimlight\lo
 3. [Open a bug report](https://github.com/sussyswimmer/bordervisualizer/issues/new?template=bug_report.yml) and drag the zip into the **Logs** box.
 
 Logs never contain audio or track titles, and Rimlight writes your profile folder as `%USERPROFILE%`, not with your Windows user name. An error message can still name a device or a file, so have a quick look before you upload them.
+
+If the glow doesn't follow the music the way you expect, record what it did: start Rimlight with `--debug-visualizer`, play the song, click **Record 2 min**, and attach the `analysis-….csv` it saves in the logs folder, with the song's name and where in it you started. The file holds the numbers Rimlight computed for each frame (loudness, bass, beats and the light), never the sound, and names neither the device nor the track.
 
 If the problem involves settings, attach `%APPDATA%\Rimlight\settings.json` too. If it is about installing, updating or uninstalling, also attach `%LOCALAPPDATA%\velopack\velopack_Rimlight.log`, the log of Velopack, which installs and updates Rimlight. Rimlight doesn't write that one, so its paths show your user name.
 

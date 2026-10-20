@@ -29,11 +29,14 @@
     <Compile Include="../Rimlight.App/Overlay/DemoBeat.cs" Link="App/Overlay/DemoBeat.cs" />
     <Compile Include="../Rimlight.App/Overlay/MusicGlowSource.cs" Link="App/Overlay/MusicGlowSource.cs" />
     <Compile Include="../Rimlight.App/Overlay/SrgbHex.cs" Link="App/Overlay/SrgbHex.cs" />
+    <Compile Include="../Rimlight.App/Visualizer/AnalysisRecording.cs" Link="App/Visualizer/AnalysisRecording.cs" />
+    <Compile Include="../Rimlight.App/Visualizer/AnalysisRecordingCsv.cs" Link="App/Visualizer/AnalysisRecordingCsv.cs" />
     <Compile Include="../Rimlight.App/Visualizer/AnalyzerSnapshot.cs" Link="App/Visualizer/AnalyzerSnapshot.cs" />
     <Compile Include="../Rimlight.App/Visualizer/AnalyzerTap.cs" Link="App/Visualizer/AnalyzerTap.cs" />
     <Compile Include="../Rimlight.App/Visualizer/TripleBuffer.cs" Link="App/Visualizer/TripleBuffer.cs" />
     <Compile Include="../Rimlight.App/Visualizer/TuningParameters.cs" Link="App/Visualizer/TuningParameters.cs" />
     <Compile Include="../Rimlight.App/Visualizer/VisualizerFeed.cs" Link="App/Visualizer/VisualizerFeed.cs" />
+    <Compile Include="../Rimlight.App/SettingsUi/GlowRaster.cs" Link="App/SettingsUi/GlowRaster.cs" />
     <Compile Include="../Rimlight.App/SettingsUi/MonitorChoice.cs" Link="App/SettingsUi/MonitorChoice.cs" />
     <Compile Include="../Rimlight.App/SettingsUi/PresetChoice.cs" Link="App/SettingsUi/PresetChoice.cs" />
     <Compile Include="../Rimlight.App/SettingsUi/ShortcutChoice.cs" Link="App/SettingsUi/ShortcutChoice.cs" />

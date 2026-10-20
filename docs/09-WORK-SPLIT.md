@@ -20,7 +20,8 @@ src/Rimlight.Core/**    (except Contracts/ after freeze, see §3)
 src/Rimlight.Tests/**                   src/Rimlight.Platform/**
 src/Rimlight.Bench/**   (new)           src/Rimlight.App/**
 tools/**                (new)           src/Rimlight.Platform.Tests/** (K10)
-build/**                                assets/**
+build/**                                src/Rimlight.App.Tests/** (WPF smoke tests)
+                                        assets/**
 .github/**                              README.md
 CONTRIBUTING.md, SECURITY.md,           docs/08 visual items
 CODE_OF_CONDUCT.md, CHANGELOG.md        Phase 0 scaffold (one-time, see §4)

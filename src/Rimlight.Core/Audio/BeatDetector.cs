@@ -1,6 +1,11 @@
 namespace Rimlight.Core.Audio;
 
-internal readonly record struct BeatResult(bool IsBeat, float Flux, float Threshold);
+// KickLevel: the summed magnitude of the fixed kick band (BandAnalyzer.KickBins, 30–100 Hz) in the newest spectrum, in the
+// same units, for BeatCharacter (the latest one on steps without a new spectrum). It doesn't take part in detection, and
+// live-tuning the beat band doesn't move it. Threshold: the one this step was held to (the looser one when the evidence
+// of a kick allowed it), as the debug visualizer plots it. Strict: the flux also passed doc 03's own threshold, with the
+// full median guard (a beat that needed the looser one is trusted only in music: BeatCharacter).
+internal readonly record struct BeatResult(bool IsBeat, float Flux, float Threshold, float KickLevel = 0, bool Strict = false);
 
 // Spectral-flux beat detection on the bass band (doc 03 §2). All storage is allocated up front.
 // Flux is measured in amplitude units: magnitudes are scaled by 4/N, so a full-scale sine centered
@@ -20,6 +25,33 @@ internal sealed class BeatDetector
     // over 5 minutes.
     internal const float MedianOnsetRatio = 10f;
 
+    // Maxwell's feedback, round 2: on real rap and EDM the detector fired on only 69–72 % of the kicks (a corpus of real
+    // recordings with independently annotated kicks). 11–38 % stayed under the threshold at 60–90 % of it, and there
+    // the median guard set it: an 808's sustain, the bass and the rapper's voice all move the 30–150 Hz flux, so ten times
+    // its median is above the kicks. So, an internal exception to doc 03's rule (its defaults, the contract's, are
+    // unchanged): with time-domain evidence of a kick (KickEnvelope: the kick band rose by at least KickEvidenceDb next
+    // to the music above it) in music (OnsetContrast at least MusicContrast), the median guard is LooseOnsetRatio
+    // instead. Measured on the corpus: kicks the detector fires on, rap 72 → 83 %, EDM 69 → 86 %.
+    //
+    // The evidence alone is not enough (the round 2 review): in brown noise, an ocean or rain recording the 30–100 Hz band
+    // carries most of the power, its 4 ms envelope swings 10 dB and more by itself, and the evidence passed on 96 % of the
+    // steps, so the looser guard fired 12–71 beats a minute on noise. What noise lacks is onsets: the music above the bass
+    // band of a steady noise changes by the same small share from step to step, while notes, words and hits make that
+    // share jump. OnsetContrast measures it (the coefficient of variation of the upper band's relative flux over
+    // ContrastSeconds): at most 0.19 on white, pink, brown and swelling brown noise and a 50 Hz hum at −32 to −12 dBFS,
+    // while on the corpus's recordings it stays at 0.23 or more 93–100 % of the time from 10 s in (its 1st percentile
+    // 0.21 or more). So MusicContrast 0.23 closes the looser guard on noise and leaves the music's kicks as before.
+    //
+    // BeatRefractorySeconds is the contract's minimum interval between beats, and the tuned value holds (round 2 had let
+    // a beat fire again inside it for a double kick or a kick after a weaker onset: on the corpus 218 full pulses came
+    // within 150 ms of another, about 180 of them not on two kicks, and a tuned Beat spacing of 0.4 s still let beats
+    // 51 ms apart through). Without those exceptions 4 % fewer rap and EDM kicks fire a beat (rap 88 → 83 %, EDM 89 →
+    // 86 %); for 37 % of those a beat fired 20–60 ms before the kick, which is on time to the eye.
+    internal const float LooseOnsetRatio = 5f;
+    internal const float KickEvidenceDb = -4f;
+    internal const float MusicContrast = 0.23f;
+    internal const float ContrastSeconds = 4f;
+
     // The adaptive threshold needs some history before it means anything (a quarter of FluxHistorySeconds).
     private const float WarmUpFraction = 0.25f;
 
@@ -27,19 +59,30 @@ internal sealed class BeatDetector
     private const int IntervalCount = 16;        // beat intervals kept for the tempo estimate
     private const float MaxIntervalSeconds = 2f; // longer gaps (< 30 BPM) are not tempo
     private const float InlierTolerance = 0.25f; // intervals this far from the median (a share of it) are not tempo
-    private const float StaleBpmSeconds = 4f;    // no beat for this long: the tempo is unknown again
+    private const float StaleBpmSeconds = 4f;    // no tempo beat for this long: the tempo is unknown again
 
     private readonly float[] previous;
+    private readonly float[] previousUpper;
     private readonly float[] fluxValues = new float[MaxHistory];
     private readonly float[] fluxDurations = new float[MaxHistory];
     private readonly float[] selection = new float[MaxHistory];
     private readonly float[] intervals = new float[IntervalCount];
     private readonly float[] sortedIntervals = new float[IntervalCount];
     private int fluxHead, fluxCount, intervalHead, intervalCount, seededStart, seededEnd;
-    private bool hasBeat;
-    private float sinceBeat, sinceFlux, lastThreshold;
+    private bool hasBeat, hasTempoBeat, hasContrast, upperSeeded, wasPartlySilent = true;
+    private float sinceBeat, sinceTempoBeat, sinceFlux, lastThreshold, kickLevel, contrastMean, contrastSquares;
 
-    public BeatDetector(int spectrumLength) => previous = new float[spectrumLength];
+    // How much the music above the bass band changes from step to step (above): 0 until a step has measured it.
+    public float OnsetContrast { get; private set; }
+
+    // What plays has onsets: music, not a steady noise.
+    public bool IsMusic => OnsetContrast >= MusicContrast;
+
+    public BeatDetector(int spectrumLength)
+    {
+        previous = new float[spectrumLength];
+        previousUpper = new float[spectrumLength];
+    }
 
     public float EstimatedBpm { get; private set; }
 
@@ -51,16 +94,20 @@ internal sealed class BeatDetector
     // spectrumChanged: false when no new samples arrived; such frames carry no flux information, but their time
     // still counts toward the history window, the refractory period and BPM staleness.
     // windowRms: time-domain RMS of the window the magnitudes come from.
-    public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning, float windowRms)
+    // kickEvidenceDb: KickEnvelope's prominence at this step (−∞: none). partlySilent: some quarter of the window is
+    // near-silent (AudioFrontEnd.WindowPartlySilent): the music is starting or stopping, which OnsetContrast ignores.
+    public BeatResult Update(ReadOnlySpan<float> magnitudes, bool spectrumChanged, int windowSize, int sampleRate, float dtSeconds, AudioTuning tuning, float windowRms,
+        float kickEvidenceDb = float.NegativeInfinity, bool partlySilent = false)
     {
         sinceBeat += dtSeconds;
+        sinceTempoBeat += dtSeconds;
         sinceFlux += dtSeconds;
-        if (hasBeat && sinceBeat > StaleBpmSeconds)
+        if (hasTempoBeat && sinceTempoBeat > StaleBpmSeconds)
         {
             intervalHead = intervalCount = 0;
             EstimatedBpm = 0;
         }
-        if (!spectrumChanged) return new BeatResult(false, 0, lastThreshold);
+        if (!spectrumChanged) return new BeatResult(false, 0, lastThreshold, kickLevel);
 
         (int start, int end) = BandAnalyzer.BassBins(magnitudes.Length, (float)sampleRate / windowSize, tuning);
         float scale = 4f / windowSize;
@@ -73,11 +120,26 @@ internal sealed class BeatDetector
             if (k >= seededStart && k < seededEnd) flux += MathF.Max(0, magnitude - previous[k]);
             previous[k] = magnitude;
         }
+        (int kickStart, int kickEnd) = BandAnalyzer.KickBins(magnitudes.Length, (float)sampleRate / windowSize);
+        kickLevel = 0;
+        for (int k = kickStart; k < kickEnd; k++) kickLevel += magnitudes[k] * scale;
+        // The music above the bass band: its relative flux (positive changes over the total), for OnsetContrast.
+        (int upperStart, int upperEnd) = BandAnalyzer.UpperBins(magnitudes.Length, (float)sampleRate / windowSize);
+        float upperFlux = 0, upperSum = 0;
+        for (int k = upperStart; k < upperEnd; k++)
+        {
+            float magnitude = magnitudes[k] * scale;
+            upperFlux += MathF.Max(0, magnitude - previousUpper[k]);
+            upperSum += magnitude;
+            previousUpper[k] = magnitude;
+        }
+        bool upperWasSeeded = upperSeeded;
+        upperSeeded = true;
         bool seeded = seededEnd > seededStart;
         seededStart = start;
         seededEnd = end;
         // A seed-only update adds no history entry; its time goes to the next one.
-        if (!seeded) return new BeatResult(false, 0, lastThreshold);
+        if (!seeded) return new BeatResult(false, 0, lastThreshold, kickLevel);
         float entryDuration = sinceFlux;
         sinceFlux = 0;
 
@@ -99,15 +161,19 @@ internal sealed class BeatDetector
         float stdDev = used > 1 ? MathF.Sqrt(MathF.Max(0, sumSquares / used - mean * mean)) : 0;
         // The effective threshold, as the debug visualizer plots it: the largest of doc 03's mean + k·σ, the median
         // onset guard and the level-relative MinFlux. Quickselect keeps the median cheap (≈ 60 values per step).
-        lastThreshold = MathF.Max(
-            MathF.Max(mean + tuning.FluxThresholdMultiplier * relax * stdDev, Median(used) * (1 + (MedianOnsetRatio - 1) * relax)),
-            tuning.MinFlux * windowRms);
+        float spread = mean + tuning.FluxThresholdMultiplier * relax * stdDev, median = Median(used), floor = tuning.MinFlux * windowRms;
+        lastThreshold = MathF.Max(MathF.Max(spread, median * (1 + (MedianOnsetRatio - 1) * relax)), floor);
+        // The threshold for a step with evidence of a kick (above): the same with the lower median guard.
+        float loose = MathF.Max(MathF.Max(spread, median * (1 + (LooseOnsetRatio - 1) * relax)), floor);
 
         bool warm = covered >= tuning.FluxHistorySeconds * WarmUpFraction || fluxCount == MaxHistory;
-        bool isBeat = warm
-            && flux > lastThreshold
-            && windowRms > AudioFrontEnd.HoldRms(tuning)
-            && (!hasBeat || sinceBeat >= tuning.BeatRefractorySeconds);
+        // The window filling with music after a gap or a stall is no onset of the music itself, and neither is the step
+        // right after (its comparison spectrum still had the silence in it).
+        UpdateContrast(warm && upperWasSeeded && !partlySilent && !wasPartlySilent && upperSum > 1e-9f ? upperFlux / upperSum : -1, entryDuration);
+        wasPartlySilent = partlySilent;
+        bool looseOpen = kickEvidenceDb >= KickEvidenceDb && IsMusic;
+        float applied = looseOpen ? loose : lastThreshold;
+        bool isBeat = warm && windowRms > AudioFrontEnd.HoldRms(tuning) && (!hasBeat || sinceBeat >= tuning.BeatRefractorySeconds) && flux > applied;
 
         fluxValues[fluxHead] = flux;
         fluxDurations[fluxHead] = entryDuration;
@@ -116,11 +182,22 @@ internal sealed class BeatDetector
 
         if (isBeat)
         {
-            if (hasBeat && sinceBeat <= MaxIntervalSeconds) AddInterval(sinceBeat);
             hasBeat = true;
             sinceBeat = 0;
         }
-        return new BeatResult(isBeat, flux, lastThreshold);
+        return new BeatResult(isBeat, flux, applied, kickLevel, flux > lastThreshold);
+    }
+
+    // A tempo beat, secondsAgo before the end of the latest Update (AudioAnalyzer decides which beats count: Maxwell's
+    // feedback, round 1). Four-on-the-floor EDM often puts a bass note on every off-beat; it fires like the kick, and with
+    // it every interval would be half a beat (about 250 BPM for 128). Where kicks play, only the kick-like, accented ones
+    // count (BeatCharacter.TempoBeatAge); elsewhere every beat counts, as in doc 03.
+    public void AddTempoBeat(float secondsAgo)
+    {
+        float since = sinceTempoBeat - secondsAgo;
+        if (hasTempoBeat && since > 0 && since <= MaxIntervalSeconds) AddInterval(since);
+        hasTempoBeat = true;
+        sinceTempoBeat = MathF.Max(0, secondsAgo);
     }
 
     // Real time covered by the stored flux history, for tests.
@@ -140,14 +217,38 @@ internal sealed class BeatDetector
     {
         fluxHead = fluxCount = seededStart = seededEnd = 0;
         sinceFlux = 0;
+        upperSeeded = false;
+    }
+
+    // One step's relative flux of the music above the bass band into OnsetContrast's running mean and mean square, over
+    // ContrastSeconds of real time (negative: a step that doesn't count, which holds them).
+    private void UpdateContrast(float relative, float seconds)
+    {
+        if (relative < 0) return;
+        if (!hasContrast)
+        {
+            contrastMean = relative;
+            contrastSquares = relative * relative;
+            hasContrast = true;
+        }
+        else
+        {
+            float a = 1 - MathF.Exp(-seconds / ContrastSeconds);
+            contrastMean += (relative - contrastMean) * a;
+            contrastSquares += (relative * relative - contrastSquares) * a;
+        }
+        OnsetContrast = contrastMean > 1e-9f ? MathF.Sqrt(MathF.Max(0, contrastSquares - contrastMean * contrastMean)) / contrastMean : 0;
     }
 
     public void Reset()
     {
         Array.Clear(previous);
+        Array.Clear(previousUpper);
+        upperSeeded = false;
+        wasPartlySilent = true;
         fluxHead = fluxCount = intervalHead = intervalCount = seededStart = seededEnd = 0;
-        hasBeat = false;
-        sinceBeat = sinceFlux = lastThreshold = 0;
+        hasBeat = hasTempoBeat = hasContrast = false;
+        sinceBeat = sinceTempoBeat = sinceFlux = lastThreshold = kickLevel = contrastMean = contrastSquares = OnsetContrast = 0;
         EstimatedBpm = 0;
     }
 

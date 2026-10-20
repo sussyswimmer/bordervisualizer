@@ -51,8 +51,11 @@ internal partial class AboutPage : UserControl, ISettingsPage
     {
         try
         {
-            var decoder = new IconBitmapDecoder(new Uri("pack://application:,,,/Assets/Rimlight.ico", UriKind.Absolute),
-                BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
+            // This assembly's resource by its name, rather than the entry assembly's ("/Assets/…"): the same file in the
+            // app, and also found where the app isn't the entry assembly (the WPF smoke tests' test host).
+            string assembly = typeof(AboutPage).Assembly.GetName().Name ?? AppInfo.Name;
+            var uri = new Uri($"pack://application:,,,/{assembly};component/Assets/Rimlight.ico", UriKind.Absolute);
+            var decoder = new IconBitmapDecoder(uri, BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
             BitmapFrame? best = null;
             foreach (BitmapFrame frame in decoder.Frames)
             {

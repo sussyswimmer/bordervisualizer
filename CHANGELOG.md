@@ -26,6 +26,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `--debug-visualizer` shows the live spectrum, beats and tempo, with a slider for every audio setting and "Copy params as JSON" for sharing a tuning.
   - A frame benchmark and an 8-hour soak run of the audio and light engine, with the results in `docs/PERF.md`.
   - Tests for the Windows app's own logic (frame pacing, the tray tooltip, shortcuts, presets, the demo, updates' schedule and more), which run on Linux too.
+  - Smoke tests that open every window and Settings page with the Fluent styles loaded. They run on Windows, in CI and with `dotnet test src/Rimlight.App.Tests`.
+  - The debug visualizer's **Record 2 min** saves what the analyzer and the light computed for every frame as a CSV in the logs folder (numbers only, never sound), and `wav-analyze plot` draws it like a WAV analysis.
+  - `wav-analyze --engine` replays a song through the overlay's per-frame work. `tools/corpus/` rebuilds the real-music test set the dynamics are measured on; no audio is in the repository.
+
+### Changed
+
+- **Calm music moves like a wave.** Brightness follows how loud each moment is within the song, so a chorus is brighter than a quiet verse and a whispered line stays dim. Without drums the glow swells and eases with the phrases instead of following every syllable. Pulses follow the drums: rap and EDM bounce hard, a folk or rock kit under guitars and voice gives a soft lift, and a voice, a guitar or a piano in a song without drums doesn't pulse. Rain, ocean and other noise sounds don't pulse either. Sensitivity (Settings > Motion) now also sets how big the pulses are.
+- **Kicks hit on time, and hard.** In rap and EDM the pulse peaks about 25 ms after each kick and makes the light about a third brighter, with a dip between kicks. A drop hits on its first kick.
+- **The edge fades in, with no line.** There is no solid line and no thin bright rim at the screen edge: the light starts soft and flat at the edge and fades smoothly inward, and by default it reaches further in. **Thickness** now sets how wide the soft, bright part along the edges is, and it always blends into the glow.
+- **Black-and-white covers give a white glow.** A black-and-white cover now glows soft white and grey, not blue, even when its black and white lean a little blue. A black cover with white text no longer falls back to your own colors; only a blank cover, or none, does.
+- **Settings says why it can't open.** If the Settings window, one of its pages or the visualizer can't open, a message says what went wrong and offers to open the logs folder (`%APPDATA%\Rimlight\logs`). Before, the welcome window could show up in its place, or nothing at all.
 
 ## [0.1.0] - YYYY-MM-DD
 

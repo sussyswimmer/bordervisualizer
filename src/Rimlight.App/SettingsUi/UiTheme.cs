@@ -24,6 +24,9 @@ internal static class UiTheme
     /// <summary>Whether WPF-UI's resources are in place; the settings window needs them.</summary>
     public static bool IsLoaded => loaded;
 
+    /// <summary>Why <see cref="Load"/> failed, for the message that says Settings can't open; null if it didn't.</summary>
+    public static Exception? LoadFailure { get; private set; }
+
     /// <summary>The theme the app shows now.</summary>
     public static ApplicationTheme Current => loaded ? ApplicationThemeManager.GetAppTheme() : ApplicationTheme.Light;
 
@@ -42,11 +45,14 @@ internal static class UiTheme
             loaded = true;
             ApplicationThemeManager.Changed += (theme, _) => ApplyAccent(theme);
             Apply(Wanted()); // raises Changed, which sets the accent
+            // Once per run. With this line in a log, a settings window that didn't open wasn't missing its styles.
+            Trace.WriteLine($"[UiTheme] Loaded the Fluent styles ({Current} theme).");
         }
         catch (Exception exception)
         {
-            // The tray works with WPF's own styles; the settings window can't be shown without these.
-            Trace.WriteLine($"[Ui] Loading the Fluent styles failed: {exception}");
+            // The tray works with WPF's own styles; the settings window can't be shown without these, and says so.
+            LoadFailure = exception;
+            Trace.WriteLine($"[UiTheme] Loading the Fluent styles failed: {exception}");
         }
     }
 
@@ -71,7 +77,7 @@ internal static class UiTheme
         }
         catch (Exception exception)
         {
-            Trace.WriteLine($"[Ui] Following the system theme failed: {exception.Message}");
+            Trace.WriteLine($"[UiTheme] Following the system theme failed: {exception.Message}");
         }
     }
 
@@ -100,7 +106,7 @@ internal static class UiTheme
         }
         catch (Exception exception)
         {
-            Trace.WriteLine($"[Ui] Applying the accent color failed: {exception.Message}");
+            Trace.WriteLine($"[UiTheme] Applying the accent color failed: {exception.Message}");
         }
     }
 }

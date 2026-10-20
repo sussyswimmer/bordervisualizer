@@ -19,8 +19,17 @@ public static class CoreFactory
     /// <see cref="AudioTuning.NoPacketTimeoutSeconds"/> without packets the gap counts as digital silence.</para>
     /// <para><see cref="AudioTuning.MinFlux"/> is relative to the analysis window's RMS, so beats don't depend on playback
     /// volume; below the near-silence level (<see cref="AudioTuning.SilenceThresholdDb"/> − 20 dB) no beat fires.</para>
-    /// <para>Sensitivity is applied here once: it scales <see cref="AudioFeatures.Level"/> and lowers the beat threshold.
-    /// The light engine must not apply it again. Setting <see cref="IAudioAnalyzer.Tuning"/> validates the value
+    /// <para><b>Character and dynamics</b> (Maxwell's feedback, round 1; docs/CORE-API.md §4.2).
+    /// <see cref="AudioFeatures.Level"/> is how loud the moment is within the song, against a reference that remembers the
+    /// song's loud parts for about 20 s (a gap of 1 s of near-silence between songs clears it): a whispered verse after a
+    /// chorus stays dim. With no drums it moves like a slow wave (10× doc 03's attack, 5× its release); as drums take
+    /// over it blends into doc 03's punchy Level.
+    /// <see cref="AudioFeatures.Beat"/> is each detected beat's grade, 0..1 (how kick-like, how drum-driven the music
+    /// has been, how accented, how loud within the song), then decays per frame as before: a kick in a loud groove reads
+    /// exactly 1, soft drums give smaller pulses, and a sung syllable, a plucked string or a bass guitar without drums 0.
+    /// The same song at any volume gives the same light; a volume change mid-song settles in about 25 s.</para>
+    /// <para>Sensitivity is applied here once: it scales <see cref="AudioFeatures.Level"/> and each beat's grade, and
+    /// lowers the beat threshold. The light engine must not apply it again. Setting <see cref="IAudioAnalyzer.Tuning"/> validates the value
     /// (invalid tuning throws and keeps the previous one); a <see cref="AudioTuning.WindowSize"/> change allocates,
     /// resets the analysis and replaces <see cref="IAudioAnalyzer.Diagnostics"/>, so read that property every frame.</para>
     /// <para>Diagnostics: <see cref="AnalyzerDiagnostics.Spectrum"/> has WindowSize / 2 + 1 bins, DC through Nyquist,
@@ -29,10 +38,13 @@ public static class CoreFactory
     /// <see cref="AnalyzerDiagnostics.FluxHistory"/> and <see cref="AnalyzerDiagnostics.ThresholdHistory"/> hold 240
     /// entries, exactly one per <c>Process</c> call (empty spans included), oldest first and zero until filled; a time
     /// axis must use the actual call cadence, not an assumed 60 Hz. Each flux entry is the largest flux of that call,
-    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is
-    /// 60 over the mean of the last 16 beat intervals (each up to 2 s) that lie within ±25 % of their median, or over
-    /// the median when none does (every other beat missed), so missed or extra beats drop out and a steady frame rate
-    /// doesn't bias it (H-016). It is 0 until three intervals are in, and returns to 0 after 4 s without a beat.
+    /// and each threshold entry is the effective beat threshold, in the same units. <see cref="AnalyzerDiagnostics.BeatCount"/>
+    /// counts every detected beat, whatever its grade. <see cref="AnalyzerDiagnostics.EstimatedBpm"/> is
+    /// 60 over the mean of the last 16 intervals (each up to 2 s) between tempo beats that lie within ±25 % of their
+    /// median, or over the median when none does (every other beat missed), so missed or extra beats drop out and a
+    /// steady frame rate doesn't bias it (H-016). Where kicks play, only kick-like beats at least 0.6× as strong as the
+    /// strongest recent kick are tempo beats (not an off-beat bass note); elsewhere every beat is. It is 0 until three
+    /// intervals are in, and returns to 0 after 4 s without a tempo beat.
     /// <see cref="IAudioAnalyzer.Reset"/> clears everything except the current <see cref="AudioFeatures.IsSilent"/>
     /// state.</para>
     /// </remarks>
@@ -53,13 +65,15 @@ public static class CoreFactory
     /// and both sizes positive, otherwise <see cref="ArgumentException"/>; <c>trackId</c> must not be null. Pixels with alpha
     /// below 128 are skipped, and images over 512 × 512 are sampled on a grid.</para>
     /// <para>Output: <see cref="Palette.Primary"/> and <see cref="Palette.Secondary"/> are linear RGB with every channel in
-    /// 0..1 (H-008), glow-ified in OkLCh: lightness 0.55..0.85 and chroma at least 0.12, reduced only where sRGB can't
-    /// hold it. A grayscale artwork color (chroma below 0.03) stays neutral and glows soft white.
-    /// <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
-    /// <para>Returns null for "no art" (doc 05 §1): when no pixel has alpha 128 or more, or when the palette is nearly
-    /// grayscale (Primary and Secondary below chroma 0.03 before glow-ify) and the image is mostly one flat color (at
-    /// least 60 % of the pixels within Oklab distance 0.03 of the largest cluster), as with a player's generic app
-    /// icon. Keep the previous palette, or the manual one, in that case.</para>
+    /// 0..1 (H-008), glow-ified in OkLCh: lightness 0.55..0.85, and chroma at least 0.12 for a clearly colored artwork
+    /// color (chroma 0.10 or more), reduced only where sRGB can't hold it. A near-neutral one (chroma up to 0.05: a grey,
+    /// or a black-and-white cover's faint cast) keeps its chroma and glows soft white or grey, and in between the raise
+    /// eases in. <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
+    /// <para>Returns null for "no art" (doc 05 §1): when no pixel has alpha 128 or more, or when the image is essentially
+    /// one flat color (at least 98 % of the pixels within Oklab distance 0.03 of the largest cluster) and the palette is
+    /// nearly grayscale (Primary and Secondary below chroma 0.05 before glow-ify), as with a blank thumbnail. A
+    /// black-and-white cover with text, or a generic icon with a glyph, is art and glows neutral. Keep the previous
+    /// palette, or the manual one, in that case.</para>
     /// <para>Deterministic, and the extractor holds no state, so calls may run on any thread, even concurrently. One
     /// call took about 1.5 ms for 64 × 64 and under 0.1 s for 512 × 512 on the Linux test machine: run it on the
     /// thread pool, never on the UI or render thread. Scratch comes from the shared array pool, which keeps it per
@@ -130,9 +144,9 @@ public static class CoreFactory
     /// <para><b>Other fields.</b> ColorA and ColorB are the palette's Primary and Secondary (pass the palette last given to
     /// <see cref="IPaletteBlender.SetTarget"/>; the gradient carries the crossfade). Ratio is PrimaryRatio clamped to
     /// 0.1..0.9, Spread is Glow (0..1, mapped to pixels by the renderer) and CoreThicknessDip is clamped to 0..40.
-    /// Pulse is Beat, unsmoothed, times the Music Sync weight. Phase is in [0, 1): it drifts 0.015 cycles/s, and each
-    /// beat (Beat rising by more than 0.1; it re-arms once Beat falls) adds 0.01 cycles as a push that decays with
-    /// τ = 120 ms. Idle Glow has no drift and no pulse.</para>
+    /// Pulse is Beat (the analyzer's graded pulse), unsmoothed, times the Music Sync weight. Phase is in [0, 1): it drifts
+    /// 0.015 cycles/s, and each beat (Beat rising by more than 0.1; it re-arms once Beat falls) adds 0.01 cycles × the
+    /// height Beat rises to, as a push that decays with τ = 120 ms. Idle Glow has no drift and no pulse.</para>
     /// <para><b>IsStatic.</b> True only while the light is hidden and stays hidden for the same inputs: the 300 ms gate
     /// fade has finished (paused, Enabled = false, Animation = Off), or, in Music Sync with WhenSilent = Hide, the 1.5 s
     /// silence fade has. It turns true on the second such Update in a row, so the frame that reaches Visibility 0 is

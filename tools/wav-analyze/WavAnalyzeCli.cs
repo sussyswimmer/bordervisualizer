@@ -17,6 +17,8 @@ internal static class WavAnalyzeCli
           wav-analyze generate <out.wav> [options]  Write a synthetic test track (kicks, noise, vocal-ish tones)
           wav-analyze selftest                      Analyze generated tracks and check the beats are found
           wav-analyze tuning [--tuning <file>]      Print the effective AudioTuning as JSON, every property
+          wav-analyze plot <recording.csv> [options]
+                                                    Plot a recording from the debug visualizer's "Record 2 min"
           wav-analyze --help
 
         Analyze options:
@@ -32,16 +34,37 @@ internal static class WavAnalyzeCli
           --tuning <file>    AudioTuning overrides as JSON (see below)
           --range <a>:<b>    Plot only seconds a to b, e.g. 30:45 (the CSV always has every frame)
           --width <px>       Plot width (default 80 px per plotted second, 1200 to 12000)
+          --engine           Replay what the overlay's render thread runs each frame (the analyzer, palette blender
+                             and light engine, as the app's MusicGlowSource) and write <name>.engine.csv with the light
+                             too. Here --packet-ms defaults to 10 and --jitter to 0.1, as on a real PC.
+          --brightness <f>   With --engine: Settings.Brightness, 0.1 to 1 (default 0.8)
+          --sensitivity <f>  With --engine: Settings.Sensitivity, 0.25 to 2 (default 1, or the tuning file's)
 
         Output: one CSV row per render frame with the columns
           time,level,bass,beat,isSilent,flux,threshold,bpm
         time in seconds; level, bass, beat 0..1 (what the light sees); isSilent 0/1; flux and threshold in the
         analyzer's flux units (a beat needs flux above threshold); bpm is the analyzer's estimate, 0 while unknown.
 
+        With --engine the columns are
+          time,samples,level,bass,beat,isSilent,beatCount,fired,flux,threshold,bpm,intensity,pulse,spread,visibility,
+          phase,position,loudnessDb,referenceDb,punch,drive,kickLike,grade,levelTarget
+        samples: new samples this frame (0 between packets); beatCount and fired: beats detected so far and in this
+        frame, whatever their grade; intensity to phase: the LightState the overlay draws (the glow's strength is
+        Intensity x (1 + 0.25 x Pulse), rolled off near 1, x Visibility). The last eight are the analyzer's internal
+        dynamics (CORE-API 4.2: the song position, loudness and reference in dB, punch and its drive, the latest
+        onset's kick-likeness and grade, doc 03's Level target), empty for a build without them. A row's time is when
+        its frame is computed; the screen shows it about 1-2 frames later.
+
         Tuning JSON: one object whose keys are AudioTuning property names. Give any subset; the rest keep their
         defaults. Keys are case-insensitive, unknown keys are errors, comments and trailing commas are allowed:
           { "Sensitivity": 1.25, "FluxThresholdMultiplier": 1.8, "MinFlux": 0.02 }
         The debug visualizer's "Copy params as JSON" writes this format; "wav-analyze tuning" prints every key.
+
+        Plot options: --out <dir>, --plot <file>, --range <a>:<b> and --width <px>, as for a WAV file.
+          The recording is %APPDATA%\Rimlight\logs\analysis-*.csv: one row per overlay frame of what the app
+          computed from the music (no audio), with time, dt, level, bass, beat, isSilent, beatCount, flux,
+          threshold, bpm and the light state. The plot has the same panels as a WAV analysis. Its lines starting
+          with # are comments: pandas.read_csv(path, comment="#") reads the rest.
 
         Generate options (levels are peak dBFS, or "off"):
           --bpm <n> (120)  --seconds <s> (30)  --rate <Hz> (48000)  --channels <n> (1)  --seed <n> (1)
@@ -54,6 +77,10 @@ internal static class WavAnalyzeCli
         Exit codes: 0 success, 1 failed (bad file, invalid tuning, selftest failure), 2 bad command line.
 
         """;
+
+    // --engine feeds the audio as the app gets it, unless told otherwise.
+    internal const double EnginePacketMs = 10;
+    internal const double EngineJitter = 0.1;
 
     private static readonly CultureInfo C = CultureInfo.InvariantCulture;
 
@@ -72,6 +99,7 @@ internal static class WavAnalyzeCli
                 "generate" => Generate(args[1..], output),
                 "selftest" => SelfTest(args[1..], output),
                 "tuning" => PrintTuning(args[1..], output),
+                "plot" => RecordingPlot.Run(args[1..], output),
                 "analyze" => Analyze(args[1..], output),
                 _ => Analyze(args, output),
             };
@@ -98,42 +126,79 @@ internal static class WavAnalyzeCli
     private static int Analyze(string[] args, TextWriter output)
     {
         var a = new CommandLine(args,
-            ["out", "csv", "plot", "fps", "jitter", "packet-ms", "seed", "tuning", "range", "width"],
-            ["no-plot"]);
+            ["out", "csv", "plot", "fps", "jitter", "packet-ms", "seed", "tuning", "range", "width", "brightness", "sensitivity"],
+            ["no-plot", "engine"]);
         if (a.Positional.Count != 1) throw new UsageException(a.Positional.Count == 0 ? "Expected a WAV file." : "Expected one WAV file.");
         string path = a.Positional[0];
+        bool engine = a.Has("engine");
+        if (!engine && (a.Has("brightness") || a.Has("sensitivity")))
+            throw new UsageException("--brightness and --sensitivity set the light: use them with --engine (or Sensitivity in --tuning).");
+        // The engine replay defaults to what the app gets: WASAPI's 10 ms packets on an uneven frame clock.
         var feed = new FeedOptions
         {
             Fps = a.Number("fps", 60, 1, 1000),
-            Jitter = a.Number("jitter", 0, 0, 0.9),
-            PacketSeconds = a.Number("packet-ms", 0, 0, 1000) / 1000,
+            Jitter = a.Number("jitter", engine ? EngineJitter : 0, 0, 0.9),
+            PacketSeconds = a.Number("packet-ms", engine ? EnginePacketMs : 0, 0, 1000) / 1000,
             Seed = a.Seed("seed", 1),
         };
         (double From, double To)? range = ParseRange(a.Text("range"));
         int? width = a.Text("width") is null ? null : a.Integer("width", 0, PlotRenderer.MinWidth, PlotRenderer.MaxWidth);
         string? tuningPath = a.Text("tuning");
         AudioTuning? tuning = tuningPath is null ? null : TuningJson.Load(tuningPath);
+        var defaults = new Settings();
+        Settings? settings = engine
+            ? defaults with
+            {
+                Brightness = (float)a.Number("brightness", defaults.Brightness, 0.1, 1),
+                Sensitivity = (float)a.Number("sensitivity", tuning?.Sensitivity ?? defaults.Sensitivity, 0.25, 2),
+            }
+            : null;
 
         WavAudio audio = WavReader.ReadMono(path);
         if (audio.Mono.Length == 0) throw new InvalidDataException($"{path} has no audio frames.");
         if (range is { } r && r.From >= audio.Info.Seconds) // the plot would clamp to an empty sliver past the end
             throw new UsageException($"--range starts at {r.From.ToString("0.###", C)} s but {Path.GetFileName(path)} is only {audio.Info.Seconds.ToString("F2", C)} s long.");
-        AnalysisResult result = OfflineAnalysis.Run(audio.Mono, audio.Info.SampleRate, feed, tuning);
 
         string name = Path.GetFileNameWithoutExtension(path);
         string outDir = a.Text("out") ?? ".";
-        string csvPath = a.Text("csv") ?? Path.Combine(outDir, name + ".csv");
+        string csvPath = a.Text("csv") ?? Path.Combine(outDir, name + (engine ? ".engine.csv" : ".csv"));
         string? plotPath = a.Has("no-plot") ? null : a.Text("plot") ?? Path.Combine(outDir, name + ".png");
+        EnsureDirectory(csvPath);
+
+        AnalysisResult result;
+        LightSummary? light = null;
+        if (settings is not null)
+        {
+            // The rows stream to the file; the analyzer's side of each frame is kept for the beat list and the plot.
+            var frames = new List<AnalysisFrame>((int)Math.Min(int.MaxValue, audio.Info.Seconds * feed.Fps * 1.25 + 16));
+            var beats = new List<double>();
+            var summary = new LightSummary();
+            using (var writer = new StreamWriter(csvPath))
+            {
+                EngineCsv.Write(writer, EngineReplay.Run(audio.Mono, audio.Info.SampleRate, feed, settings, tuning), f =>
+                {
+                    frames.Add(new AnalysisFrame(f.Time, f.Samples, f.Features, f.Flux, f.Threshold, f.Bpm, f.Fired));
+                    for (int b = 0; b < f.Fired; b++) beats.Add(f.Time);
+                    summary.Add(f);
+                });
+            }
+            result = new AnalysisResult(frames, beats, audio.Info.SampleRate, audio.Info.Seconds);
+            light = summary;
+        }
+        else
+        {
+            result = OfflineAnalysis.Run(audio.Mono, audio.Info.SampleRate, feed, tuning);
+            AnalysisCsv.Write(csvPath, result.Frames);
+        }
 
         output.WriteLine($"{Path.GetFileName(path)}: {audio.Info}, {audio.Info.Seconds.ToString("F2", C)} s");
-        output.WriteLine($"Feed: {DescribeFeed(feed)}; tuning: {DescribeTuning(tuning, tuningPath)}");
+        output.WriteLine($"Feed: {DescribeFeed(feed)}; tuning: {DescribeTuning(tuning, tuningPath)}" + (settings is null ? ""
+            : $"; light: Brightness {settings.Brightness.ToString("0.##", C)}, Sensitivity {settings.Sensitivity.ToString("0.##", C)}"));
         output.WriteLine($"Beats: {result.BeatTimes.Count}");
         WriteBeatTimes(output, result.BeatTimes);
         output.WriteLine($"Tempo: {DescribeTempo(result)}");
         output.WriteLine($"Silent: {(result.SilentFraction() * 100).ToString("F1", C)} % of {result.Frames.Count} frames");
-
-        EnsureDirectory(csvPath);
-        AnalysisCsv.Write(csvPath, result.Frames);
+        if (light is not null) output.WriteLine($"Light: {light.Describe(result.AudioSeconds)}");
         output.WriteLine($"CSV:  {csvPath} ({result.Frames.Count} rows)");
         if (plotPath is not null)
         {
@@ -246,7 +311,7 @@ internal static class WavAnalyzeCli
         return allPassed ? 0 : 1;
     }
 
-    private static (double From, double To)? ParseRange(string? text)
+    internal static (double From, double To)? ParseRange(string? text)
     {
         if (text is null) return null;
         string[] parts = text.Split(':');

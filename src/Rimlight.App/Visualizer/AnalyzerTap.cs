@@ -7,8 +7,10 @@ namespace Rimlight.App.Visualizer;
 /// <summary>
 /// The overlay thread's half of the debug visualizer (doc 03 §4), owned by <see cref="Overlay.MusicGlowSource"/>.
 /// While a <see cref="VisualizerFeed"/> is attached it applies the tunings the UI posts (H-004: only the render thread
-/// touches the analyzer), records Level, Bass, Beat and the time step of every analyzer call next to the analyzer's
-/// own flux and threshold histories, and about 60 times a second copies all of it into the feed's next snapshot.
+/// touches the analyzer), records Level, Bass, Beat, whether a beat fired and the time step of every analyzer call next
+/// to the analyzer's own flux and threshold histories, and about 60 times a second copies all of it into the feed's next
+/// snapshot. While the UI records ("Record 2 min"), it also appends every frame, with the light state it returns, to
+/// the feed's <see cref="AnalysisRecording"/>: numbers only, never audio.
 /// Nothing here allocates per frame. With no feed attached it costs nothing and holds on to none
 /// (<see cref="Detach"/>).
 /// </summary>
@@ -18,11 +20,14 @@ internal sealed class AnalyzerTap
     private const float SnapshotSeconds = 1f / 60;
 
     private VisualizerFeed? feed;  // the feed the rings below are recorded for; null while none is attached
+    private AnalysisRecording? recording; // the attached feed's recording in progress; null while none runs
     private float[] level = new float[VisualizerFeed.HistoryEntries];
     private float[] bass = new float[VisualizerFeed.HistoryEntries];
     private float[] beat = new float[VisualizerFeed.HistoryEntries];
+    private float[] fired = new float[VisualizerFeed.HistoryEntries];
     private float[] seconds = new float[VisualizerFeed.HistoryEntries];
     private int head;              // where the next entry goes
+    private int beatCount = -1;    // the analyzer's BeatCount after the last recorded call; -1 before the first
     private float sinceSnapshot;
     private long sequence;
 
@@ -57,17 +62,21 @@ internal sealed class AnalyzerTap
     }
 
     /// <summary>
-    /// After the analyzer ran this frame: records the frame and, at most about 60 times a second, publishes a snapshot.
+    /// After the analyzer and the light engine ran this frame: records the frame (and appends it to a recording in
+    /// progress) and, at most about 60 times a second, publishes a snapshot.
     /// </summary>
     /// <param name="current">The attached feed.</param>
     /// <param name="analyzer">The overlay's analyzer, which just ran.</param>
     /// <param name="features">What it returned.</param>
+    /// <param name="light">The light state this frame returns, for a recording.</param>
     /// <param name="dtSeconds">The time step it was given.</param>
+    /// <param name="samples">How many new mono samples it got, at the capture's rate, for a recording (the count only).</param>
+    /// <param name="followsMusic">Whether the light engine got these features (music sync, on, not paused, no demo).</param>
     /// <param name="audio">The captured device, or null while there is none.</param>
     /// <param name="analyzedSampleRate">The sample rate passed to the analyzer.</param>
     /// <param name="demo">Whether the glow shows the demo instead of the music.</param>
-    public void Record(VisualizerFeed current, IAudioAnalyzer analyzer, in AudioFeatures features, float dtSeconds,
-        CapturedAudio? audio, int analyzedSampleRate, bool demo)
+    public void Record(VisualizerFeed current, IAudioAnalyzer analyzer, in AudioFeatures features, in LightState light,
+        float dtSeconds, int samples, bool followsMusic, CapturedAudio? audio, int analyzedSampleRate, bool demo)
     {
         Attach(current);
         AnalyzerDiagnostics diagnostics = analyzer.Diagnostics; // re-read every frame: a WindowSize change replaces it
@@ -80,8 +89,22 @@ internal sealed class AnalyzerTap
         level[head] = features.Level;
         bass[head] = features.Bass;
         beat[head] = features.Beat;
+        // A beat fired on this call when BeatCount rose. It falls back to 0 on a reset or a WindowSize change.
+        fired[head] = beatCount >= 0 && diagnostics.BeatCount > beatCount ? 1 : 0;
+        beatCount = diagnostics.BeatCount;
         seconds[head] = dt;
         head = (head + 1) % level.Length;
+
+        // "Record 2 min": every frame, not only the ones that make a snapshot. A recording the UI just started takes
+        // over from this frame on; it fills a buffer the UI allocated, so this allocates nothing either.
+        if (current.TakeRecording() is { } started)
+        {
+            recording?.Drop();
+            recording = started;
+        }
+        if (recording is not null && !recording.Append(dt, samples, in features, diagnostics.BeatCount,
+                Newest(diagnostics.FluxHistory), Newest(diagnostics.ThresholdHistory), diagnostics.EstimatedBpm, in light, followsMusic))
+            recording = null; // over: 2 minutes in, full, or stopped by the UI, which saves it
 
         sinceSnapshot += dt;
         if (sinceSnapshot < SnapshotSeconds) return;
@@ -98,6 +121,7 @@ internal sealed class AnalyzerTap
         CopyOldestFirst(level, snapshot.Level, history);
         CopyOldestFirst(bass, snapshot.Bass, history);
         CopyOldestFirst(beat, snapshot.Beat, history);
+        CopyOldestFirst(fired, snapshot.Fired, history);
         CopyOldestFirst(seconds, snapshot.FrameSeconds, history);
         snapshot.HistoryLength = history;
         snapshot.Features = features;
@@ -118,25 +142,43 @@ internal sealed class AnalyzerTap
 
     /// <summary>
     /// A frame without a visualizer: lets go of the feed (its window closed, hid or was minimized), so a closed
-    /// window's snapshots aren't kept alive, and the next attachment, even of the same feed, starts over.
+    /// window's snapshots aren't kept alive, and the next attachment, even of the same feed, starts over. A recording in
+    /// progress ends with it; what it holds stays readable for the UI.
     /// </summary>
-    public void Detach() => feed = null;
+    public void Detach()
+    {
+        feed = null;
+        DropRecording();
+    }
 
     // Every attachment starts with empty plots and gets a snapshot on its first frame. While none was attached the
     // analyzer went on adding to its own histories (one entry per call) and nothing was recorded here, so older
     // entries would pair Level, Beat and time steps from before with flux from after. The feed keeps its requests'
-    // outcome.
+    // outcome. A recording belongs to the feed that started it.
     private void Attach(VisualizerFeed current)
     {
         if (ReferenceEquals(current, feed)) return;
         feed = current;
+        DropRecording();
         Array.Clear(level);
         Array.Clear(bass);
         Array.Clear(beat);
+        Array.Clear(fired);
         Array.Clear(seconds);
         head = 0;
+        beatCount = -1;
         sinceSnapshot = SnapshotSeconds;
     }
+
+    private void DropRecording()
+    {
+        if (recording is null) return;
+        recording.Drop();
+        recording = null;
+    }
+
+    // A history's newest entry (they are oldest first): this frame's flux, or the threshold after it.
+    private static float Newest(float[] history) => history.Length > 0 ? history[^1] : 0;
 
     // An analyzer with a longer history than the default 240 entries: allocates on that one frame.
     private void Grow(int history)
@@ -144,6 +186,7 @@ internal sealed class AnalyzerTap
         level = new float[history];
         bass = new float[history];
         beat = new float[history];
+        fired = new float[history];
         seconds = new float[history];
         head = 0;
     }

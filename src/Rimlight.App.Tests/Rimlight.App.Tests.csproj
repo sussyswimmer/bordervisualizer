@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- WPF smoke tests: build every XAML window, page and control of Rimlight.App with WPF-UI's theme loaded as the app
+       loads it, show the windows, and fail on any exception or any failure the app logs. They need the WPF runtime, so
+       they run on Windows only: in CI's "Full solution (Windows)" job, which tests all of Rimlight.sln. This project is
+       not in Rimlight.Core.slnf (the Linux job). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Rimlight.App.Tests</RootNamespace>
+  </PropertyGroup>
+  <!-- Elsewhere it still builds (EnableWindowsTargeting), but its test host can't start: there is no WPF runtime
+       (Microsoft.WindowsDesktop.App) to run it on. So `dotnet test Rimlight.sln` skips the project there, as it skips
+       any project that isn't a test project, and the solution stays green on Linux. -->
+  <PropertyGroup Condition="'$(OS)' != 'Windows_NT'">
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Rimlight.App/Rimlight.App.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

@@ -52,16 +52,71 @@ internal static class SyntheticAudio
         return samples;
     }
 
+    // Brown noise at an RMS of rms: its power falls 6 dB an octave above cornerHz (a leaky integrator of white noise, as
+    // noise generators make it). With swellSeconds it swells and ebbs like waves on a shore, between 0.1 and 1 of that
+    // level over that period.
+    public static float[] BrownNoise(int sampleRate, float seconds, float rms, float cornerHz, int seed = 15, float swellSeconds = 0)
+    {
+        var random = new Random(seed);
+        var samples = new float[(int)(sampleRate * seconds)];
+        double keep = Math.Exp(-2 * Math.PI * cornerHz / sampleRate), y = 0, squares = 0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            y = keep * y + (1 - keep) * (random.NextDouble() * 2 - 1);
+            samples[i] = (float)y;
+            squares += y * y;
+        }
+        return Scaled(samples, rms, squares, sampleRate, swellSeconds);
+    }
+
+    // Pink noise at an RMS of rms: power falling 3 dB an octave from about 10 Hz up (Paul Kellet's filter of white noise).
+    public static float[] PinkNoise(int sampleRate, float seconds, float rms, int seed = 16)
+    {
+        var random = new Random(seed);
+        var samples = new float[(int)(sampleRate * seconds)];
+        double b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, squares = 0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            double white = random.NextDouble() * 2 - 1;
+            b0 = 0.99886 * b0 + white * 0.0555179;
+            b1 = 0.99332 * b1 + white * 0.0750759;
+            b2 = 0.96900 * b2 + white * 0.1538520;
+            b3 = 0.86650 * b3 + white * 0.3104856;
+            b4 = 0.55000 * b4 + white * 0.5329522;
+            b5 = -0.7616 * b5 - white * 0.0168980;
+            double pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362;
+            b6 = white * 0.115926;
+            samples[i] = (float)pink;
+            squares += pink * pink;
+        }
+        return Scaled(samples, rms, squares, sampleRate, 0);
+    }
+
+    private static float[] Scaled(float[] samples, float rms, double squares, int sampleRate, float swellSeconds)
+    {
+        float scale = rms / (float)Math.Sqrt(squares / samples.Length);
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float swell = swellSeconds > 0 ? 0.55f + 0.45f * MathF.Sin(2 * MathF.PI * i / sampleRate / swellSeconds) : 1;
+            samples[i] *= scale * swell;
+        }
+        return samples;
+    }
+
     // Feeds a buffer through an analyzer like the render loop does and returns beat times (seconds, frame end).
     // Frame times jitter by ±jitter. Audio arrives continuously, or in whole packets of packetSeconds (WASAPI
     // delivers 10–20 ms packets; Bluetooth and some drivers deliver larger ones), so frames can be empty.
     // afterFrame, if given, runs after each frame with the frame's end time, e.g. to sample the diagnostics.
-    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0, Action<double>? afterFrame = null)
+    // A beat is a frame on which Diagnostics.BeatCount rose (the detector fired). Until Maxwell's feedback round 1 this
+    // read Beat jumping to 1; Beat is now each beat's grade (kick-like, how drum-driven the music is, accented, loud
+    // within the song), so detection and the pulse are checked apart: pulses, if given, collects the frames on which
+    // Beat rose to StrongPulse or more (see StrongPulseRate).
+    public static List<float> Run(Rimlight.Core.IAudioAnalyzer analyzer, float[] samples, int sampleRate, float fps = 60, float jitter = 0, int seed = 4, float packetSeconds = 0, Action<double>? afterFrame = null, List<float>? pulses = null)
     {
         var random = new Random(seed);
         var beats = new List<float>();
         int packet = packetSeconds > 0 ? Math.Max(1, (int)MathF.Round(packetSeconds * sampleRate)) : 1;
-        int position = 0;
+        int position = 0, beatCount = analyzer.Diagnostics.BeatCount;
         double time = 0, end = samples.Length / (double)sampleRate;
         float previousBeat = 0;
         while (time < end)
@@ -70,13 +125,34 @@ internal static class SyntheticAudio
             time += dt;
             long arrived = Math.Min(samples.Length, (long)(time * sampleRate) / packet * packet);
             int count = (int)Math.Max(0, arrived - position);
-            var features = analyzer.Process(samples.AsSpan(position, count), sampleRate, dt);
+            float beat = analyzer.Process(samples.AsSpan(position, count), sampleRate, dt).Beat;
             position += count;
-            if (features.Beat >= 0.999f && previousBeat < 0.999f) beats.Add((float)time);
-            previousBeat = features.Beat;
+            int fired = analyzer.Diagnostics.BeatCount;
+            if (fired > beatCount) beats.Add((float)time);
+            beatCount = fired;
+            if (beat >= StrongPulse && previousBeat < StrongPulse) pulses?.Add((float)time);
+            previousBeat = beat;
             afterFrame?.Invoke(time);
         }
         return beats;
+    }
+
+    // A strong pulse: what a kick in a groove gives (MusicDynamicsTests uses the same bar).
+    public const float StrongPulse = 0.7f;
+
+    // The share of the detected beats at or after skipSeconds whose pulse rose to StrongPulse within maxDelay. The groove
+    // takes about 2 s to establish itself (the first second only listens and the drive needs two kicks: BeatCharacter),
+    // so skipSeconds is 3 s or more.
+    public static float StrongPulseRate(IReadOnlyList<float> beats, IReadOnlyList<float> pulses, float skipSeconds, float maxDelay = 0.1f)
+    {
+        int detected = 0, strong = 0;
+        foreach (float beat in beats)
+        {
+            if (beat < skipSeconds) continue;
+            detected++;
+            if (pulses.Any(p => p >= beat && p <= beat + maxDelay)) strong++;
+        }
+        return detected == 0 ? 0 : strong / (float)detected;
     }
 
     // Fraction of the kicks at or after skipSeconds that were followed by a detected beat within maxDelay.

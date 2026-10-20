@@ -61,6 +61,20 @@ internal sealed class AppController : IDisposable
         Updates = updates;
     }
 
+    /// <summary>
+    /// A controller that has its settings and starts nothing else: no single-instance pipe, shortcut, tray icon, media
+    /// session reader, watchers, capture, overlay or update checks. Enough to build the settings, welcome and visualizer
+    /// windows, whose pages handle the missing parts as they do when those fail to start. For the WPF smoke tests
+    /// (Rimlight.App.Tests); the app itself always goes through <see cref="Start"/>.
+    /// </summary>
+    /// <param name="settings">The settings the windows show and edit; disposing the controller disposes them.</param>
+    internal static AppController Unstarted(SettingsService settings)
+    {
+        var controller = new AppController(static () => { }, null, StartupOptions.Parse([]));
+        controller.settings = settings;
+        return controller;
+    }
+
     public SettingsService SettingsService => settings ?? throw new InvalidOperationException("Not started.");
 
     /// <summary>The glow overlay, or null if it could not start.</summary>
@@ -190,7 +204,7 @@ internal sealed class AppController : IDisposable
                 // First run: say where the app went and how to use it, once. Saved like any change, so the next
                 // start skips it.
                 IsFirstRunSession = true;
-                ShowWelcome(offerSettings: true);
+                ShowWelcome();
                 settings.Update(s => s with { FirstRunComplete = true });
                 break;
             case StartupWindow.Settings:
@@ -400,9 +414,8 @@ internal sealed class AppController : IDisposable
         settings = null;
     }
 
-    /// <summary>Shows the welcome window, or brings it to the front.</summary>
-    /// <param name="offerSettings">Whether it offers to open Settings (not while it stands in for them).</param>
-    internal void ShowWelcome(bool offerSettings)
+    /// <summary>Shows the welcome window (first run), or brings it to the front.</summary>
+    private void ShowWelcome()
     {
         if (disposed) return;
         try
@@ -410,7 +423,7 @@ internal sealed class AppController : IDisposable
             if (welcome is null)
             {
                 bool startsWithWindows = StartupRegistered && SettingsService.Current.LaunchAtStartup;
-                welcome = new WelcomeWindow(Hotkey, startsWithWindows, offerSettings ? ShowSettings : null);
+                welcome = new WelcomeWindow(Hotkey, startsWithWindows, ShowSettings);
                 welcome.Closed += (_, _) => welcome = null;
                 // WPF makes the first window the app's main window, which WPF-UI restyles on a theme change. That
                 // must be the settings window (or none), never the welcome.

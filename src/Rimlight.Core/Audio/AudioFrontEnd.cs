@@ -29,6 +29,15 @@ internal sealed class AudioFrontEnd
     // Time-domain RMS of the current analysis window.
     public float WindowRms => spectrum.WindowRms;
 
+    // Some quarter of the current window is near-silent (the auto-gain hold level): the music is starting or stopping.
+    public bool WindowPartlySilent => spectrum.QuietestQuarterRms <= holdRms;
+
+    // The latest Level target before the envelope: doc 03 §2's weighted auto-gain bands. A diagnostic since Maxwell's
+    // feedback round 2 (the replay harness's levelTarget column): AudioAnalyzer's Level follows the song's loudness
+    // (SongLoudness, with fixed band weights) instead, so LevelBassWeight, LevelMidWeight and LevelHighWeight no longer
+    // change the light, and the auto-gain settings shape Bass only.
+    public float LevelTarget { get; private set; }
+
     // Live tuning (doc 03 §4). WindowSize is fixed per instance; the analyzer rebuilds the front end to change it.
     public AudioTuning Tuning
     {
@@ -61,6 +70,7 @@ internal sealed class AudioFrontEnd
         float highNorm = highGain.Update(energies.High, dtSeconds, tuning, silent);
         // Weights are free-form live-tuning values (doc 03 §4), so clamp instead of requiring a sum of 1.
         float target = Math.Clamp(tuning.LevelBassWeight * bassNorm + tuning.LevelMidWeight * midNorm + tuning.LevelHighWeight * highNorm, 0, 1);
+        LevelTarget = target;
         return new AmplitudeFeatures(
             level.Update(target, dtSeconds, tuning.LevelAttackSeconds, tuning.LevelReleaseSeconds),
             bass.Update(bassNorm, dtSeconds, tuning.BassAttackSeconds, tuning.BassReleaseSeconds));
@@ -74,6 +84,7 @@ internal sealed class AudioFrontEnd
         highGain.Reset();
         level.Reset();
         bass.Reset();
+        LevelTarget = 0;
         previousSampleRate = 0;
     }
 
