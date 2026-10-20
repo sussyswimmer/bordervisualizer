@@ -39,6 +39,7 @@ final class SystemAudioTap: @unchecked Sendable {
 
     // Queue only:
     private var wanted = false
+    private var allowed = true // false until the first-run banner has explained the permission prompt
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -77,7 +78,17 @@ final class SystemAudioTap: @unchecked Sendable {
             guard on != wanted else { return }
             wanted = on
             retry = Self.firstRetry
-            if on { open() } else { close() }
+            if on && allowed { open() } else if !on { close() }
+        }
+    }
+
+    /// Holds the tap closed (false) until the first-run banner has said why macOS will ask for "System Audio
+    /// Recording" (docs/10-MACOS.md §2.1), then lets it open (true). Any thread.
+    func setAllowed(_ value: Bool) {
+        queue.async { [self] in
+            guard value != allowed else { return }
+            allowed = value
+            if value && wanted && procID == nil { open() } else if !value { close() }
         }
     }
 
@@ -102,7 +113,7 @@ final class SystemAudioTap: @unchecked Sendable {
     }
 
     private func restart(_ reason: String) {
-        guard wanted else { return }
+        guard wanted && allowed else { return }
         log.info("Restarting the system audio tap: \(reason, privacy: .public)")
         teardown()
         open()
@@ -124,7 +135,7 @@ final class SystemAudioTap: @unchecked Sendable {
         retry = min(retry * 2, Self.lastRetry)
         queue.asyncAfter(deadline: .now() + delay) { [self] in
             retryPending = false
-            if wanted && procID == nil { open() }
+            if wanted && allowed && procID == nil { open() }
         }
     }
 

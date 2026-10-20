@@ -73,6 +73,7 @@ internal sealed class MacOverlayLoop
     private Settings applied;       // the render thread's
     private bool paused;
     private bool appliedDemo;
+    private bool appliedAudioWanted;
     private double refreshHz = FramePacer.DefaultRefreshHz;
     private bool onBattery;
     private bool configured;
@@ -107,6 +108,9 @@ internal sealed class MacOverlayLoop
 
     /// <summary>Whether demo mode is on. Any thread.</summary>
     public bool Demo => source.DemoWanted;
+
+    /// <summary>The frame source, for Settings' meter and preview (their any-thread members only).</summary>
+    public MacGlowSource Source => source;
 
     /// <summary>The 64 RGBA texels of the gradient: a pinned buffer whose address never changes.</summary>
     public unsafe float* Gradient => (float*)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(gradient));
@@ -167,6 +171,14 @@ internal sealed class MacOverlayLoop
         if (demoNow != appliedDemo)
         {
             appliedDemo = demoNow;
+            changed = true;
+        }
+        // So is Settings wanting the audio: the meter must wake a stopped loop, as Windows asks for a frame after
+        // SetAudioWanted.
+        bool wantedNow = source.AudioWanted;
+        if (wantedNow != appliedAudioWanted)
+        {
+            appliedAudioWanted = wantedNow;
             changed = true;
         }
         bool pause = Volatile.Read(ref pausedWanted) != 0;

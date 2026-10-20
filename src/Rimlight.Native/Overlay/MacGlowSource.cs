@@ -45,6 +45,9 @@ internal sealed class MacGlowSource
     private Settings? demoSource;
     private Settings? demoSettings;
     private int captureGeneration = -1;
+    private int audioWanted;  // written by the main thread (Settings' meter and preview), read once per frame
+    private long latestAudio; // AudioReading.Pack of the last frame's features, read by the main thread
+    private int audioSequence;
 
     public MacGlowSource(Settings settings)
     {
@@ -56,8 +59,26 @@ internal sealed class MacGlowSource
         applied = settings;
     }
 
-    /// <summary>Whether this frame's settings and pause want the audio: the capture runs only then (M2).</summary>
+    /// <summary>
+    /// Whether this frame wants the audio: the glow listens, or Settings shows the meter or the preview. The capture
+    /// runs only then.
+    /// </summary>
     public bool Listening { get; private set; }
+
+    /// <summary>The analyzer's features from the latest frame. Any thread.</summary>
+    public AudioReading LatestAudio => AudioReading.Unpack(Volatile.Read(ref latestAudio));
+
+    /// <summary>
+    /// Keeps the capture open and the analyzer running even when the glow doesn't need audio, while Settings shows the
+    /// level meter or the preview (MusicGlowSource.SetAudioWanted). Any thread.
+    /// </summary>
+    public void SetAudioWanted(bool wanted) => Volatile.Write(ref audioWanted, wanted ? 1 : 0);
+
+    /// <summary>Whether the meter or the preview wants the audio. Any thread.</summary>
+    public bool AudioWanted => Volatile.Read(ref audioWanted) != 0;
+
+    /// <summary>The album palette last published (M4), or null. Any thread.</summary>
+    public Palette? PublishedAlbum => Volatile.Read(ref publishedAlbum);
 
     /// <summary>Demo mode (doc 04 §5), as MusicGlowSource.SetDemo. Any thread.</summary>
     public void SetDemo(bool on) => Volatile.Write(ref demoWanted, on ? 1 : 0);
@@ -90,7 +111,8 @@ internal sealed class MacGlowSource
         if (demoOn != demo) SwitchDemo(demoOn, settings);
 
         bool listen = !demo && settings.Enabled && settings.Animation == AnimationMode.MusicSync && !paused;
-        Listening = listen;
+        bool wanted = Volatile.Read(ref audioWanted) != 0;
+        Listening = listen || wanted;
 
         if (captureGeneration != this.captureGeneration)
         {
@@ -100,6 +122,8 @@ internal sealed class MacGlowSource
         int rate = sampleRate > 0 ? sampleRate : FallbackSampleRate;
         AudioFeatures features = analyzer.Process(samples, rate, dtSeconds);
         silentSeconds = features.IsSilent ? MathF.Min(silentSeconds + dtSeconds, 3600) : 0;
+        audioSequence = AudioReading.Next(audioSequence);
+        Volatile.Write(ref latestAudio, AudioReading.Pack(in features, audioSequence));
 
         AudioFeatures heard = listen ? features : Silence;
         Settings look = settings;
@@ -123,14 +147,14 @@ internal sealed class MacGlowSource
             filledRatio = state.Ratio;
         }
 
-        return new OverlayFrame(state, refill, Motion(listen, in features, settings));
+        return new OverlayFrame(state, refill, Motion(listen, wanted, in features, settings));
     }
 
-    // As MusicGlowSource.Motion, without the visualizer and Settings' meter (M3 adds the meter).
-    private FrameMotion Motion(bool listen, in AudioFeatures features, Settings settings)
+    // As MusicGlowSource.Motion, without the debug visualizer.
+    private FrameMotion Motion(bool listen, bool wanted, in AudioFeatures features, Settings settings)
     {
         if (blender.IsAnimating) return FrameMotion.Full;
-        if (engine.IsStatic) return listen ? FrameMotion.Listening : FrameMotion.Still;
+        if (engine.IsStatic) return listen || wanted ? FrameMotion.Listening : FrameMotion.Still;
         if (demo) return FrameMotion.Full;
         if (!listen) return FrameMotion.Slow;
         bool idle = features.IsSilent && silentSeconds >= IdleSettleSeconds && settings.WhenSilent == SilentBehavior.IdleGlow;
