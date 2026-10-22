@@ -31,12 +31,18 @@ internal static class BlackAndWhiteArt
             return new Rgba8(Channel(background.R, ink.R, 42), Channel(background.G, ink.G, 43), Channel(background.B, ink.B, 44));
         });
 
-    // A black-and-white "photo" with a cool cast: a dark-to-light gradient under layered noise, every pixel tinted to
-    // OkLCh chroma `castChroma` at CoolHue, with ±3 grain per channel like a JPEG. Lightness runs 0.12..0.92.
-    public static ArtImage CoolPhoto(float castChroma) => ArtImage.Create(Size, Size, (x, y) =>
+    // The hue of a warm, sepia-like tone in OkLCh.
+    public const float WarmHue = 60f;
+
+    // A black-and-white "photo" with a cool cast: TonedPhoto at CoolHue.
+    public static ArtImage CoolPhoto(float castChroma) => TonedPhoto(castChroma, CoolHue);
+
+    // A black-and-white "photo" with a tone: a dark-to-light gradient under layered noise, every pixel tinted to OkLCh
+    // chroma `castChroma` at `hue`, with ±3 grain per channel like a JPEG. Lightness runs 0.12..0.92.
+    public static ArtImage TonedPhoto(float castChroma, float hue) => ArtImage.Create(Size, Size, (x, y) =>
     {
         float lightness = 0.12f + 0.8f * Math.Clamp(0.55f * y / (Size - 1f) + 0.45f * Noise.Fractal(x, y, 20, 51), 0f, 1f);
-        var tinted = Rgba8.FromOklab(new OkLch(lightness, castChroma, CoolHue).ToOklab());
+        var tinted = Rgba8.FromOklab(new OkLch(lightness, castChroma, hue).ToOklab());
         int Grain(int seed) => (int)MathF.Round((Noise.Hash(x, y, seed) - 0.5f) * 6);
         return new Rgba8(Byte(tinted.R + Grain(52)), Byte(tinted.G + Grain(53)), Byte(tinted.B + Grain(54)));
     });

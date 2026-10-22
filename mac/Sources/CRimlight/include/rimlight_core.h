@@ -178,8 +178,9 @@ int32_t rl_preview_restart(RlPreview preview);
 // ---- Now playing (src/Rimlight.Native/MediaExports.cs) ----
 
 /// Extracts the album palette from a cover of width x height BGRA8 pixels (at most 4096 each; 64 x 64 is plenty) and
-/// gives it to the glow. Returns 1 when published, 0 when the picture is "no art" (a flat grey icon: keep the previous
-/// colours or retry), or a negative status. Runs on the calling thread: call it from a background queue.
+/// gives it to the glow. Returns 1 when published, 0 when the picture is "no art" (no opaque pixel: keep the previous
+/// colours or retry), or a negative status. A blank or black-and-white cover is art and glows grey. Runs on the
+/// calling thread: call it from a background queue.
 int32_t rl_album_art(RlLoop loop, const uint8_t *bgra, int32_t width, int32_t height, const char *trackId);
 /// No album colours: the manual ones show. Any thread.
 int32_t rl_album_clear(RlLoop loop);

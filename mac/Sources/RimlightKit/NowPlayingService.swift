@@ -201,7 +201,7 @@ final class NowPlayingService: @unchecked Sendable {
                     track.id.withCString { rl_album_art(loop.handle, buffer.baseAddress, Int32(width), Int32(height), $0) }
                 }
                 if found == 1 { return publish() }
-                log.info("The cover is blank: the manual colors show")
+                log.info("The cover has no opaque pixel: the manual colors show")
             } else {
                 log.notice("Music's cover (\(data.count) bytes) couldn't be decoded")
             }

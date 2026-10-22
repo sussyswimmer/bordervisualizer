@@ -69,6 +69,51 @@ public sealed class GlowTests(ITestOutputHelper output)
         Assert.InRange(steepest, 2f, 2.2f);
     }
 
+    [Theory]
+    [InlineData(0.000f, 0f)]
+    [InlineData(0.020f, 0f)]      // a black-and-white cover's cool cast: pure grey
+    [InlineData(0.045f, 0f)]      // MonochromeChroma: the last palette that glows pure grey (a toned print)
+    [InlineData(0.0525f, 0.5f)]   // half way
+    [InlineData(0.060f, 1f)]      // TintedChroma: a muted color cover keeps all of its color
+    [InlineData(0.120f, 1f)]
+    public void ColorScaleIsZeroForBlackAndWhitePalettesAndOneForColoredOnes(float paletteChroma, float expected)
+    {
+        Assert.Equal(expected, Glow.ColorScale(paletteChroma), 1e-5f);
+    }
+
+    [Fact]
+    public void ColorScaleFadesInWithNoJump()
+    {
+        // Non-decreasing and continuous: a slightly more colorful cover never jumps from grey to a tint. Its steepest
+        // slope is the smoothstep's 1.5 over the 0.015 it spans.
+        const float step = 0.0001f;
+        float steepest = 0;
+        for (float c = 0; c < 0.1f; c += step)
+        {
+            float here = Glow.ColorScale(c), next = Glow.ColorScale(c + step);
+            Assert.True(next >= here, $"falls between {c} and {c + step}");
+            steepest = MathF.Max(steepest, (next - here) / step);
+        }
+        Assert.InRange(steepest, 99f, 101f);
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(0.25f)]
+    [InlineData(1f)]
+    public void TheColorScaleMultipliesTheGlowsChromaOnly(float scale)
+    {
+        // A colored source (chroma 0.075, raised to 0.0975) at lightness 0.95 (clamped to 0.85).
+        var source = new OkLch(0.95f, 0.075f, 250f).ToOklab();
+        var target = Glow.Target(source, scale);
+        Assert.Equal(Glow.MaxLightness, target.L, 1e-6f);
+        Assert.Equal(0.0975f * scale, target.C, 1e-5f);
+        var light = Glow.ToLight(source, scale);
+        Assert.Equal(Glow.MaxLightness, Oklab.FromLinearSrgb(light).L, 1e-4f);
+        if (scale == 0) Assert.True(MathF.Abs(light.R - light.G) < 1e-5f && MathF.Abs(light.G - light.B) < 1e-5f, $"not grey: {light}");
+        else Assert.True(OklabTests.HueDistance(Oklab.FromLinearSrgb(light).ToLch().H, 250f) < 0.5f);
+    }
+
     [Fact]
     public void ThresholdsAreTheDocumentedOnes()
     {
@@ -77,6 +122,8 @@ public sealed class GlowTests(ITestOutputHelper output)
         Assert.Equal(0.12f, Glow.MinChroma);
         Assert.Equal(0.55f, Glow.MinLightness);
         Assert.Equal(0.85f, Glow.MaxLightness);
+        Assert.Equal(0.045f, Glow.MonochromeChroma); // new with Maxwell's second report
+        Assert.Equal(0.06f, Glow.TintedChroma);
     }
 
     [Fact]
