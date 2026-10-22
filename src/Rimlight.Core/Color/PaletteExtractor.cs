@@ -17,16 +17,15 @@ namespace Rimlight.Core.Color;
 /// where share is the group's fraction of the used pixels. Primary is the best score. Secondary is the best score
 /// among groups at least <see cref="SecondaryMinDistance"/> (Oklab distance) from Primary; without one, Secondary
 /// is Primary turned <see cref="DerivedHueShift"/>° in hue and <see cref="DerivedLightnessShift"/> lighter. Both are
-/// then glow-ified (<see cref="Glow"/>).</para>
-/// <para><b>No art</b> (doc 05 §1: a blank thumbnail, such as a player's empty placeholder). The result is null when
-/// the image is essentially one flat color, meaning at least <see cref="MinFlatShare"/> of the used pixels lie within
-/// <see cref="FlatTolerance"/> (Oklab distance) of the largest k-means cluster's centroid (before merging, so near
-/// shades don't pull the flat color off-center), <i>and</i> the palette is nearly grayscale, meaning the Primary and
-/// Secondary sources are both below <see cref="NoArtMaxChroma"/> chroma. Anything more than a speck is art: a
-/// black-and-white cover, even a black one with a line of white text or a grey tile with a white glyph, gives a
-/// soft-white or grey palette, and a flat colorful image gives its color. An image with no pixel at alpha
-/// <see cref="MinAlpha"/> or above is also no art. <i>Maxwell's feedback:</i> the flat share needed to be only 60 %,
-/// so a black cover with white text (about 80 % flat black) was no art and showed the manual colors.</para>
+/// then glow-ified (<see cref="Glow"/>) together: a palette whose sources are both nearly grey is a black-and-white
+/// cover and glows pure grey and white (<see cref="Glow.ColorScale"/>).</para>
+/// <para><b>No art</b> (doc 05 §1) is only an image with no pixel at alpha <see cref="MinAlpha"/> or above: the result
+/// is then null, and the manual colors show. Every other image is art. A blank or nearly blank one glows its own
+/// color, so a flat black or white cover, or a black-and-white one, glows grey or white, and a flat colorful image
+/// glows its color. A player's blank placeholder can't be told from such a cover, and a neutral glow is the smaller
+/// mistake. <i>Maxwell's feedback:</i> no art used to be an image essentially one flat grey (at least 98 % within
+/// 0.03 of one color, 60 % before that), so an all-black cover still showed the manual colors, #7C5CFF and #22D3EE: a
+/// violet blue and a light blue.</para>
 /// <para>The same input always gives the same output. The instance holds no state (scratch buffers come from
 /// <see cref="ArrayPool{T}.Shared"/> per call), so concurrent calls are safe. The pool keeps returned buffers per
 /// thread, so the first call on each thread allocates its scratch (about 85 KB at 64 × 64) and later calls on that
@@ -82,32 +81,14 @@ internal sealed class PaletteExtractor : IPaletteExtractor
     /// <summary>The fitness of near-black and near-white clusters: low, but above 0 so a black-and-white image still ranks by size.</summary>
     public const float FitnessFloor = 0.05f;
 
-    /// <summary>No art needs both palette sources below this chroma (the level up to which <see cref="Glow"/> keeps a
-    /// color neutral).</summary>
-    public const float NoArtMaxChroma = Glow.NeutralChroma;
-
-    /// <summary>The Oklab distance from the largest cluster's centroid within which a pixel counts as that flat color.</summary>
-    public const float FlatTolerance = 0.03f;
-
-    /// <summary>No art needs at least this share of the used pixels to be the one flat color: a blank image, or one
-    /// with a speck of up to 2 % of the pixels (about 80 at 64 × 64).</summary>
-    /// <remarks>Measured at 64 × 64: a blank grey from #101010 up, with ±3 grain per channel and ±2 per 8 × 8 block
-    /// (a noisy JPEG), is at least 99.3 % flat, and a 6 × 6 white speck on a grey tile 98.8 %. Real content is far
-    /// below: one line of small white credits on black is 94.3 % flat, a 1-pixel rule across the cover 96.9 %, the
-    /// generic icon fixture's note glyph 93.4 % and a black cover with a title and credits 79.3 %. Marks of 2–3 % (a
-    /// tiny word, a 10 × 10 logo) are art, because their neutral glow is a smaller mistake than the manual colors.
-    /// Darker than about #101010 Oklab spreads the same grain two to three times wider (#000000 to #010101 alone is
-    /// 0.067 in L), so a grainy blank there can fall under this share and glow a dim grey. A clean one is still no
-    /// art.</remarks>
-    public const float MinFlatShare = 0.98f;
-
     /// <inheritdoc />
     public Palette? Extract(ReadOnlySpan<byte> bgra, int width, int height, string trackId)
     {
         ArgumentNullException.ThrowIfNull(trackId);
         PaletteAnalysis? analysis = Analyze(bgra, width, height);
-        if (analysis is null || analysis.IsNoArt) return null;
-        return new Palette(Glow.ToLight(analysis.PrimarySource), Glow.ToLight(analysis.SecondarySource), trackId);
+        if (analysis is null) return null;
+        return new Palette(Glow.ToLight(analysis.PrimarySource, analysis.ColorScale),
+            Glow.ToLight(analysis.SecondarySource, analysis.ColorScale), trackId);
     }
 
     /// <summary>Runs the extraction and returns every intermediate result (for tests and diagnostics).</summary>
@@ -262,16 +243,9 @@ internal sealed class PaletteExtractor : IPaletteExtractor
         Oklab primarySource = centers[primary];
         Oklab secondarySource = secondary >= 0 ? centers[secondary] : DeriveSecondary(primarySource);
 
-        int dominant = 0;
-        for (int c = 1; c < clusters; c++) if (clusterPopulations[c] > clusterPopulations[dominant]) dominant = c;
-        float toleranceSquared = FlatTolerance * FlatTolerance;
-        int flat = 0;
-        foreach (Oklab point in points) if (Oklab.DistanceSquared(point, clusterCenters[dominant]) <= toleranceSquared) flat++;
-        float flatShare = flat / (float)points.Length;
-
-        bool grayscale = primarySource.Chroma < NoArtMaxChroma && secondarySource.Chroma < NoArtMaxChroma;
+        float colorScale = Glow.ColorScale(MathF.Max(primarySource.Chroma, secondarySource.Chroma));
         return new PaletteAnalysis(centers, shares, scores, primary, secondary, primarySource, secondarySource,
-            flatShare, grayscale && flatShare >= MinFlatShare, points.Length, clusterCenters, clusterShares);
+            colorScale, points.Length, clusterCenters, clusterShares);
     }
 
     /// <summary>Single-linkage grouping: clusters closer than <see cref="MergeDistance"/>, directly or through a chain
@@ -327,12 +301,12 @@ internal sealed class PaletteExtractor : IPaletteExtractor
 /// <param name="SecondaryIndex">The Secondary group, or −1 when Secondary was derived from Primary.</param>
 /// <param name="PrimarySource">The Primary color before glow-ify.</param>
 /// <param name="SecondarySource">The Secondary color before glow-ify (a group centroid or the derived color).</param>
-/// <param name="FlatShare">The share of used pixels within the flat tolerance of the largest k-means cluster's centroid.</param>
-/// <param name="IsNoArt">Whether the image counts as no art (essentially one flat color, and a nearly grayscale palette).</param>
+/// <param name="ColorScale">How much of their color both glow colors keep (<see cref="Glow.ColorScale"/> of the more
+/// colorful source): 0 for a black-and-white cover, which glows pure grey and white.</param>
 /// <param name="SampleCount">The number of pixels used (opaque enough, on the sampling grid).</param>
 /// <param name="ClusterCenters">The raw k-means centroids, before merging.</param>
 /// <param name="ClusterShares">Each raw k-means cluster's fraction of the used pixels (0 for an empty cluster).</param>
 internal sealed record PaletteAnalysis(
     Oklab[] Centers, float[] Shares, float[] Scores, int PrimaryIndex, int SecondaryIndex,
-    Oklab PrimarySource, Oklab SecondarySource, float FlatShare, bool IsNoArt, int SampleCount,
+    Oklab PrimarySource, Oklab SecondarySource, float ColorScale, int SampleCount,
     Oklab[] ClusterCenters, float[] ClusterShares);

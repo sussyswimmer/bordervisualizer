@@ -49,17 +49,27 @@ public sealed unsafe class MediaExportsTests
     }
 
     [Fact]
-    public void AFlatGreyIconIsNoArt()
+    public void AFlatGreyCoverGlowsGreyAndOnlyATransparentOneIsNoArt()
     {
+        // Maxwell's feedback: a flat grey or black picture was "no art", so an all-black cover showed the manual
+        // colours. It is art now and glows grey; only a picture with no opaque pixel is no art.
         var loop = new MacOverlayLoop(new Settings());
         nint handle = System.Runtime.InteropServices.GCHandle.ToIntPtr(System.Runtime.InteropServices.GCHandle.Alloc(loop));
         try
         {
             delegate* unmanaged<nint, byte*, int, int, byte*, int> art = &Exports.AlbumArt;
+            delegate* unmanaged<nint, Rgb*, Rgb*, int> palette = &Exports.AlbumPalette;
+            byte[] transparent = new byte[32 * 32 * 4];
+            fixed (byte* p = transparent) Assert.Equal(0, art(handle, p, 32, 32, null));
+            Assert.Null(loop.Source.PublishedAlbum);
+
             byte[] grey = new byte[32 * 32 * 4];
             for (int i = 0; i < grey.Length; i++) grey[i] = (byte)(i % 4 == 3 ? 255 : 128);
-            fixed (byte* p = grey) Assert.Equal(0, art(handle, p, 32, 32, null));
-            Assert.Null(loop.Source.PublishedAlbum);
+            fixed (byte* p = grey) Assert.Equal(1, art(handle, p, 32, 32, null));
+            Rgb primary, secondary;
+            Assert.Equal(1, palette(handle, &primary, &secondary));
+            foreach (Rgb color in new[] { primary, secondary })
+                Assert.True(MathF.Abs(color.R - color.G) < 1e-4f && MathF.Abs(color.G - color.B) < 1e-4f, $"{color} is not grey");
         }
         finally
         {

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-22
+
+### Fixed
+
+- **Black-and-white covers glow white and grey, not blue.** A black-and-white cover now glows pure white and grey, even when its picture leans a little blue, green or warm, as scans and JPEGs often do. An all-black cover glows grey instead of falling back to your own colors; only a song with no cover at all gets those. Colorful covers glow as before.
+
+## [1.0.0] - 2026-10-20
+
 ### Added
 
 - **Edge glow.** A soft two-color glow along the edges of every monitor. It's click-through, stays on top, never takes focus, and doesn't show up in Alt+Tab or on the taskbar. It stays sharp on mixed-DPI setups, rebuilds itself when you plug in, remove or rearrange a monitor, and comes back on its own after a graphics driver reset. ([#8](https://github.com/sussyswimmer/bordervisualizer/pull/8))
@@ -38,13 +46,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Black-and-white covers give a white glow.** A black-and-white cover now glows soft white and grey, not blue, even when its black and white lean a little blue. A black cover with white text no longer falls back to your own colors; only a blank cover, or none, does.
 - **Settings says why it can't open.** If the Settings window, one of its pages or the visualizer can't open, a message says what went wrong and offers to open the logs folder (`%APPDATA%\Rimlight\logs`). Before, the welcome window could show up in its place, or nothing at all.
 
-## [0.1.0] - YYYY-MM-DD
-
-_The first release, not published yet. When it's tagged, move the entries from [Unreleased] here and put the release date in this heading._
-
-[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/commits/main
-<!--
-After tagging v0.1.0, replace the line above with these two:
-[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/sussyswimmer/bordervisualizer/releases/tag/v0.1.0
--->
+[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/sussyswimmer/bordervisualizer/releases/tag/v1.0.0

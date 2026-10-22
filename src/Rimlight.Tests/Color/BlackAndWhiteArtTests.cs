@@ -5,80 +5,77 @@ using Xunit.Abstractions;
 
 namespace Rimlight.Tests.Color;
 
-// Maxwell's feedback: "Im playing a song that is white and black and it put light blue and dark blue." Two rules made
-// it, reproduced here on generated covers (BlackAndWhiteArt):
-// - "No art" (doc 05 §1) needed only 60 % of the image to be one flat color, so a black cover with white text (79 %
-//   flat black) was no art and the manual colors showed: #7C5CFF and #22D3EE, a violet blue and a light blue.
+// Maxwell's feedback, twice: "Im playing a song that is white and black and it put light blue and dark blue", then on
+// 1.0.0, with Spotify on Windows, that some covers are "still just light blue and dark blue". Reproduced on 35 real
+// covers (docs/PROGRESS.md, "Black-and-white covers, again") and here on generated ones (BlackAndWhiteArt):
+// - "No art" (doc 05 §1) was an image essentially one flat grey: 60 % flat at first, so a black cover with white text
+//   was no art, then 98 %, so an all-black cover still was. No art shows the manual colors, #7C5CFF and #22D3EE: a
+//   violet blue and a light blue. Now only an image with no opaque pixel is no art.
 // - Glow-ify raised every color from chroma 0.03 on to 0.12, so a black-and-white photo with a slight cool cast
-//   (chroma 0.04 here) glowed #3D73B6 and #588FD4, a dark and a light blue.
-// Now no art is a blank image (98 % one flat color), glow-ify keeps chroma up to 0.05, and all three covers glow
-// neutral: both colors at chroma 0.05 or less, a soft white or a grey. Colorful covers glow as before.
+//   (chroma 0.04 here) glowed #3D73B6 and #588FD4, a dark and a light blue. Then casts up to 0.05 were kept as they
+//   were, so the same photo glowed #627389 and #7D8FA5, and a real cover with a 0.02 cast a slate blue.
+// Now a palette whose colors all stay at or below chroma 0.045 is a black-and-white cover and glows pure grey and
+// white (Glow.ColorScale). Colorful covers glow as before.
 public sealed class BlackAndWhiteArtTests(ITestOutputHelper output)
 {
-    // A neutral glow: both colors at or below this chroma (a tint at most; Oklab's just-noticeable difference is 0.02).
-    private const float MaxNeutralChroma = 0.05f;
+    // Pure grey: what's left of the chroma is float error.
+    private const float PureGrey = 1e-3f;
 
     private static readonly Rgba8 Black = new(0, 0, 0);
     private static readonly Rgba8 White = new(255, 255, 255);
 
-    // ---- the three covers ----
+    // ---- the covers ----
 
     [Fact]
     public void BlackCoverWithWhiteTextGlowsSoftWhiteAndGrey()
     {
-        // Before: no art, so #7C5CFF / #22D3EE. Now #BFBFBF / #717171.
-        var image = BlackAndWhiteArt.TextCover(Black, White);
-        var analysis = Analyze(image);
-        Assert.InRange(analysis.FlatShare, 0.6f, 0.9f); // no art under the old 60 % rule, far from the new 98 %
-        Assert.False(analysis.IsNoArt);
-
-        var palette = ExtractNeutral(image);
-        Assert.True(Lch(palette.Primary).C < 0.01f && Lch(palette.Secondary).C < 0.01f, "pure black and white is pure grey");
+        // At first: no art, so #7C5CFF / #22D3EE. Now #BFBFBF / #717171.
+        var palette = ExtractPureGrey(BlackAndWhiteArt.TextCover(Black, White));
         Assert.True(MathF.Max(Lch(palette.Primary).L, Lch(palette.Secondary).L) >= 0.75f, "no soft white");
     }
 
     [Fact]
-    public void CoolBlackCoverWithCoolWhiteTextAndJpegNoiseGlowsNeutral()
+    public void CoolBlackCoverWithCoolWhiteTextAndJpegNoiseGlowsPureGrey()
     {
         // #0B0E14 and #EEF2F8 (chroma 0.014 and 0.009) with ±3 grain per channel and ±2 per 8 × 8 block.
-        // Before: no art, so #7C5CFF / #22D3EE. Now #A4A8AE / #6E7278.
-        var image = BlackAndWhiteArt.TextCover(BlackAndWhiteArt.CoolBlack, BlackAndWhiteArt.CoolWhite, channelNoise: 6, blockNoise: 4);
-        var analysis = Analyze(image);
-        Assert.InRange(analysis.FlatShare, 0.6f, 0.9f);
-        Assert.False(analysis.IsNoArt);
-        ExtractNeutral(image);
+        // At first: no art. Then #A4A8AE / #6E7278, a blue-grey. Now pure grey.
+        ExtractPureGrey(BlackAndWhiteArt.TextCover(BlackAndWhiteArt.CoolBlack, BlackAndWhiteArt.CoolWhite, channelNoise: 6, blockNoise: 4));
     }
 
     [Fact]
-    public void CoolCastPhotoGlowsNeutralNotBlue()
+    public void CoolCastPhotoGlowsPureGreyNotBlue()
     {
-        // Before: chroma 0.04 was raised to 0.12, so #3D73B6 / #588FD4. Now #627389 / #7D8FA5: the photo's own faint
-        // cool tint, at the glow's lightness.
+        // At first: chroma 0.04 was raised to 0.12, so #3D73B6 / #588FD4. Then it was kept, so #627389 / #7D8FA5, a
+        // slate blue. Now pure grey.
         var image = BlackAndWhiteArt.CoolPhoto(0.04f);
         var analysis = Analyze(image);
         foreach (var source in new[] { analysis.PrimarySource, analysis.SecondarySource })
-            Assert.InRange(source.Chroma, 0.035f, 0.045f); // above the old 0.03 threshold, which raised it to 0.12
-
-        var palette = ExtractNeutral(image);
-        Assert.Equal(analysis.PrimarySource.Chroma, Lch(palette.Primary).C, 1e-3f); // kept, not raised
-        Assert.Equal(analysis.SecondarySource.Chroma, Lch(palette.Secondary).C, 1e-3f);
-        Assert.True(OklabTests.HueDistance(Lch(palette.Primary).H, BlackAndWhiteArt.CoolHue) < 5, $"primary {Lch(palette.Primary)}");
+            Assert.InRange(source.Chroma, 0.035f, 0.046f);
+        Assert.True(analysis.ColorScale < 0.01f, $"color scale {analysis.ColorScale}");
+        ExtractPureGrey(image);
     }
 
     [Theory]
     [InlineData(0f)]
-    [InlineData(0.02f)]
+    [InlineData(0.01f)]
+    [InlineData(0.02f)] // the cast of the real cover that glowed a slate blue on 1.0.0
     [InlineData(0.03f)]
     [InlineData(0.035f)]
-    [InlineData(0.045f)]
-    [InlineData(0.05f)]
-    public void CoolCastsUpTo005KeepTheirChroma(float cast)
+    public void CoolCastsUpTo0035GlowPureGrey(float cast) => ExtractPureGrey(BlackAndWhiteArt.CoolPhoto(cast));
+
+    [Fact]
+    public void WarmTonedPrintGlowsPureGrey()
     {
-        // Faint casts up to Glow.NeutralChroma, as black-and-white covers show. Before, each one from 0.03 on glowed
-        // blue (0.12).
-        var palette = Extract(BlackAndWhiteArt.CoolPhoto(cast));
-        foreach (var color in new[] { palette.Primary, palette.Secondary })
-            Assert.True(Lch(color).C <= cast + 2e-3f, $"cast {cast}: {Lch(color)}");
+        // A black-and-white portrait printed warm (sepia-like, 0.04): real ones peak at 0.041–0.047, and glowed brown.
+        ExtractPureGrey(BlackAndWhiteArt.TonedPhoto(0.04f, BlackAndWhiteArt.WarmHue));
+    }
+
+    [Fact]
+    public void AllBlackCoverGlowsGreyNotTheManualColors()
+    {
+        // A real album's cover is a flat black square. It was no art (#7C5CFF / #22D3EE); now it glows #717171.
+        var palette = ExtractPureGrey(ArtImage.Solid(BlackAndWhiteArt.Size, BlackAndWhiteArt.Size, Black));
+        Assert.Equal(Glow.MinLightness, Lch(palette.Primary).L, 1e-3f);
     }
 
     // ---- what must not change ----
@@ -100,6 +97,18 @@ public sealed class BlackAndWhiteArtTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void MutedColorPhotoKeepsItsColor()
+    {
+        // A faded warm photo (chroma 0.065: real muted covers peak at 0.053–0.061 and up) keeps its whole color.
+        var image = BlackAndWhiteArt.TonedPhoto(0.065f, BlackAndWhiteArt.WarmHue);
+        var analysis = Analyze(image);
+        Assert.Equal(1f, analysis.ColorScale, 1e-3f);
+        var palette = Extract(image);
+        Assert.Equal(Glow.TargetChroma(analysis.PrimarySource.Chroma), Lch(palette.Primary).C, 2e-3f);
+        Assert.True(OklabTests.HueDistance(Lch(palette.Primary).H, BlackAndWhiteArt.WarmHue) < 5, Lch(palette.Primary).ToString());
+    }
+
+    [Fact]
     public void ColoredCoverWithWhiteTextStillGlowsSaturated()
     {
         // The text cover's layout on a deep red: #B6484E / #AD515D, as before. The blend of red and white along the
@@ -114,51 +123,48 @@ public sealed class BlackAndWhiteArtTests(ITestOutputHelper output)
         }
     }
 
+    // ---- blank images: grey, not the manual colors ----
+
     [Theory]
-    [InlineData(0, true)]   // blank
-    [InlineData(3, true)]   // a 3 × 3 speck: 16 pixels with its anti-aliased edge (0.4 %)
-    [InlineData(6, true)]   // 6 × 6: 49 pixels (1.2 %)
-    [InlineData(12, false)] // 12 × 12: 169 pixels (4.1 %), a mark, so art
-    public void NearlyBlankImageIsStillNoArt(int square, bool noArt)
+    [InlineData(0)]  // blank
+    [InlineData(3)]  // a 3 × 3 speck: 16 pixels with its anti-aliased edge (0.4 %)
+    [InlineData(6)]  // 6 × 6: 49 pixels (1.2 %)
+    [InlineData(12)] // 12 × 12: 169 pixels (4.1 %)
+    public void NearlyBlankImageGlowsGrey(int square)
     {
-        // A flat grey tile with a white square from (29.5, 29.5), so its edge is anti-aliased.
-        var image = ArtImage.Create(64, 64, (x, y) =>
+        // A flat grey tile with a white square from (29.5, 29.5), so its edge is anti-aliased. Up to 6 × 6 it was no
+        // art, and the manual colors showed.
+        ExtractPureGrey(ArtImage.Create(64, 64, (x, y) =>
         {
             float coverage = BlackAndWhiteArt.Coverage(x, y, (sx, sy) => sx >= 29.5f && sx < 29.5f + square && sy >= 29.5f && sy < 29.5f + square);
             byte v = (byte)MathF.Round(64 + (255 - 64) * coverage);
             return new Rgba8(v, v, v);
-        });
-        var analysis = Analyze(image);
-        output.WriteLine($"{square} × {square}: flat share {analysis.FlatShare:F4}");
-        Assert.Equal(noArt, analysis.IsNoArt);
-        Assert.Equal(noArt, CoreFactory.CreatePaletteExtractor().Extract(image.Bgra, 64, 64, "t") is null);
+        }));
     }
 
     [Theory]
-    [InlineData(16)] // about the darkest grey where this grain stays flat; darker, Oklab spreads it 2–3 times wider
+    [InlineData(0)]
+    [InlineData(16)]
     [InlineData(128)]
     [InlineData(240)]
-    public void BlankImageWithJpegNoiseIsStillNoArt(int grey)
+    public void BlankImageWithJpegNoiseGlowsGrey(int grey)
     {
-        // ±3 grain per channel and ±2 per 8 × 8 block on a blank grey: still at least 98 % within 0.03 of one color.
-        var image = ArtImage.Create(64, 64, (x, y) =>
+        // ±3 grain per channel and ±2 per 8 × 8 block on a blank grey or black: it was no art.
+        ExtractPureGrey(ArtImage.Create(64, 64, (x, y) =>
         {
             float block = (Noise.Hash(x / 8, y / 8, 61) - 0.5f) * 4;
             byte Channel(int seed) => (byte)Math.Clamp(MathF.Round(grey + block + (Noise.Hash(x, y, seed) - 0.5f) * 6), 0, 255);
             return new Rgba8(Channel(62), Channel(63), Channel(64));
-        });
-        var analysis = Analyze(image);
-        output.WriteLine($"#{grey:X2}{grey:X2}{grey:X2} with noise: flat share {analysis.FlatShare:F4}");
-        Assert.True(analysis.IsNoArt);
+        }));
     }
 
     // ---- helpers ----
 
-    private Palette ExtractNeutral(ArtImage image)
+    private Palette ExtractPureGrey(ArtImage image)
     {
         var palette = Extract(image);
         foreach (var color in new[] { palette.Primary, palette.Secondary })
-            Assert.True(Lch(color).C <= MaxNeutralChroma, $"not neutral: {Lch(color)}");
+            Assert.True(Lch(color).C < PureGrey, $"not grey: {Lch(color)}");
         return palette;
     }
 

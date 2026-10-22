@@ -5,16 +5,21 @@ namespace Rimlight.Core.Color;
 /// paint, then maps it into the sRGB gamut.
 /// </summary>
 /// <remarks>
-/// <para>In OkLCh: a near-neutral color, with chroma up to <see cref="NeutralChroma"/>, keeps its chroma, so a grey,
-/// or a black-and-white cover with the faint cast a JPEG or a scan often gives it, glows as a soft white or grey with
-/// no invented hue. A clearly colored one, from <see cref="ColorfulChroma"/> on, is raised to at least
+/// <para>In OkLCh: a near-neutral color, with chroma up to <see cref="NeutralChroma"/>, keeps its chroma, so a grey
+/// gets no invented hue. A clearly colored one, from <see cref="ColorfulChroma"/> on, is raised to at least
 /// <see cref="MinChroma"/>. In between, the raise eases in (a smoothstep, see <see cref="TargetChroma"/>), so a slightly
 /// stronger tint never jumps to a vivid color. Lightness is clamped to [<see cref="MinLightness"/>,
 /// <see cref="MaxLightness"/>]. If the result is outside sRGB, chroma is reduced at constant lightness and hue
 /// (bisection) until it fits, so every channel of the result is in 0..1. Pure functions on value types: thread-safe
 /// and allocation-free.</para>
-/// <para><i>Maxwell's feedback:</i> the raise used to start at chroma 0.03, so a black-and-white cover with a slight
-/// cool cast (chroma 0.03–0.05) glowed light and dark blue.</para>
+/// <para><b>Black-and-white covers.</b> A palette is judged as a whole too (<see cref="ColorScale"/>): when even its
+/// most colorful color stays at or below <see cref="MonochromeChroma"/>, the cover is black and white, and both colors
+/// glow pure grey or white. Such a cover's faint cast (a JPEG's, a scan's, a toned print's) looks grey on the cover,
+/// but lifted to the glow's lightness and spread around the screen as light, it reads as a clear tint. From
+/// <see cref="TintedChroma"/> on the palette keeps its colors; in between they fade in.</para>
+/// <para><i>Maxwell's feedback:</i> "white and black" covers glowed light and dark blue. First the raise started at
+/// chroma 0.03, so a faint cool cast (0.03–0.05) became a vivid blue. Then the cast was kept as it was, and real covers
+/// with one (chroma 0.02) still glowed a slate blue.</para>
 /// </remarks>
 internal static class Glow
 {
@@ -36,16 +41,41 @@ internal static class Glow
     /// <summary>Highest output lightness: brighter colors wash out to white.</summary>
     public const float MaxLightness = 0.85f;
 
+    /// <summary>A palette whose most colorful color is at or below this chroma is a black-and-white cover and glows
+    /// pure grey and white (<see cref="ColorScale"/>).</summary>
+    /// <remarks>Measured on 35 real covers decoded at 64 × 64: black-and-white ones peak at 0.000–0.031, and warm- or
+    /// green-toned prints of black-and-white photos at 0.041–0.047 (the last keeps 5 % of its color).</remarks>
+    public const float MonochromeChroma = 0.045f;
+
+    /// <summary>From this chroma on, a palette's most colorful color makes it a colored cover, which keeps its colors
+    /// (<see cref="ColorScale"/>).</summary>
+    /// <remarks>Muted color covers peak at 0.053–0.061 (a faded photo, a beige portrait) and keep 59–100 % of their
+    /// color; clearly colored ones peak at 0.08 and up.</remarks>
+    public const float TintedChroma = 0.06f;
+
     // 24 halvings of a chroma ≤ 0.4 leave an error below 3e-8, far under one 8-bit step.
     private const int BisectionSteps = 24;
 
     /// <summary>Glow-ifies a color: the target lightness, chroma and hue before gamut mapping.</summary>
     /// <param name="color">An artwork color (a cluster centroid or a derived color).</param>
+    /// <param name="colorScale">The share of the color the palette keeps (<see cref="ColorScale"/>), 0..1; the target
+    /// chroma is multiplied by it.</param>
     /// <returns>The glow color in OkLCh, possibly outside sRGB.</returns>
-    public static OkLch Target(Oklab color)
+    public static OkLch Target(Oklab color, float colorScale = 1f)
     {
         OkLch lch = color.ToLch();
-        return new OkLch(Math.Clamp(lch.L, MinLightness, MaxLightness), TargetChroma(lch.C), lch.H);
+        return new OkLch(Math.Clamp(lch.L, MinLightness, MaxLightness), TargetChroma(lch.C) * colorScale, lch.H);
+    }
+
+    /// <summary>How much of their color a palette's glow colors keep, from its most colorful color: 0 (pure grey and
+    /// white) up to <see cref="MonochromeChroma"/>, 1 from <see cref="TintedChroma"/> on, and a smoothstep in between,
+    /// so a slightly more colorful cover never jumps from grey to a tint.</summary>
+    /// <param name="paletteChroma">The highest OkLCh chroma among the palette's artwork colors, before glow-ify.</param>
+    /// <returns>The scale for <see cref="Target"/> and <see cref="ToLight"/>, 0..1.</returns>
+    public static float ColorScale(float paletteChroma)
+    {
+        float t = Math.Clamp((paletteChroma - MonochromeChroma) / (TintedChroma - MonochromeChroma), 0f, 1f);
+        return t * t * (3 - 2 * t);
     }
 
     /// <summary>The glow's chroma for an artwork color's chroma: unchanged up to <see cref="NeutralChroma"/>, at least
@@ -63,8 +93,9 @@ internal static class Glow
 
     /// <summary>Glow-ifies a color and maps it into sRGB.</summary>
     /// <param name="color">An artwork color.</param>
+    /// <param name="colorScale">The share of the color the palette keeps (<see cref="ColorScale"/>), 0..1.</param>
     /// <returns>Linear RGB with every channel in 0..1.</returns>
-    public static Rgb ToLight(Oklab color) => MapToSrgb(Target(color));
+    public static Rgb ToLight(Oklab color, float colorScale = 1f) => MapToSrgb(Target(color, colorScale));
 
     /// <summary>Maps an OkLCh color into the sRGB gamut by reducing its chroma, keeping lightness and hue.</summary>
     /// <param name="color">Any OkLCh color.</param>

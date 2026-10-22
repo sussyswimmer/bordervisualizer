@@ -66,14 +66,13 @@ public static class CoreFactory
     /// below 128 are skipped, and images over 512 × 512 are sampled on a grid.</para>
     /// <para>Output: <see cref="Palette.Primary"/> and <see cref="Palette.Secondary"/> are linear RGB with every channel in
     /// 0..1 (H-008), glow-ified in OkLCh: lightness 0.55..0.85, and chroma at least 0.12 for a clearly colored artwork
-    /// color (chroma 0.10 or more), reduced only where sRGB can't hold it. A near-neutral one (chroma up to 0.05: a grey,
-    /// or a black-and-white cover's faint cast) keeps its chroma and glows soft white or grey, and in between the raise
-    /// eases in. <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
-    /// <para>Returns null for "no art" (doc 05 §1): when no pixel has alpha 128 or more, or when the image is essentially
-    /// one flat color (at least 98 % of the pixels within Oklab distance 0.03 of the largest cluster) and the palette is
-    /// nearly grayscale (Primary and Secondary below chroma 0.05 before glow-ify), as with a blank thumbnail. A
-    /// black-and-white cover with text, or a generic icon with a glyph, is art and glows neutral. Keep the previous
-    /// palette, or the manual one, in that case.</para>
+    /// color (chroma 0.10 or more), reduced only where sRGB can't hold it. A near-neutral one (chroma up to 0.05) keeps
+    /// its chroma, and in between the raise eases in. A palette whose two colors are both at or below chroma 0.045
+    /// before glow-ify is a black-and-white cover: both glow pure grey or white (Maxwell's feedback: a faint cast glowed
+    /// blue). <see cref="Palette.SourceTrackId"/> is <c>trackId</c>.</para>
+    /// <para>Returns null for "no art" (doc 05 §1) only when no pixel has alpha 128 or more. A blank or nearly blank
+    /// image is art and glows its own grey or color, so an all-black cover glows grey, and so does a black-and-white
+    /// cover or a generic icon with a glyph. Keep the previous palette, or the manual one, on null.</para>
     /// <para>Deterministic, and the extractor holds no state, so calls may run on any thread, even concurrently. One
     /// call took about 1.5 ms for 64 × 64 and under 0.1 s for 512 × 512 on the Linux test machine: run it on the
     /// thread pool, never on the UI or render thread. Scratch comes from the shared array pool, which keeps it per

@@ -691,6 +691,7 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] Feedback round 2: real-music corpus (`tools/corpus/`), dynamics retuned on it, an edge with no rim, Record 2 min — branch claude/confident-mccarthy-gt8tif — effort: L (Windows confirmation pending)
 - [x] README cut to a short landing page at Maxwell's request ("no one wants to read this much"): an animated header with a wave bar (`assets/header.svg`, `footer.svg`), an 8 s preview and four looks rendered by the real beat engine through a port of `Glow.hlsl` (`tools/readme-art/`), and the FAQ collapsed. Replaces doc 08's longer layout. — effort: S
 - [x] Black-and-white covers glow soft white and grey instead of the manual colors or an invented blue (Maxwell: "a song that is white and black ... put light blue and dark blue"). Near-neutral colors keep their chroma up to 0.05, and only a blank image counts as no art. Muted covers (chroma 0.05–0.10) now glow paler. `wip/bw-album-colors` 05a621f, HANDOFF H-027. — effort: S
+- [x] Black-and-white covers, again: on 1.0.0 with Spotify on Windows, some covers were "still just light blue and dark blue". An all-black cover was still "no art" (the manual #7C5CFF / #22D3EE), and a kept cast of chroma 0.02 glowed slate blue. Now only an image with no opaque pixel is no art, and a palette whose colors are both at or below chroma 0.045 glows pure grey and white (`Glow.ColorScale`). Measured on 35 real covers; notes under "Black-and-white covers, again". Released as 1.0.1. — effort: S
 
 ## macOS (Claude Code)
 
@@ -3358,6 +3359,30 @@ This replaces items 2–8 of round 1's checklist. Round 1's item 1 (Settings ope
   1. Convert the song to a WAV outside the repository.
   2. Run `dotnet run -c Release --project tools/wav-analyze -- song.wav --engine`.
   3. Send the `.engine.csv` and the PNG. Never commit them or the WAV.
+
+## Black-and-white covers, again (Maxwell on 1.0.0)
+
+Maxwell, on the 1.0.0 release, Windows, Spotify: "can you fix the error where it doesn't properly read the cover art it is still just light blue and dark blue", for some songs, not all (colorful covers were right). Effort: S.
+
+**Reproduced on real covers.** 35 album covers that are black and white, toned, or muted (and a few colorful ones as controls), from the Cover Art Archive at 250 px, about Spotify's thumbnail size. They were decoded like the Windows app does (fit in 64 × 64, area-averaged) and run through Core's extractor. They stay in the session's scratch folder: no cover is in the repository. On 1.0.0:
+- **An all-black cover was "no art"**, so it showed the manual colors, #7C5CFF and #22D3EE: a violet blue and a light blue. That cover is a flat black square, 100 % one flat color, and no art was "98 % one flat grey".
+- **Black-and-white covers with a faint cool cast glowed blue-grey.** Their casts peak at chroma 0.014–0.029, for example #819097 / #69737A (a light and a dark slate blue) for a cover whose cast is 0.020. 1.0.0 kept chroma up to 0.05 as it was. A 0.02 cast looks grey on the cover, but lifted to the glow's lightness (0.55–0.85) and spread around the screen as light, it reads as a clear tint.
+- Toned prints of black-and-white photos (0.041–0.047) glowed brown or sage green.
+
+**Fix (Core, behind the frozen contracts).**
+- `PaletteExtractor`: no art is only an image with no pixel at alpha 128 or more. A blank or nearly blank image is art and glows its own grey or color. A player's blank placeholder can't be told from an all-black cover, and a grey glow is the smaller mistake. `MinFlatShare`, `FlatTolerance`, `NoArtMaxChroma` and the analysis' `FlatShare` / `IsNoArt` are gone.
+- `Glow.ColorScale`: the palette is judged as a whole. When its more colorful source is at or below chroma 0.045 (`MonochromeChroma`), both glow colors get chroma 0, pure grey and white. From 0.06 (`TintedChroma`) they keep their colors exactly as in 1.0.0, and in between they fade in (a smoothstep). Per-color glow-ify (`TargetChroma`) is unchanged.
+- Calibration on the 35 covers: black-and-white ones peak at 0.000–0.031, toned prints at 0.041–0.047 (the last keeps 5 % of its color), muted color photos at 0.053–0.061 (they keep 59 %, 92 % and 100 %), clearly colored covers at 0.08 and up. Every cover with a palette peak of 0.06 or more glows exactly the 1.0.0 hex.
+- The Mac calls the same extractor (`rl_album_art`), so it gets both changes; its header comment and one log line follow.
+
+**Tests.** `BlackAndWhiteArtTests` is rewritten around pure grey: the text covers, the cool-cast photo (it glowed #627389 / #7D8FA5 on 1.0.0), casts 0–0.035, a warm-toned print, an all-black cover, nearly blank and noisy blank images, plus a muted warm photo that keeps its whole color and the colored cases that must not change. `GlowTests` covers `ColorScale` (values, no jump, the scale multiplies chroma only), and `PaletteExtractorTests` replaces the no-art tests with blank images that glow grey. The Mac bridge test now expects a flat grey cover to glow grey and only a transparent one to be no art.
+
+**Windows checklist (1.0.1).** After the update installs (or `dotnet run --project src/Rimlight.App -c Release`), play in Spotify:
+- [ ] A black-and-white cover: the glow is white and grey, with no blue, green or brown tint. Settings > Color shows two grey swatches.
+- [ ] An all-black cover (for example a black square): a grey glow, not purple and light blue.
+- [ ] A colorful cover: the same colors as in 1.0.0.
+- [ ] A faded, muted photo cover: a soft tint of its color, not grey.
+- Bug: purple and light blue on any song that has a cover, or a visible tint on a black-and-white one.
 
 ## Lane B notes
 
