@@ -3,10 +3,8 @@ name: Release
 # Pushing a tag vX.Y.Z (v1.0.0, or v1.1.0-beta.1 for a prerelease) builds, tests and packs Rimlight
 # for x64 and ARM64 with build/pack.ps1, and the Mac app with mac/build.sh, then publishes the GitHub release that the README's
 # download button and the app's auto-update both read (doc 06 §5, doc 07 Phase 6).
-# A manual run (Actions > Release > Run workflow) with a "Release tag" does the same as pushing that tag: it creates
-# the tag at the commit it runs on and publishes. Pull requests that can break the packaging, and manual runs
-# without a tag, are dry runs: the same build and pack, unsigned, kept as a workflow artifact for 7 days. Nothing
-# is published.
+# Pull requests that can break the packaging, and manual runs, are dry runs: the same build and
+# pack, unsigned, kept as a workflow artifact for 7 days. Nothing is published.
 #
 # Credentials go only to jobs that run no build code. NuGet packages run code while they are
 # restored and built (MSBuild targets, analyzers, source generators), so the build job, which
@@ -28,12 +26,6 @@ on:
       - src/Directory.Build.props
       - src/Rimlight.App/**
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: Publish a release with this tag (for example v1.0.0) at the commit this runs on. Empty for a dry run.
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -49,7 +41,7 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
   # The tag's version for a release. Empty for a dry run: pack.ps1 then uses the version in
   # src/Directory.Build.props. The build and pack jobs must agree on it.
-  PACK_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || '' }}
+  PACK_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
 
 jobs:
   build:
@@ -122,7 +114,7 @@ jobs:
       #                          Certificate Profile Signer" role on that profile
       # Without them releases are unsigned, and SmartScreen asks first-time users to click
       # "More info", then "Run anyway" (README).
-      SIGN: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && secrets.SIGNING_ENDPOINT != '' && secrets.SIGNING_ACCOUNT != '' && secrets.SIGNING_PROFILE != '' && secrets.SIGNING_TENANT_ID != '' && secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_CLIENT_SECRET != '' }}
+      SIGN: ${{ github.event_name == 'push' && secrets.SIGNING_ENDPOINT != '' && secrets.SIGNING_ACCOUNT != '' && secrets.SIGNING_PROFILE != '' && secrets.SIGNING_TENANT_ID != '' && secrets.SIGNING_CLIENT_ID != '' && secrets.SIGNING_CLIENT_SECRET != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,7 +189,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 30
     env:
-      RIMLIGHT_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || '' }}
+      RIMLIGHT_VERSION: ${{ github.event_name == 'push' && github.ref_name || '' }}
       # Public, not a secret: a repository variable (Settings > Secrets and variables > Actions > Variables).
       # Without it the Mac app is built with no updater.
       SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
@@ -240,7 +232,7 @@ jobs:
     #   SPARKLE_PRIVATE_KEY   secret: the private half, from generate_keys -x
     name: Sign the Mac update
     needs: mac-build
-    if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && vars.SPARKLE_PUBLIC_KEY != ''
+    if: github.event_name == 'push' && vars.SPARKLE_PUBLIC_KEY != ''
     runs-on: macos-26
     timeout-minutes: 10
     env:
@@ -269,7 +261,7 @@ jobs:
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || '' }}
+          TAG: ${{ github.ref_name }}
         run: |
           if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
             echo "::error::The SPARKLE_PUBLIC_KEY variable is set but the SPARKLE_PRIVATE_KEY secret isn't."
@@ -295,7 +287,7 @@ jobs:
     needs: [pack, mac-build, mac-appcast]
     # The Windows release never waits on the Mac: a failed Mac build or appcast leaves the Mac files out of this
     # release (see "Attach the Mac downloads"), and mac-appcast is skipped when the update key isn't set up.
-    if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && !cancelled() && needs.pack.result == 'success'
+    if: github.event_name == 'push' && !cancelled() && needs.pack.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -303,7 +295,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for gh
       VPK_TOKEN: ${{ secrets.GITHUB_TOKEN }} # for vpk upload github (its --token)
-      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || '' }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -322,17 +314,6 @@ jobs:
         with:
           name: packages
           path: artifacts
-
-      # A manual release makes its tag here, at the commit this run built. A tag made with this token starts no
-      # workflow run of its own, so the release is published once.
-      - name: Create the tag
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::The release tag must look like v1.2.3 or v1.2.3-beta.1, not '$TAG'."
-            exit 1
-          fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
 
       # The short intro in .github/release-notes-intro.md, then GitHub's generated notes: the pull
       # requests merged since the previous release, in the sections of .github/release.yml.
