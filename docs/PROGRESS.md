@@ -708,6 +708,17 @@ The native Mac app (docs/10-MACOS.md): Swift/AppKit over Core compiled with Nati
 - [x] M7 packaging and updates: `RimlightSetup.dmg` and the update zip from `build.sh` (ad hoc, per Q2); Sparkle 2 with an EdDSA-signed appcast as a release asset; "Check for Updates…" and AutoUpdate; Mac jobs in `release.yml` (H-031) — branch `claude/mac-m7-release` — effort: M (notes below; needs the update key from Maxwell, and a Mac manual test)
 - [x] M8 README and docs: a Download for Mac button and macOS badge, a Mac (preview) install with the Gatekeeper and audio-permission steps, Mac lines in How it works, Privacy, FAQ (Open Anyway, uninstall, logs), build from source and the roadmap; Sparkle in Credits; RELEASE-GUIDE §7 (update key, link checks, a Mac test, a Mac recording) — branch `claude/mac-m8-docs` — effort: S (notes below)
 
+### Fix: the glow turned off when Spotify wasn't in front
+
+- **What he saw (Mac, 1.0.1):** with Spotify minimized, hidden, behind another app, or full screen itself, the glow turned off, and it came back as soon as Spotify was in front again.
+- **Why:** "Pause in full-screen apps" (on by default) paused a display whenever its front window covered it exactly, or below the notch. On a Mac, everyday apps run in full-screen Spaces, and a window filling the screen below the notch has a full-screen window's bounds, so whatever filled the screen once Spotify left it paused the glow. So did Spotify itself in full screen.
+- **Fix (`SystemWatcher`):**
+  - A covering window pauses its display only when its app keeps the display awake: a PreventUserIdleDisplaySleep (or older NoDisplaySleepAssertion) assertion, as a playing video, a game or a slideshow holds. These are read with `IOPMCopyAssertionsByProcess`, which needs no permission, and only while some window covers a display.
+  - Music and Spotify never pause the glow.
+  - The toggle now reads "Pause for full-screen videos and games".
+  - Tests: `pauses(bundleID:keepsDisplayAwake:)`, and `displayAwakeProcesses()` finding the test's own display-sleep assertion.
+- **Not verified on a Mac:** whether every full-screen game holds such an assertion. One that doesn't keeps the glow around it.
+
 ### Fix: Mac album colours, after Maxwell's test
 
 - **What he saw:** a black-and-white song glowed light and dark blue. Those are the default manual colours (#7C5CFF / #22D3EE), so no cover was used.

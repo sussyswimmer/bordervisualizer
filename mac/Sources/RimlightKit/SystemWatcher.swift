@@ -1,12 +1,14 @@
 import AppKit
 import IOKit.ps
+import IOKit.pwr_mgt
 import os
 
 /// The system events the glow follows (doc 02 "Lifetime events", docs/10-MACOS.md §5), on the main thread:
 /// - sleep and wake, the displays sleeping, the screen locking and another user switching in: the glow pauses;
 /// - on battery or in Low Power Mode: the `OnBattery` setting applies (Reduce: 30 fps at half scale; Pause);
-/// - a full-screen window on a display: the glow there fades out ("Pause in fullscreen apps", doc 04 §4), checked when
-///   another app comes to the front and every 2 s, which also notices the Dock moving when the glow leaves it room.
+/// - a full-screen video, game or slideshow on a display: the glow there fades out ("Pause in fullscreen apps",
+///   doc 04 §4), checked when another app comes to the front and every 2 s, which also notices the Dock moving when
+///   the glow leaves it room.
 @MainActor
 final class SystemWatcher {
     /// One overlaid display for the full-screen check.
@@ -141,9 +143,10 @@ final class SystemWatcher {
     }
 
     /// The displays whose top window covers them exactly (doc 04 §4: borderless games, full-screen video, macOS
-    /// full-screen Spaces), whichever app is in front, as Windows keeps a video's monitor paused while you work on
-    /// another. The window list runs front to back: for each display, the first app window that reaches it decides.
-    /// Window bounds and owners need no permission; only names would need Screen Recording (Apple DTS, forums 839069).
+    /// full-screen Spaces) while its app keeps the display awake (`pauses(bundleID:keepsDisplayAwake:)`), whichever
+    /// app is in front, as Windows keeps a video's monitor paused while you work on another. The window list runs
+    /// front to back: for each display, the first app window that reaches it decides. Window bounds and owners need no
+    /// permission; only names would need Screen Recording (Apple DTS, forums 839069).
     static func coveredDisplays(_ screens: [Display]) -> Set<String> {
         guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                        kCGNullWindowID) as? [[String: Any]] else { return [] }
@@ -151,19 +154,60 @@ final class SystemWatcher {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         let frames = screens.map { windowFrame(of: $0.frame, primaryHeight: primaryHeight) }
         var decided = Set<Int>()
-        var covered: Set<String> = []
+        var owners: [Int: pid_t] = [:] // display index: the app whose window covers it
         for window in windows where decided.count < screens.count {
             guard (window[kCGWindowLayer as String] as? Int) == 0,
-                  (window[kCGWindowOwnerPID as String] as? pid_t) != own,
+                  let owner = window[kCGWindowOwnerPID as String] as? pid_t, owner != own,
                   let boundsInfo = window[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsInfo as CFDictionary) else { continue }
             for (index, screen) in screens.enumerated() where !decided.contains(index) {
                 guard bounds.intersects(frames[index]) else { continue }
                 decided.insert(index)
-                if covers(bounds, frames[index], topInset: screen.topInset) { covered.insert(screen.id) }
+                if covers(bounds, frames[index], topInset: screen.topInset) { owners[index] = owner }
+            }
+        }
+        guard !owners.isEmpty else { return [] }
+        let awake = displayAwakeProcesses()
+        var covered: Set<String> = []
+        for (index, owner) in owners {
+            let bundleID = NSRunningApplication(processIdentifier: owner)?.bundleIdentifier
+            if pauses(bundleID: bundleID, keepsDisplayAwake: awake.contains(owner)) {
+                covered.insert(screens[index].id)
             }
         }
         return covered
+    }
+
+    /// Whether a window that covers its display pauses the glow there. Only when its app keeps the display awake, as
+    /// a playing video, a game or a slideshow does: on a Mac, everyday apps run in full-screen Spaces, and a window
+    /// filling the screen below the notch has a full-screen window's bounds. Never for the music player itself, whose
+    /// music the glow is for. *Maxwell's feedback:* with Spotify minimized, hidden or behind another app, or full
+    /// screen itself, the glow turned off, because whatever filled the screen counted as full screen.
+    nonisolated static func pauses(bundleID: String?, keepsDisplayAwake: Bool) -> Bool {
+        // The players whose covers color the glow (NowPlayingService).
+        if bundleID == NowPlayingService.musicID || bundleID == NowPlayingService.spotifyID { return false }
+        return keepsDisplayAwake
+    }
+
+    /// The processes holding an assertion that keeps the display awake (what `pmset -g assertions` lists as
+    /// PreventUserIdleDisplaySleep, or the older NoDisplaySleepAssertion): video players and browsers while a video
+    /// plays, games, and slideshows. Needs no permission.
+    nonisolated static func displayAwakeProcesses() -> Set<pid_t> {
+        var result: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&result) == kIOReturnSuccess,
+              let assertionsByProcess = result?.takeRetainedValue() else { return [] }
+        // IOPMLib.h's keys and values, spelled out: the older type's constant is deprecated.
+        let displayTypes: Set<String> = ["PreventUserIdleDisplaySleep", "NoDisplaySleepAssertion"]
+        let levelOn = 255 // kIOPMAssertionLevelOn
+        var processes = Set<pid_t>()
+        for case let (pid as NSNumber, assertions as [NSDictionary]) in assertionsByProcess as NSDictionary {
+            let keepsAwake = assertions.contains { assertion in
+                guard let type = assertion["AssertType"] as? String, displayTypes.contains(type) else { return false }
+                return ((assertion["AssertLevel"] as? NSNumber)?.intValue ?? levelOn) == levelOn
+            }
+            if keepsAwake { processes.insert(pid.int32Value) }
+        }
+        return processes
     }
 
     /// Whether window bounds fill a display: exactly, or below the notch (a full-screen window on a notched MacBook
