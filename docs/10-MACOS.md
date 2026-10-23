@@ -298,7 +298,7 @@ Doc 05's quirks carry over: debounce 250 ms, retry once after 750 ms when the ar
   | Displays | `didChangeScreenParametersNotification` | Rebuild, debounced 300 ms |
   | Battery | `IOPSNotificationCreateRunLoopSource` + `IOPSGetProvidingPowerSourceType` [**unverified**, long-standing IOKit API] | `OnBattery`: Normal, Reduce (30 fps, half scale) or Pause |
   | Low Power Mode | `ProcessInfo.isLowPowerModeEnabled` + `NSProcessInfoPowerStateDidChange` (macOS 12) [Apple] | Treated as on battery with Reduce |
-  | Full-screen video or game | On app activation and every 2 s: `CGWindowListCopyWindowInfo` for the frontmost app's layer-0 windows. Bounds and owner PID need no permission; only window names need Screen Recording [Apple DTS, forums 839069] | Pause that screen when one of its windows exactly covers it (doc 04 §4's per-monitor pause) |
+  | Full-screen video or game | On app activation and every 2 s: `CGWindowListCopyWindowInfo` for the frontmost app's layer-0 windows. Bounds and owner PID need no permission; only window names need Screen Recording [Apple DTS, forums 839069] | Pause that screen when one of its windows exactly covers it (doc 04 §4's per-monitor pause) and its app keeps the display awake (`IOPMCopyAssertionsByProcess`: PreventUserIdleDisplaySleep, as a playing video, a game or a slideshow holds; no permission). Never for Music or Spotify. *Maxwell's feedback:* everyday apps run in full-screen Spaces on a Mac, and a window filling the screen below the notch has a full-screen window's bounds, so the glow turned off whenever Spotify was minimized, hidden, behind another app, or full screen itself. |
 
 ---
 

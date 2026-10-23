@@ -277,7 +277,7 @@ struct BehaviorPage: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Pause in full-screen apps and videos", isOn: $model.settings.pauseInFullscreen)
+                Toggle("Pause for full-screen videos and games", isOn: $model.settings.pauseInFullscreen)
                 Picker("On battery", selection: $model.settings.onBattery) {
                     Text("Keep going").tag("Normal")
                     Text("Save power (30 fps)").tag("Reduce")

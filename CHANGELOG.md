@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mac: the glow stays on when Spotify isn't in front.** With Spotify minimized, hidden, behind another app or full screen, the glow turned off, because any app filling the screen counted as full screen. Now only a full-screen video, game or slideshow pauses it, and Spotify and Music never do. The setting is now called **Pause for full-screen videos and games**.
+
 ## [1.0.1] - 2026-10-22
 
 ### Fixed
