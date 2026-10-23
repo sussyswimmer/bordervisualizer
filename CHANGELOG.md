@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-23
+
 ### Fixed
 
 - **Mac: the glow stays on when Spotify isn't in front.** With Spotify minimized, hidden, behind another app or full screen, the glow turned off, because any app filling the screen counted as full screen. Now only a full-screen video, game or slideshow pauses it, and Spotify and Music never do. The setting is now called **Pause for full-screen videos and games**.
@@ -50,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Black-and-white covers give a white glow.** A black-and-white cover now glows soft white and grey, not blue, even when its black and white lean a little blue. A black cover with white text no longer falls back to your own colors; only a blank cover, or none, does.
 - **Settings says why it can't open.** If the Settings window, one of its pages or the visualizer can't open, a message says what went wrong and offers to open the logs folder (`%APPDATA%\Rimlight\logs`). Before, the welcome window could show up in its place, or nothing at all.
 
-[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/sussyswimmer/bordervisualizer/releases/tag/v1.0.0
