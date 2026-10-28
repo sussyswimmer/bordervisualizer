@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-10-28
+
+### Added
+
+- **Flow: the light moves around the edge.** In Music Sync the light now travels instead of only pulsing. Two bright comets chase around the edge, faster when the music is louder and pushed along by every beat. The album colors stream around it, and each beat sends a flash running both ways along the edge from a new spot. Flow is the new default, in both edge styles, on Windows and Mac. To get the old look back, where the whole edge swells on each beat, pick **Settings > Motion > Movement > Pulse**.
+
 ## [1.0.3] - 2026-10-28
 
 ### Added
@@ -59,7 +65,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Black-and-white covers give a white glow.** A black-and-white cover now glows soft white and grey, not blue, even when its black and white lean a little blue. A black cover with white text no longer falls back to your own colors; only a blank cover, or none, does.
 - **Settings says why it can't open.** If the Settings window, one of its pages or the visualizer can't open, a message says what went wrong and offers to open the logs folder (`%APPDATA%\Rimlight\logs`). Before, the welcome window could show up in its place, or nothing at all.
 
-[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.0...v1.0.1
