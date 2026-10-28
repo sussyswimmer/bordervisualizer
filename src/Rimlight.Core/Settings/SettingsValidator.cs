@@ -48,6 +48,7 @@ internal static class SettingsValidator
             Version = SettingsMigrator.CurrentVersion,
             Animation = Defined(settings.Animation, d.Animation),
             WhenSilent = Defined(settings.WhenSilent, d.WhenSilent),
+            Movement = Defined(settings.Movement, d.Movement),
             ColorMode = Defined(settings.ColorMode, d.ColorMode),
             PrimaryHex = NormalizeHex(settings.PrimaryHex) ?? d.PrimaryHex,
             SecondaryHex = NormalizeHex(settings.SecondaryHex) ?? d.SecondaryHex,

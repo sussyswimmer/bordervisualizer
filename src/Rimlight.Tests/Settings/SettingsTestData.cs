@@ -15,6 +15,7 @@ internal static class SettingsTestData
         Enabled = false,
         Animation = AnimationMode.IdleGlow,
         WhenSilent = SilentBehavior.Hide,
+        Movement = MovementStyle.Pulse,
         ColorMode = ColorMode.Manual,
         OverrideAlbumColor = true,
         PrimaryHex = "#112233",
@@ -43,6 +44,7 @@ internal static class SettingsTestData
     public static Settings Messy() => new()
     {
         Animation = (AnimationMode)42,
+        Movement = (MovementStyle)5,
         PrimaryHex = "violet",
         SecondaryHex = null!,
         PrimaryRatio = float.NaN,
