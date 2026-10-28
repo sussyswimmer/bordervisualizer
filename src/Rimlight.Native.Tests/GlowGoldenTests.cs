@@ -12,9 +12,9 @@ namespace Rimlight.Native.Tests;
 // movement's included), screens (with their notch, in points, as the Swift app sends it in RlSurface) and edge styles,
 // the constants the loop gives (MacOverlayLoop.ConstantsFor, which rl_glow_constants calls; all 40 floats) and the
 // alpha GlowProfile.Alpha gives at sample points, as Glow.hlsl computes it. The Swift tests evaluate glow_math.h
-// (which Glow.metal includes) on the same inputs and must match. If GlowProfile or GlowConstants changes, this test fails until the table is regenerated with
-// RIMLIGHT_UPDATE_GOLDEN=1, and the Swift tests then fail until the Metal side follows: the profile can't change on one
-// side alone.
+// (which Glow.metal includes) on the same inputs and must match. If GlowProfile or GlowConstants changes, this test
+// fails until the table is regenerated with RIMLIGHT_UPDATE_GOLDEN=1, and the Swift tests then fail until the Metal
+// side follows: the profile can't change on one side alone.
 public sealed class GlowGoldenTests
 {
     private const double Tolerance = 1e-6;
