@@ -59,6 +59,18 @@ namespace Rimlight.Platform.Overlay;
 /// <see cref="SmoothMin"/>), so the light runs down the notch's side, along its bottom and up again, and the inside
 /// corners where the notch meets the top edge are rounded like the notch's own "ears". The colours stay on the outer
 /// rectangle's path, so the notch's outline takes the top edge's colours. With no notch nothing changes.</para>
+/// <para><b>The Flow movement</b> (<see cref="MovementStyle.Flow"/>, H-033). Maxwell, with a video of a screen edge
+/// whose light travels round it: "I want the rimlight to be like the video I sent where it moves around and doesn't
+/// just bounce"; he picked all three of light chasing round the edge, colours flowing round it and beats rippling
+/// round it. Along the perimeter (<see cref="PerimeterT"/>, the colours' own coordinate) the light varies by
+/// <see cref="Flow"/>: <see cref="CometCount"/> comets, a crisp head and a long fading tail
+/// (<see cref="Comets"/>), over a dimmer edge (<see cref="FlowFloor"/>), and the beats' ripples
+/// (<see cref="RippleAt"/>), each two fronts running both ways from where the beat landed. Deep inside it blends to its
+/// mean (<see cref="FlowMean"/>) where the colours blend to theirs, so the perimeter coordinate's seam never shows.
+/// The light state's Flow amount fades all of it in and out (<see cref="Motion"/>), and the gain rises with it
+/// (<see cref="Gain"/>, <see cref="FlowBoost"/>) so the comets outshine the old even edge. The engine moves the comets
+/// and the ripples (LightEngine); the shaders only draw them. With no Flow amount nothing is computed and the light is
+/// exactly as before.</para>
 /// </remarks>
 public static class GlowProfile
 {
@@ -99,6 +111,48 @@ public static class GlowProfile
     /// corners by about 10 points. A larger Corner radius setting wins.
     /// </summary>
     public const float NotchedDisplayTopCornerDip = 10f;
+
+    /// <summary>How many comets chase round the edge in the Flow movement, evenly spaced.</summary>
+    public const int CometCount = 2;
+
+    /// <summary>
+    /// A comet's head: its light falls ahead of the head as a Gaussian, exp(-(a / this)²), a in perimeters, so it ends
+    /// crisply where it is going.
+    /// </summary>
+    public const float CometHead = 0.01f;
+
+    /// <summary>
+    /// A comet's tail: its light fades behind the head as exp(-b / this), b in perimeters, a long trail over about a
+    /// quarter of the perimeter.
+    /// </summary>
+    public const float CometTail = 0.12f;
+
+    /// <summary>
+    /// The Flow movement's light between the comets, as a share of a comet's peak: the whole edge stays lit, dimmer, so
+    /// the line still outlines the screen.
+    /// </summary>
+    public const float FlowFloor = 0.5f;
+
+    /// <summary>A ripple's front: its light falls ahead of the front as exp(-(x / this)²), x in perimeters.</summary>
+    public const float RippleFront = 0.015f;
+
+    /// <summary>A ripple's trail: its light fades behind the front, back toward its origin, as exp(x / this).</summary>
+    public const float RippleTrail = 0.06f;
+
+    /// <summary>
+    /// The Flow movement's light averaged round the perimeter, ripples aside: <see cref="FlowFloor"/> + (1 -
+    /// <see cref="FlowFloor"/>) × <see cref="CometCount"/> × (<see cref="CometHead"/> √π / 2 +
+    /// <see cref="CometTail"/>), what each comet adds (its tails barely overlap the next head). Deep inside, where the
+    /// perimeter coordinate has its seam, the light blends to this, as the colours blend to their mean. The shaders
+    /// carry the same number.
+    /// </summary>
+    public const float FlowMean = 0.62886227f;
+
+    /// <summary>
+    /// How much the gain rises at the full Flow amount: the comets' heads shine 30 % brighter than the even edge did,
+    /// and the edge between them at <see cref="FlowFloor"/> × 1.3 of it (<see cref="Gain"/>).
+    /// </summary>
+    public const float FlowBoost = 0.3f;
 
     /// <summary>Where <see cref="SoftClip"/> starts to roll the gain off: gains up to this are unchanged.</summary>
     public const float KneeStart = 0.9f;
@@ -223,12 +277,20 @@ public static class GlowProfile
     public static float PulsedShoulder(float shoulderPx, float pulse) => shoulderPx * (1 + BeatPush * pulse);
 
     /// <summary>
-    /// The light's overall gain, which scales the whole profile: Intensity × the beat's (1 + 0.25 Pulse), rolled off
-    /// by <see cref="SoftClip"/>. It stays under 1, so alpha (profile × gain × Visibility) never needs clipping.
+    /// The light's overall gain, which scales the whole profile: Intensity × the beat's (1 + 0.25 Pulse) × the Flow
+    /// movement's (1 + <see cref="FlowBoost"/> × Flow amount), rolled off by <see cref="SoftClip"/>. It stays under 1,
+    /// so alpha (profile × gain × Visibility × <see cref="Motion"/>, at most 1) never needs clipping.
     /// </summary>
     /// <param name="intensity">The light state's Intensity, 0..1.</param>
     /// <param name="pulse">The light state's Pulse, 0..1.</param>
-    public static float Gain(float intensity, float pulse) => SoftClip(intensity * (1 + BeatGain * pulse));
+    /// <param name="flowAmount">The light state's Flow amount, 0..1; 0 gives the gain from before the Flow
+    /// movement, exactly.</param>
+    public static float Gain(float intensity, float pulse, float flowAmount = 0)
+    {
+        float gain = intensity * (1 + BeatGain * pulse);
+        if (flowAmount > 0) gain *= 1 + FlowBoost * flowAmount;
+        return SoftClip(gain);
+    }
 
     /// <summary>
     /// The Line style's line width in pixels for a Thickness of <paramref name="thicknessPx"/> pixels: the Thickness
@@ -349,11 +411,124 @@ public static class GlowProfile
         }
         float shoulder = PulsedShoulder(c.ShoulderPx, c.Pulse);
         float spread = PulsedSpread(c.SpreadPx, c.Pulse);
-        if (!(c.LinePx > 0)) return Glow(depth, shoulder, spread) * c.Gain * c.Visibility;
+        if (!(c.LinePx > 0)) return Glow(depth, shoulder, spread) * c.Gain * c.Visibility * Motion(c, x, y);
 
         float lineDepth = Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.TopCornerRadiusPx, c.CornerRadiusPx);
         if (notched) lineDepth = AroundNotch(lineDepth, notch, c.NotchRadiusPx);
-        return LineAndHalo(lineDepth, c.LinePx, depth, shoulder, spread) * c.Gain * c.Visibility;
+        return LineAndHalo(lineDepth, c.LinePx, depth, shoulder, spread) * c.Gain * c.Visibility * Motion(c, x, y);
+    }
+
+    /// <summary>
+    /// Perimeter coordinate in [0, 1) of the pixel centre (<paramref name="x"/>, <paramref name="y"/>) on a
+    /// <paramref name="width"/> × <paramref name="height"/> surface: arc length clockwise along a rounded rectangle with
+    /// corner radius <paramref name="radius"/>, starting at the top-left corner (the middle of its arc, H-008), as a
+    /// fraction of the perimeter. The colours' coordinate (Glow.hlsl's PerimeterT, glow_math.h's gm_perimeter_t), and
+    /// the Flow movement's. Inside the corner zones it follows the arc, so it is continuous through the corners;
+    /// elsewhere it is the projection onto the nearest straight edge, discontinuous only on the medial axis at least
+    /// <paramref name="radius"/> from every edge.
+    /// </summary>
+    public static float PerimeterT(float x, float y, float width, float height, float radius)
+    {
+        const float halfPi = MathF.PI / 2;
+        float r = radius;
+        float topLen = width - 2 * r;
+        float sideLen = height - 2 * r;
+        float arcLen = halfPi * r;
+        float total = 2 * (topLen + sideLen) + 4 * arcLen;
+        bool left = x < r, right = x > width - r, top = y < r, bottom = y > height - r;
+        float s;
+        if (top && right)
+            s = topLen + arcLen * QuarterAngle(x - (width - r), -(y - r)) / halfPi;
+        else if (bottom && right)
+            s = topLen + arcLen + sideLen + arcLen * QuarterAngle(y - (height - r), x - (width - r)) / halfPi;
+        else if (bottom && left)
+            s = 2 * topLen + 2 * arcLen + sideLen + arcLen * QuarterAngle(-(x - r), y - (height - r)) / halfPi;
+        else if (top && left)
+            s = 2 * topLen + 3 * arcLen + 2 * sideLen + arcLen * QuarterAngle(-(y - r), -(x - r)) / halfPi;
+        else
+        {
+            float dTop = y, dRight = width - x, dBottom = height - y, dLeft = x;
+            float nearest = MathF.Min(MathF.Min(dTop, dRight), MathF.Min(dBottom, dLeft));
+            if (nearest == dTop) s = x - r;
+            else if (nearest == dRight) s = topLen + arcLen + (y - r);
+            else if (nearest == dBottom) s = topLen + 2 * arcLen + sideLen + (width - r - x);
+            else s = 2 * topLen + 3 * arcLen + sideLen + (height - r - y);
+        }
+        return Fract((s + 0.5f * arcLen) / total);
+    }
+
+    /// <summary>
+    /// Distance from the pixel centre (<paramref name="x"/>, <paramref name="y"/>) to the nearest edge of a
+    /// <paramref name="width"/> × <paramref name="height"/> surface: how deep the colours and the Flow movement have
+    /// blended to their means (Glow.hlsl steps 3-5).
+    /// </summary>
+    public static float EdgeDepth(float x, float y, float width, float height) =>
+        MathF.Min(MathF.Min(x, y), MathF.Min(width - x, height - y));
+
+    /// <summary>
+    /// The comets' light at perimeter position <paramref name="t"/>, 0..1: the brightest of
+    /// <see cref="CometCount"/> comets whose heads sit at k / <see cref="CometCount"/> - <paramref name="cometPhase"/>.
+    /// As the phase grows they move toward smaller t, counterclockwise, the way the colours flow. Each is 1 at its head,
+    /// falls to <see cref="CometHead"/> ahead of it as a Gaussian and fades over <see cref="CometTail"/> behind it; the
+    /// larger exponent wins, so the light is continuous everywhere, the heads included.
+    /// </summary>
+    public static float Comets(float t, float cometPhase)
+    {
+        float brightest = float.NegativeInfinity;
+        for (int k = 0; k < CometCount; k++)
+        {
+            float head = (float)k / CometCount - cometPhase;
+            float behind = Fract(t - head) / CometTail;
+            float ahead = Fract(head - t) / CometHead;
+            brightest = MathF.Max(brightest, MathF.Max(-behind, -ahead * ahead));
+        }
+        return MathF.Exp(brightest);
+    }
+
+    /// <summary>
+    /// A ripple's light at perimeter position <paramref name="t"/>: two fronts <paramref name="radius"/> either way
+    /// from <paramref name="origin"/> (round the perimeter's shorter way), each falling ahead of it over
+    /// <see cref="RippleFront"/> and fading behind it, back toward the origin, over <see cref="RippleTrail"/>, ×
+    /// <paramref name="strength"/>. At radius 0 it is a flash at the origin. A strength of 0 (or less) is no ripple.
+    /// </summary>
+    public static float RippleAt(float t, float origin, float radius, float strength)
+    {
+        if (!(strength > 0)) return 0;
+        float x = MathF.Abs(Wrap(t - origin)) - radius;
+        float exponent = x >= 0 ? -(x / RippleFront) * (x / RippleFront) : x / RippleTrail;
+        return strength * MathF.Exp(exponent);
+    }
+
+    /// <summary>
+    /// The Flow movement's light at perimeter position <paramref name="t"/> for the constants <paramref name="c"/>,
+    /// <see cref="FlowFloor"/>..1, before the blend deep inside: the comets over the dimmer edge, then each ripple on
+    /// top, combined like light through two filters (1 - (1 - m)(1 - ripple)), so it never passes 1.
+    /// </summary>
+    internal static float Flow(in GlowConstants c, float t)
+    {
+        float m = FlowFloor + (1 - FlowFloor) * Comets(t, c.CometPhase);
+        m = 1 - (1 - m) * (1 - RippleAt(t, c.Ripple0.Origin, c.Ripple0.Radius, c.Ripple0.Strength));
+        m = 1 - (1 - m) * (1 - RippleAt(t, c.Ripple1.Origin, c.Ripple1.Radius, c.Ripple1.Strength));
+        m = 1 - (1 - m) * (1 - RippleAt(t, c.Ripple2.Origin, c.Ripple2.Radius, c.Ripple2.Strength));
+        m = 1 - (1 - m) * (1 - RippleAt(t, c.Ripple3.Origin, c.Ripple3.Radius, c.Ripple3.Strength));
+        return m;
+    }
+
+    /// <summary>
+    /// What the Flow movement multiplies the alpha by at the pixel centre (<paramref name="x"/>, <paramref name="y"/>),
+    /// 0..1: 1 without a Flow amount (nothing else is computed then); otherwise <see cref="Flow"/> at the pixel's
+    /// perimeter coordinate on the colour path (<see cref="PerimeterT"/> with the colour radius), blended to
+    /// <see cref="FlowMean"/> deep inside where the colours blend to their mean, and faded in by the Flow amount.
+    /// </summary>
+    internal static float Motion(in GlowConstants c, float x, float y)
+    {
+        if (!(c.FlowAmount > 0)) return 1;
+        float t = PerimeterT(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.ColorRadiusPx);
+        float m = Flow(c, t);
+        float deep = SmoothStep(0.5f * c.ColorRadiusPx, c.ColorRadiusPx,
+            EdgeDepth(x, y, c.ScreenWidthPx, c.ScreenHeightPx));
+        m += (FlowMean - m) * deep;
+        return 1 + (m - 1) * c.FlowAmount;
     }
 
     /// <summary>
@@ -373,4 +548,13 @@ public static class GlowProfile
         float t = Math.Clamp((x - edge0) / (edge1 - edge0), 0, 1);
         return t * t * (3 - 2 * t);
     }
+
+    // HLSL's frac: x - floor(x), in [0, 1).
+    private static float Fract(float x) => x - MathF.Floor(x);
+
+    // To [-0.5, 0.5): the signed way round the perimeter, the shorter one.
+    private static float Wrap(float x) => x - MathF.Floor(x + 0.5f);
+
+    // Angle in [0, pi/2] for a point in a corner zone; the x guard keeps atan2(0, 0) finite (Glow.hlsl QuarterAngle).
+    private static float QuarterAngle(float y, float x) => MathF.Atan2(y, MathF.Max(x, 1e-5f));
 }

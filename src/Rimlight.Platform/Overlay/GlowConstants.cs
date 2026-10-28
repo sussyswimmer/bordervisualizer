@@ -3,12 +3,12 @@ using Rimlight.Core;
 
 namespace Rimlight.Platform.Overlay;
 
-// Mirror of the Light cbuffer in Glow.hlsl (and of RlGlowConstants in the Mac's glow_math.h): 20 floats in five
-// 16-byte registers. Keep them in sync.
+// Mirror of the Light cbuffer in Glow.hlsl (and of RlGlowConstants in the Mac's glow_math.h): 40 floats in ten
+// 16-byte registers, the last five the Flow movement's (H-033). Keep them in sync.
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct GlowConstants : IEquatable<GlowConstants>
 {
-    public const int SizeInBytes = 80;
+    public const int SizeInBytes = 160;
 
     // Below this Visibility every pixel is transparent: alpha never exceeds Visibility, and the shader returns 0 for
     // alpha under half a code value. Overlays whose visibility falls below it are hidden.
@@ -45,6 +45,16 @@ internal struct GlowConstants : IEquatable<GlowConstants>
     public float NotchHeightPx; // 0: no notch
     public float NotchRadiusPx; // its lower corners and the fillets beside it (GlowProfile.NotchRadius)
 
+    public float FlowAmount;   // the Flow movement's share, 0..1 (GlowProfile.Motion); 0 lights the edge evenly
+    public float CometPhase;   // where its comets are, 0..1 (GlowProfile.Comets)
+    public float FlowPad0;
+    public float FlowPad1;
+
+    public GlowRipple Ripple0; // the beats' ripples (GlowProfile.RippleAt), a register each; strength 0 is none
+    public GlowRipple Ripple1;
+    public GlowRipple Ripple2;
+    public GlowRipple Ripple3;
+
     // Converts a frame's light state to pixels for one surface. widthPx/heightPx: the swap chain's size; dpiScale =
     // monitor DPI / 96; renderScale: swap-chain pixels per screen pixel (1, or about 0.5 at half scale); meanColor is
     // the average of the gradient texels (linear RGB); style: the settings' edge style (anything but Line is the
@@ -79,8 +89,8 @@ internal struct GlowConstants : IEquatable<GlowConstants>
             ShoulderPx = shoulderPx,
             SpreadPx = spreadPx,
             // The gain scales the whole profile, so the light keeps its shape at any brightness and beat; rolled off
-            // under 1, it never needs clipping per pixel (GlowProfile.Gain).
-            Gain = GlowProfile.Gain(Clamp01(state.Intensity), Clamp01(state.Pulse)),
+            // under 1, it never needs clipping per pixel (GlowProfile.Gain). It rises with the Flow movement.
+            Gain = GlowProfile.Gain(Clamp01(state.Intensity), Clamp01(state.Pulse), Clamp01(state.Flow.Amount)),
             Pulse = Clamp01(state.Pulse),
             Phase = Fraction(state.Phase),
             Visibility = Clamp01(state.Visibility),
@@ -102,6 +112,12 @@ internal struct GlowConstants : IEquatable<GlowConstants>
             NotchRightPx = notched ? notchRight : 0,
             NotchHeightPx = notched ? notchHeight : 0,
             NotchRadiusPx = notched ? GlowProfile.NotchRadius(notchRight - notchLeft, notchHeight) : 0,
+            FlowAmount = Clamp01(state.Flow.Amount),
+            CometPhase = Fraction(state.Flow.CometPhase),
+            Ripple0 = GlowRipple.From(state.Flow.Ripple0),
+            Ripple1 = GlowRipple.From(state.Flow.Ripple1),
+            Ripple2 = GlowRipple.From(state.Flow.Ripple2),
+            Ripple3 = GlowRipple.From(state.Flow.Ripple3),
         };
     }
 
@@ -128,14 +144,16 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx && SameShape(other) &&
         Near(Gain, other.Gain) && Near(Pulse, other.Pulse) && Near(Visibility, other.Visibility) &&
         Near(MeanRed, other.MeanRed) && Near(MeanGreen, other.MeanGreen) && Near(MeanBlue, other.MeanBlue) &&
-        PhaseNear(Phase, other.Phase);
+        PhaseNear(Phase, other.Phase) && FlowLooksLike(other);
 
     public readonly bool Equals(GlowConstants other) =>
         ScreenWidthPx == other.ScreenWidthPx && ScreenHeightPx == other.ScreenHeightPx &&
         CornerRadiusPx == other.CornerRadiusPx && ShoulderPx == other.ShoulderPx &&
         SpreadPx == other.SpreadPx && Gain == other.Gain && Pulse == other.Pulse && Phase == other.Phase &&
         Visibility == other.Visibility && ColorRadiusPx == other.ColorRadiusPx && GlowRadiusPx == other.GlowRadiusPx &&
-        MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue && SameShape(other);
+        MeanRed == other.MeanRed && MeanGreen == other.MeanGreen && MeanBlue == other.MeanBlue && SameShape(other) &&
+        FlowAmount == other.FlowAmount && CometPhase == other.CometPhase && Ripple0 == other.Ripple0 &&
+        Ripple1 == other.Ripple1 && Ripple2 == other.Ripple2 && Ripple3 == other.Ripple3;
 
     public override readonly bool Equals(object? obj) => obj is GlowConstants other && Equals(other);
 
@@ -146,6 +164,13 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         LinePx == other.LinePx && TopCornerRadiusPx == other.TopCornerRadiusPx &&
         NotchLeftPx == other.NotchLeftPx && NotchRightPx == other.NotchRightPx &&
         NotchHeightPx == other.NotchHeightPx && NotchRadiusPx == other.NotchRadiusPx;
+
+    // The Flow movement draws the same light: as much of it, its comets within a pixel or so, and each ripple as
+    // bright (none on both, or the same one within a pixel or so of where it was).
+    private readonly bool FlowLooksLike(in GlowConstants other) =>
+        Near(FlowAmount, other.FlowAmount) && PhaseNear(CometPhase, other.CometPhase) &&
+        Ripple0.LooksLike(other.Ripple0) && Ripple1.LooksLike(other.Ripple1) && Ripple2.LooksLike(other.Ripple2) &&
+        Ripple3.LooksLike(other.Ripple3);
 
     private static float Finite(float value) => float.IsFinite(value) ? value : 0;
 
@@ -158,9 +183,49 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         return MathF.Min(d, 1 - d) <= PhaseTolerance;
     }
 
-    private static float Clamp01(float value) => float.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
+    internal static float Clamp01(float value) => float.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
 
-    private static float Fraction(float value) => float.IsFinite(value) ? value - MathF.Floor(value) : 0;
+    internal static float Fraction(float value) => float.IsFinite(value) ? value - MathF.Floor(value) : 0;
+
+    internal static bool NearValue(float a, float b) => Near(a, b);
+
+    internal static bool NearPhase(float a, float b) => PhaseNear(a, b);
+}
+
+// One beat's ripple in the constants (Ripple in Core's FlowMotion), one 16-byte register: where it started on the
+// perimeter, how far its fronts have run and how bright it is now. Strength 0 is no ripple.
+[StructLayout(LayoutKind.Sequential, Pack = 4)]
+internal struct GlowRipple : IEquatable<GlowRipple>
+{
+    public float Origin;   // 0..1
+    public float Radius;   // perimeters, 0 or more
+    public float Strength; // 0..1
+    public float Pad;
+
+    // Cleaned for the shader: the origin a fraction, the radius at least 0, the strength 0..1; not finite is 0.
+    public static GlowRipple From(Ripple ripple) => new()
+    {
+        Origin = GlowConstants.Fraction(ripple.Origin),
+        Radius = float.IsFinite(ripple.Radius) ? Math.Max(ripple.Radius, 0) : 0,
+        Strength = GlowConstants.Clamp01(ripple.Strength),
+    };
+
+    // None on both, or as bright with its fronts within a pixel or so of each other.
+    public readonly bool LooksLike(in GlowRipple other) =>
+        GlowConstants.NearValue(Strength, other.Strength) &&
+        (Strength <= 0 && other.Strength <= 0 ||
+         GlowConstants.NearPhase(Origin, other.Origin) && MathF.Abs(Radius - other.Radius) <= 2e-4f);
+
+    public readonly bool Equals(GlowRipple other) =>
+        Origin == other.Origin && Radius == other.Radius && Strength == other.Strength;
+
+    public override readonly bool Equals(object? obj) => obj is GlowRipple other && Equals(other);
+
+    public override readonly int GetHashCode() => HashCode.Combine(Origin, Radius, Strength);
+
+    public static bool operator ==(GlowRipple a, GlowRipple b) => a.Equals(b);
+
+    public static bool operator !=(GlowRipple a, GlowRipple b) => !a.Equals(b);
 }
 
 // A camera notch hanging from the top edge of the screen (a notched MacBook's), in the swap chain's pixels: from

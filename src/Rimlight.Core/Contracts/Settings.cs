@@ -12,6 +12,8 @@ public sealed record Settings
     public AnimationMode Animation { get; init; } = AnimationMode.MusicSync; // MusicSync | IdleGlow | Off
     /// <summary>When Silent (IdleGlow | Hide).</summary>
     public SilentBehavior WhenSilent { get; init; } = SilentBehavior.IdleGlow; // IdleGlow | Hide
+    /// <summary>Movement (Flow | Pulse).</summary>
+    public MovementStyle Movement { get; init; } = MovementStyle.Flow;         // Flow | Pulse
 
     /// <summary>Color Mode (AlbumArt | Manual).</summary>
     public ColorMode ColorMode { get; init; } = ColorMode.AlbumArt;          // AlbumArt | Manual
