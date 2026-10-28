@@ -287,7 +287,7 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float depth = min(min(p.x, p.y), min(ScreenPx.x - p.x, ScreenPx.y - p.y));
     float deep = smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth);
 
-    // The Flow movement (GlowProfile.Motion, Maxwell's request): comets chase round the edge and the beats' ripples
+    // The Flow movement (GlowProfile.Motion, Maxwell's request): a comet chases round the edge and the beats' ripples
     // run along it, on the colours' own coordinate t, blending to their mean where the colours blend to theirs. The
     // motion is at most 1, so the test above was an upper bound; dimmed by it, the pixel may now fall under half a
     // code value too. With FlowAmount 0 it is branched over.

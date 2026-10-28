@@ -6,7 +6,7 @@ using Xunit.Abstractions;
 namespace Rimlight.Tests.Lighting;
 
 // H-033: the Flow movement, the default. Maxwell: "I want the rimlight to be like the video I sent where it moves
-// around and doesn't just bounce". Two comets chase round the edge, faster when the music is louder and pushed along by
+// around and doesn't just bounce". A comet chases round the edge, faster when the music is louder and pushed along by
 // each beat; the colors stream round it faster; each beat sends a ripple running both ways along it from one spot,
 // golden-ratio steps apart, while the whole-edge pulse keeps 40 % of the beat. Expected values are the spec's numbers
 // written out, not the engine's constants, so changing a constant fails a test. (The Pulse movement is pinned to the

@@ -306,7 +306,7 @@ The settings preview may own another engine and blender on the UI thread (H-017)
 
 ### 6.6 The Flow movement (H-033)
 
-Maxwell, with a video of a screen edge whose light travels round it: "I want the rimlight to be like the video I sent where it moves around and doesn't just bounce". `Settings.Movement = Flow` (the default) makes the light travel round the edge three ways: two comets chase round it, the colors stream round it (§6.1 `Phase`), and each beat sends a ripple running both ways along it from one spot while the whole edge keeps 40 % of its pulse. `Movement = Pulse` is the light from before Flow, bit for bit: every field of every frame is what the engine gave before H-033 (`PulseMovementTests` replays varied input through a copy of that engine), and `Flow` is none. The engine only moves the comets and ripples; the renderers draw them (Platform's `GlowProfile` is the reference math, ported to `Glow.hlsl` and the Mac's `glow_math.h`).
+Maxwell, with a video of a screen edge whose light travels round it: "I want the rimlight to be like the video I sent where it moves around and doesn't just bounce". `Settings.Movement = Flow` (the default) makes the light travel round the edge three ways: two a comet chases round it, the colors stream round it (§6.1 `Phase`), and each beat sends a ripple running both ways along it from one spot while the whole edge keeps 40 % of its pulse. `Movement = Pulse` is the light from before Flow, bit for bit: every field of every frame is what the engine gave before H-033 (`PulseMovementTests` replays varied input through a copy of that engine), and `Flow` is none. The engine only moves the comets and ripples; the renderers draw them (Platform's `GlowProfile` is the reference math, ported to `Glow.hlsl` and the Mac's `glow_math.h`).
 
 | `LightState.Flow` field | Value |
 |---|---|
@@ -330,7 +330,7 @@ Maxwell, with a video of a screen edge whose light travels round it: "I want the
 | `Enabled` | true | |
 | `Animation` | MusicSync | MusicSync, IdleGlow, Off. |
 | `WhenSilent` | IdleGlow | IdleGlow, Hide. |
-| `Movement` | Flow | Flow (light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it), Pulse (the whole edge swells and brightens together on each beat, as before). Added at Maxwell's request (H-033). A file without it loads as Flow. The light engine reads it (§6.6). |
+| `Movement` | Flow | Flow (light travels round the edge: a comet chases round it, the colors stream round it and each beat ripples along it), Pulse (the whole edge swells and brightens together on each beat, as before). Added at Maxwell's request (H-033). A file without it loads as Flow. The light engine reads it (§6.6). |
 | `ColorMode` | AlbumArt | AlbumArt, Manual. |
 | `OverrideAlbumColor` | false | |
 | `PrimaryHex` | `#7C5CFF` | `#RRGGBB` or `#RGB`, in either case, with surrounding whitespace ignored. Stored as upper-case `#RRGGBB`. Anything else (no `#`, alpha, names) becomes the default. |

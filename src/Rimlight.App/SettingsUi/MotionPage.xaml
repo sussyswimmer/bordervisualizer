@@ -53,10 +53,10 @@
                                Text="How the light moves with the music." />
                     <RadioButton x:Name="FlowChoice" GroupName="Movement" Margin="0,8,0,0" Checked="OnMovementChanged"
                                  AutomationProperties.Name="Flow"
-                                 AutomationProperties.HelpText="Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it.">
+                                 AutomationProperties.HelpText="Light travels round the edge: a comet chases round it, the colors stream round it and each beat ripples along it.">
                         <StackPanel>
                             <TextBlock Text="Flow" />
-                            <TextBlock Style="{StaticResource RowDescription}" Text="Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it." />
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Light travels round the edge: a comet chases round it, the colors stream round it and each beat ripples along it." />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton x:Name="PulseChoice" GroupName="Movement" Margin="0,8,0,0" Checked="OnMovementChanged"

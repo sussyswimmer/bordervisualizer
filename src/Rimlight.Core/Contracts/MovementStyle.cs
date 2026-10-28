@@ -4,7 +4,7 @@ namespace Rimlight.Core;
 public enum MovementStyle
 {
     /// <summary>
-    /// Light travels round the edge (the default): bright comets chase round it, the colors stream round it, and each
+    /// Light travels round the edge (the default): a bright comet chases round it, the colors stream round it, and each
     /// beat sends a flash running along it from one spot.
     /// </summary>
     Flow,
