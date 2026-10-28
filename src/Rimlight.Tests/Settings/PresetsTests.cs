@@ -57,6 +57,20 @@ public sealed class PresetsTests
 
     [Theory]
     [MemberData(nameof(Names))]
+    public void PresetKeepsTheEdgeStyleAndTheMovement(string name)
+    {
+        // How the light looks at the edge and how it moves are the user's picks; every preset suits all of them.
+        foreach (EdgeStyle edge in Enum.GetValues<EdgeStyle>())
+            foreach (MovementStyle movement in Enum.GetValues<MovementStyle>())
+            {
+                Settings result = Apply(name, new Settings { EdgeStyle = edge, Movement = movement });
+                Assert.Equal(edge, result.EdgeStyle);
+                Assert.Equal(movement, result.Movement);
+            }
+    }
+
+    [Theory]
+    [MemberData(nameof(Names))]
     public void PresetReturnsValidatedSettings(string name)
     {
         foreach (Settings input in Inputs().Append(SettingsTestData.Messy()))

@@ -79,9 +79,9 @@ public sealed class CoreFactoryTests
         string[] expected =
         [
             "AnalyzerDiagnostics", "AnimationMode", "AppInfo", "AudioFeatures", "AudioTuning", "BatteryBehavior",
-            "ColorMode", "CoreFactory", "EdgeStyle", "IAudioAnalyzer", "ILightEngine", "IPaletteBlender",
-            "IPaletteExtractor", "ISettingsStore", "LightState", "MonitorSelection", "NowPlaying", "Palette", "Presets",
-            "Rgb", "Settings", "SilentBehavior",
+            "ColorMode", "CoreFactory", "EdgeStyle", "FlowMotion", "IAudioAnalyzer", "ILightEngine", "IPaletteBlender",
+            "IPaletteExtractor", "ISettingsStore", "LightState", "MonitorSelection", "MovementStyle", "NowPlaying",
+            "Palette", "Presets", "Rgb", "Ripple", "Settings", "SilentBehavior",
         ];
         string[] exported = typeof(CoreFactory).Assembly.GetExportedTypes().Select(t => t.Name).Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(expected, exported);

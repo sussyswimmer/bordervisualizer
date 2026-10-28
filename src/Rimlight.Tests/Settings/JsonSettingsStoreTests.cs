@@ -94,6 +94,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal(expected, names);
         Assert.Equal("IdleGlow", json.RootElement.GetProperty("animation").GetString());
         Assert.Equal("Hide", json.RootElement.GetProperty("whenSilent").GetString());
+        Assert.Equal("Pulse", json.RootElement.GetProperty("movement").GetString());
         Assert.Equal("Manual", json.RootElement.GetProperty("colorMode").GetString());
         Assert.Equal("Custom", json.RootElement.GetProperty("monitors").GetString());
         Assert.Equal("Pause", json.RootElement.GetProperty("onBattery").GetString());
@@ -117,6 +118,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal(1, root.GetProperty("brightness").GetDouble());
         Assert.Equal(0.25, root.GetProperty("sensitivity").GetDouble());
         Assert.Equal("Glow", root.GetProperty("edgeStyle").GetString());
+        Assert.Equal("Flow", root.GetProperty("movement").GetString());
         Assert.Equal(60, root.GetProperty("fpsCap").GetInt32());
         Assert.Equal("Ctrl+Alt+L", root.GetProperty("toggleHotkey").GetString());
         Assert.Equal(new[] { "A" }, root.GetProperty("customMonitorIds").EnumerateArray().Select(e => e.GetString()!));
@@ -226,6 +228,41 @@ public sealed class JsonSettingsStoreTests : IDisposable
     {
         dir.Create().Write(json);
         Assert.Equal(expected, new JsonSettingsStore(dir.Path).Load().EdgeStyle);
+        Assert.False(File.Exists(dir.BadFile));
+    }
+
+    [Fact]
+    public void MovementRoundTrips()
+    {
+        // The movement Maxwell asked for (H-033: light that "moves around and doesn't just bounce") is saved by name,
+        // right after whenSilent, and so is the old pulse.
+        foreach (MovementStyle movement in Enum.GetValues<MovementStyle>())
+        {
+            var store = new JsonSettingsStore(dir.Path);
+            store.Save(new Settings { Movement = movement });
+            using (JsonDocument json = JsonDocument.Parse(File.ReadAllBytes(dir.SettingsFile)))
+            {
+                Assert.Equal(movement.ToString(), json.RootElement.GetProperty("movement").GetString());
+                string[] names = json.RootElement.EnumerateObject().Select(p => p.Name).ToArray();
+                Assert.Equal(Array.IndexOf(names, "whenSilent") + 1, Array.IndexOf(names, "movement"));
+            }
+            Assert.Equal(movement, new JsonSettingsStore(dir.Path).Load().Movement);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{ "version": 1, "glow": 0.7 }""", MovementStyle.Flow)] // a file saved before Movement existed
+    [InlineData("""{ "movement": "Pulse" }""", MovementStyle.Pulse)]
+    [InlineData("""{ "MOVEMENT": "pulse" }""", MovementStyle.Pulse)]
+    [InlineData("""{ "movement": "Flow" }""", MovementStyle.Flow)]
+    [InlineData("""{ "movement": "Bounce" }""", MovementStyle.Flow)]  // an unknown name
+    [InlineData("""{ "movement": "Pulse, Flow" }""", MovementStyle.Flow)]
+    [InlineData("""{ "movement": 1 }""", MovementStyle.Flow)]        // enums are names, never numbers
+    [InlineData("""{ "movement": null }""", MovementStyle.Flow)]
+    public void AMissingOrUnknownMovementIsFlow(string json, MovementStyle expected)
+    {
+        dir.Create().Write(json);
+        Assert.Equal(expected, new JsonSettingsStore(dir.Path).Load().Movement);
         Assert.False(File.Exists(dir.BadFile));
     }
 

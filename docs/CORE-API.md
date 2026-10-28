@@ -19,10 +19,11 @@ This reference describes Core as of C13. It is derived from the code, its XML do
 | `Rgb` | record struct | One linear RGB color. |
 | `ILightEngine` | interface | Maps audio, palette and settings to a `LightState`, with every fade (doc 07 Phase 3, doc 01 §2). |
 | `LightState` | record struct | Everything the glow shader needs for one frame. |
+| `FlowMotion`, `Ripple` | record structs | The Flow movement's light for one frame: how much of it shows, where its comets are and the beats' ripples (`LightState.Flow`, §6.6). |
 | `Settings` | record | The doc 06 §1 settings model. |
 | `ISettingsStore` | interface | Loads and saves `settings.json`. |
 | `Presets` | static class | The five built-in looks. |
-| `AnimationMode`, `SilentBehavior`, `ColorMode`, `MonitorSelection`, `BatteryBehavior`, `EdgeStyle` | enums | Settings choices. |
+| `AnimationMode`, `SilentBehavior`, `MovementStyle`, `ColorMode`, `MonitorSelection`, `BatteryBehavior`, `EdgeStyle` | enums | Settings choices. |
 | `NowPlaying` | record | Media metadata. Platform's `NowPlayingService` fills it; Core never reads it. |
 | `AppInfo` | static class | `AppInfo.Name` = `"Rimlight"`, the one place Core spells the app name. |
 
@@ -45,7 +46,9 @@ This reference describes Core as of C13. It is derived from the code, its XML do
 | `EstimatedBpm` | Beats per minute, 0 while unknown. |
 | `CoreThicknessDip`, `CornerRadiusDip` | DIPs (1/96 inch). |
 | `LightState.Phase` | Cycles around the perimeter, in [0, 1). |
-| `Ratio`, `Spread`, `Intensity`, `Visibility` | 0..1. |
+| `FlowMotion.CometPhase`, `Ripple.Origin` | Fractions of the perimeter, in [0, 1), clockwise from the top-left corner, before `Phase` (the gradient's own coordinate). |
+| `Ripple.Radius` | Perimeters, 0 or more: how far each front has run from the origin. |
+| `Ratio`, `Spread`, `Intensity`, `Visibility`, `FlowMotion.Amount`, `Ripple.Strength` | 0..1. |
 
 ### Threading
 
@@ -239,7 +242,7 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 
 ## 6. Lighting: `ILightEngine`
 
-`LightState Update(float dtSeconds, in AudioFeatures audio, Palette palette, Settings settings, bool paused)` is called once per frame, with the palette last passed to `SetTarget`, the current settings snapshot and this engine's pause flag. The music's character reaches it only through `Level` and the graded `Beat` (§4.2). One update costs about 70 ns and allocates nothing.
+`LightState Update(float dtSeconds, in AudioFeatures audio, Palette palette, Settings settings, bool paused)` is called once per frame, with the palette last passed to `SetTarget`, the current settings snapshot and this engine's pause flag. The music's character reaches it only through `Level` and the graded `Beat` (§4.2). One update costs about 70 ns in the Pulse movement and about twice that in Flow (best of 40 runs on the Linux test machine: 50 ns before Flow existed, 63 ns Pulse, 97 ns Flow), and allocates nothing.
 
 ### 6.1 LightState
 
@@ -250,11 +253,12 @@ Defaults are doc 03's. Setting `IAudioAnalyzer.Tuning` validates the new value, 
 | `Intensity` | Music Sync: Brightness × (0.35 + 0.65 × Level). Idle Glow: Brightness × 0.9 × (1 + 0.1 sin(2π t / 6 s)), which breathes between 81 % and 99 % of Brightness. Between the two it crossfades (§6.2). **Excludes Visibility.** |
 | `Spread` | `Glow`, 0..1. The renderer maps it to pixels. |
 | `CoreThicknessDip` | `CoreThicknessDip`, clamped to 0..40. |
-| `Phase` | In [0, 1). It drifts 0.015 cycles/s, and each beat adds 0.01 cycles × the height `Beat` rises to, as a push that decays with τ = 120 ms (the same total at any frame rate). A beat is `Beat` rising by more than 0.1, re-armed once it falls; a rise that continues over the next frames adds its share. Both scale with the Music Sync weight, so Idle Glow has no drift. |
-| `Pulse` | `Beat` (the graded pulse), unsmoothed, times the Music Sync weight. |
+| `Phase` | In [0, 1). It drifts 0.015 cycles/s in Pulse and 0.04 + 0.06 × Level cycles/s in Flow (the colors stream round the edge; between the two it follows the Movement fade, §6.2), and each beat adds 0.01 cycles × the height `Beat` rises to, as a push that decays with τ = 120 ms (the same total at any frame rate). A beat is `Beat` rising by more than 0.1, re-armed once it falls; a rise that continues over the next frames adds its share. Both scale with the Music Sync weight, so Idle Glow has no drift. |
+| `Pulse` | `Beat` (the graded pulse), unsmoothed, times the Music Sync weight. In Flow it keeps 40 % of that (`Beat` × weight × (1 − 0.6 × the Movement fade)): the ripples carry the rest of the beat along the edge. |
 | `Visibility` | 0..1. Carries every fade (§6.2). |
+| `Flow` | The Flow movement's comets and ripples (§6.6). `default` (none: the whole edge lit evenly) whenever its amount is 0, which is always in Pulse and in Idle Glow. |
 
-**Intensity and Visibility (H-008 item 2, binding).** The renderer multiplies alpha by both. Undefined enum values act as the defaults. Non-finite settings use the `Settings` defaults (Brightness 0.8, Glow 0.45, PrimaryRatio 0.6, CoreThicknessDip 6). The engine never reads `Settings.Sensitivity` (H-007).
+**Intensity and Visibility (H-008 item 2, binding).** The renderer multiplies alpha by both. Undefined enum values act as the defaults (an undefined `Movement` as Flow). Non-finite settings use the `Settings` defaults (Brightness 0.8, Glow 0.45, PrimaryRatio 0.6, CoreThicknessDip 6). The engine never reads `Settings.Sensitivity` (H-007).
 
 ### 6.2 Fades
 
@@ -264,10 +268,11 @@ All fades are linear progress shown through smoothstep.
 |---|---|---|---|
 | Gate (Visibility) | `paused`, `Enabled = false`, `Animation = Off` | 300 ms | 300 ms |
 | Hide (Visibility) | Music Sync, `WhenSilent = Hide`, `IsSilent` | 1.5 s | Within 150 ms |
-| Music weight (Intensity, Pulse, drift) | Idle Glow mode, or Music Sync with `WhenSilent = IdleGlow` and `IsSilent` | 1.5 s to Idle Glow | Within 150 ms |
+| Music weight (Intensity, Pulse, drift, Flow amount) | Idle Glow mode, or Music Sync with `WhenSilent = IdleGlow` and `IsSilent` | 1.5 s to Idle Glow | Within 150 ms |
+| Movement (Flow amount, Pulse's share of the beat, drift) | `Movement` switched between Flow and Pulse | 300 ms | 300 ms |
 | Start | A new engine | — | 300 ms from Visibility 0 |
 
-A light that fades out keeps the look it had when the fade started (Music Sync, Idle Glow or a blend), and a closing gate freezes the other two fades, so nothing flashes. While the light is hidden, the hidden fades jump to their targets, so it reappears in the right state. For example, Idle Glow comes back as Idle Glow, not as a Music Sync look that then crossfades.
+A light that fades out keeps the look it had when the fade started (Music Sync, Idle Glow or a blend, Flow, Pulse or a blend), and a closing gate freezes the other fades, so nothing flashes. While the light is hidden, the hidden fades jump to their targets, so it reappears in the right state. For example, Idle Glow comes back as Idle Glow, not as a Music Sync look that then crossfades.
 
 ### 6.3 Time
 
@@ -279,13 +284,13 @@ A light that fades out keeps the look it had when the fade started (Music Sync, 
 
 ### 6.4 IsStatic, and what the render loop can rely on (H-011)
 
-`IsStatic` is true only while the light is hidden and stays hidden for the same inputs. That means the gate fade has finished (paused, disabled, Off), or in Music Sync with Hide, the silence fade has. It turns true on the second such `Update` in a row, so the frame that reaches Visibility 0 is still presented. It turns false on the very `Update` whose inputs can show the light, even with `dt = 0`. Those inputs are unpaused, enabled, a mode other than Off, `IsSilent` cleared, or `WhenSilent`/`Animation` no longer hiding silence. Palette, appearance fields, Level and Beat can't show the light, so they leave it true. Every visible state moves (Music Sync drifts, Idle Glow breathes), so `IsStatic` is never true while anything shows.
+`IsStatic` is true only while the light is hidden and stays hidden for the same inputs. That means the gate fade has finished (paused, disabled, Off), or in Music Sync with Hide, the silence fade has. It turns true on the second such `Update` in a row, so the frame that reaches Visibility 0 is still presented. It turns false on the very `Update` whose inputs can show the light, even with `dt = 0`. Those inputs are unpaused, enabled, a mode other than Off, `IsSilent` cleared, or `WhenSilent`/`Animation` no longer hiding silence. Palette, appearance fields, `Movement`, Level and Beat can't show the light, so they leave it true. While it is true the ripples are cleared and the comets stand still (a beat's unfinished push on them is dropped, like the colors'). Every visible state moves (Music Sync drifts, Idle Glow breathes), so `IsStatic` is never true while anything shows.
 
 The K3 render loop builds on four guarantees. `RenderLoopContractTests` checks each one through `CoreFactory`, the way K3 calls the engine.
 
 1. **Time alone changes nothing while static.** With the same inputs, any dt (0, 1/240, 0.1, 3600, NaN…) returns the first static state bit for bit. Calling a static engine at 10 Hz, at 60 fps or not at all changes nothing afterwards. Audio alone never wakes a gate-closed engine (Off, disabled, paused), so the loop may stop calling `Update` there until a settings or pause change. In Music Sync with Hide, keep calling it about 10 times a second with fresh audio. The first such poll that hears sound wakes the engine and is already above 0.5/255.
 2. **Hidden is exactly `Visibility == 0`.** Every fade-out lands on +0, never on a tiny positive value, and `IsStatic` follows on the next update. Values between 0 and 0.5/255 occur only during a fade: in at most the last 40 ms of a fade-out (0–38 ms measured) and the first 7.7 ms of a fade-in. Visibility never rests there.
-3. **Idle motion is slow.** Idle Glow changes at most about 0.094 × Brightness per second (0.0942 measured at Brightness 1; the test allows 0.1 × Brightness) in every field the pacer watches: Intensity, Visibility, Pulse, Spread, Ratio, thickness and phase. The silence → Idle Glow crossfade ends 1.5 s after the first `IsSilent` frame (1.500–1.510 s measured with ±20 % frame jitter), 0.25 s before K3 drops to 10 fps. From then on `Level` doesn't matter, `Pulse` is 0, and without new beats the phase is still.
+3. **Idle motion is slow.** Idle Glow changes at most about 0.094 × Brightness per second (0.0942 measured at Brightness 1; the test allows 0.1 × Brightness) in every field the pacer watches: Intensity, Visibility, Pulse, Spread, Ratio, thickness and phase. The silence → Idle Glow crossfade ends 1.5 s after the first `IsSilent` frame (1.500–1.510 s measured with ±20 % frame jitter), 0.25 s before K3 drops to 10 fps. From then on `Level` doesn't matter, `Pulse` is 0, `Flow` is none, and without new beats the phase is still. (In Flow the colors drift faster when the music is louder, so where the phase stopped depends on the Level during the crossfade; it no longer moves.)
 4. **dt after a gap.** Given one ordinary frame's dt after a gap, the fade that brings the light back starts on that frame, from its beginning. With frames longer than 1/60 s, the first step counts 1/60 s, so a 300 ms fade takes 317 ms at 30 fps. A long frame right after a very short wake frame doesn't skip into the fade either (§6.3). This happens at K3's start: its first frame comes microseconds after its loop starts, and the GPU setup that frame runs makes the next dt up to 0.25 s. The engine used to count 0.1 s of that, so the glow popped in at about 26 %.
    - **A render loop must not slow down on a fade-in's first frame.** Above about 130 Hz, the first frame of a 300 ms gate fade-in is still under 0.5/255: 1.6e-3 at 144 Hz, 5.7e-4 at 240 Hz. The windows stay hidden for that frame, and a loop that then waits 100 ms shows the glow 100 ms late. K3's `FramePacer` did that with native pacing on every unpause, enable or Off → on, and the glow then appeared at about 29 %. It now drops to 10 Hz with nothing on screen only while `Visibility` is exactly 0.
    - **Result.** The windows show from the first frame on which the fade has run 7.7 ms (the second frame at 144 Hz), and no frame raises Visibility by more than one full-rate frame of the smoothstep (0.083 at 60 Hz, 0.035 at 144 Hz). A scratch replay of `FramePacer` and `OverlayHost`'s dt rule against the engine showed this at 60–360 Hz, at start and on unpause. `RenderLoopContractTests.AShortWakeStepDoesNotLetALongOneJump` guards the engine side.
@@ -299,6 +304,20 @@ The K3 render loop builds on four guarantees. `RenderLoopContractTests` checks e
 
 The settings preview may own another engine and blender on the UI thread (H-017).
 
+### 6.6 The Flow movement (H-033)
+
+Maxwell, with a video of a screen edge whose light travels round it: "I want the rimlight to be like the video I sent where it moves around and doesn't just bounce". `Settings.Movement = Flow` (the default) makes the light travel round the edge three ways: two comets chase round it, the colors stream round it (§6.1 `Phase`), and each beat sends a ripple running both ways along it from one spot while the whole edge keeps 40 % of its pulse. `Movement = Pulse` is the light from before Flow, bit for bit: every field of every frame is what the engine gave before H-033 (`PulseMovementTests` replays varied input through a copy of that engine), and `Flow` is none. The engine only moves the comets and ripples; the renderers draw them (Platform's `GlowProfile` is the reference math, ported to `Glow.hlsl` and the Mac's `glow_math.h`).
+
+| `LightState.Flow` field | Value |
+|---|---|
+| `Amount` | The Movement fade (1 in Flow, 0 in Pulse, 300 ms between) × the Music Sync weight, smoothstep-eased: 0 in Idle Glow, fading with silence like Intensity. When it is 0 the whole `FlowMotion` is `default`, so the renderers compute nothing and Pulse's constants are exactly the old ones. |
+| `CometPhase` | In [0, 1), growing (counterclockwise, like the colors) at (0.04 + 0.16 × Level) × `Amount` laps a second: one lap in 25 s at Level 0, 0.2 laps a second at full loudness. Each beat pushes it 0.025 laps × `Amount` × the height `Beat` rises to, delivered like the colors' kick (τ = 120 ms, the same total at any frame rate). A value just below 1 that a float rounds up to 1 is reported as 0. |
+| `Ripple0`..`Ripple3` | The beats' ripples in fixed slots; a free slot is `default` (Strength 0). |
+
+**Ripples.** A beat (the same onset rule as the colors' kick: `Beat` rising by more than 0.1, re-armed once it falls) that arrives while `Amount` is above 0 starts a ripple in a free slot, or, with all four taken (a fast tempo), in the faintest one's (ties: the lowest slot). Its origin is 0.618034 of the perimeter on from the previous ripple's, the first at 0 (the golden ratio's fraction: never the same spot twice in a row, and over a song the beats land evenly all round). It starts at the height `Beat` reaches on that frame, and a rise that continues over the next frames (or on a `dt = 0` frame) raises it to the height reached; an older ripple is never raised. Each frame it ages by the step: `Radius` = 0.45 × age perimeters, `Strength` = that height × exp(−age / 0.4 s), and once `Strength` falls under 1/512 the slot is freed (2.4 s after a full beat). Ripples age in Pulse and Idle Glow too but don't start there, and hiding the light clears them.
+
+**Timing.** Everything moves with `dtSeconds` only (§6.3): comets, the colors and ripples land in the same place at any frame rate. Equal input sequences give bit-identical output.
+
 ## 7. Settings
 
 ### 7.1 The Settings record
@@ -311,6 +330,7 @@ The settings preview may own another engine and blender on the UI thread (H-017)
 | `Enabled` | true | |
 | `Animation` | MusicSync | MusicSync, IdleGlow, Off. |
 | `WhenSilent` | IdleGlow | IdleGlow, Hide. |
+| `Movement` | Flow | Flow (light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it), Pulse (the whole edge swells and brightens together on each beat, as before). Added at Maxwell's request (H-033). A file without it loads as Flow. The light engine reads it (§6.6). |
 | `ColorMode` | AlbumArt | AlbumArt, Manual. |
 | `OverrideAlbumColor` | false | |
 | `PrimaryHex` | `#7C5CFF` | `#RRGGBB` or `#RGB`, in either case, with surrounding whitespace ignored. Stored as upper-case `#RRGGBB`. Anything else (no `#`, alpha, names) becomes the default. |
@@ -359,6 +379,7 @@ The format is camelCase JSON with enums as names, indented, UTF-8 without a BOM,
   "enabled": true,
   "animation": "MusicSync",
   "whenSilent": "IdleGlow",
+  "movement": "Flow",
   "colorMode": "AlbumArt",
   "overrideAlbumColor": false,
   "primaryHex": "#7C5CFF",
@@ -386,7 +407,7 @@ The format is camelCase JSON with enums as names, indented, UTF-8 without a BOM,
 
 ### 7.3 Presets
 
-`Presets.All` is a read-only list of `(string Name, Func<Settings, Settings> Apply)` in menu order. Each `Apply` returns new, validated settings and throws `ArgumentNullException` for null. Every preset sets the same six appearance fields, sets `OverrideAlbumColor = true` and keeps `ColorMode`, so the look shows even in Album Art mode, and turning Override off brings the album colors back (H-009). Corner radius, the edge style and taskbar coverage are kept. Applying presets one after another gives the last one's look, except that Minimal's Idle Glow mode stays until the user changes the mode. For swatches, read the colors of `Apply(new Settings())`.
+`Presets.All` is a read-only list of `(string Name, Func<Settings, Settings> Apply)` in menu order. Each `Apply` returns new, validated settings and throws `ArgumentNullException` for null. Every preset sets the same six appearance fields, sets `OverrideAlbumColor = true` and keeps `ColorMode`, so the look shows even in Album Art mode, and turning Override off brings the album colors back (H-009). Corner radius, the edge style, the movement and taskbar coverage are kept. Applying presets one after another gives the last one's look, except that Minimal's Idle Glow mode stays until the user changes the mode. For swatches, read the colors of `Apply(new Settings())`.
 
 | Name | Primary | Secondary | Ratio | Core (DIP) | Glow | Brightness | Also |
 |---|---|---|---|---|---|---|---|
@@ -428,7 +449,8 @@ if (paletteChanged || wasAnimating || state.Ratio != filledRatio)
     paletteChanged = false;
     filledRatio = state.Ratio;
 }
-// Draw with state: alpha × Intensity × Visibility. Under 0.5/255, hide the window.
+// Draw with state: alpha × Intensity × Visibility, × the Flow motion when state.Flow.Amount > 0. Under 0.5/255,
+// hide the window.
 // Pace: blender.IsAnimating → full rate. engine.IsStatic → stop presenting: poll at 10 Hz in Music Sync,
 // otherwise wait for an input. Idle Glow → 10 fps. Visibility above 0 but hidden is a fade: keep its rate (§6.4).
 
