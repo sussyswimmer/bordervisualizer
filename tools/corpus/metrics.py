@@ -1,8 +1,14 @@
 """Compares wav-analyze --engine replays with the oracle annotations.
 
 Usage:
+  sh run_harness.sh <corpus dir> <run dir> --movement Pulse        (once per build)
   python -I metrics.py <corpus dir> <run dir> [<run dir> ...] [--json out.json] [--md out.md]
 Each run dir holds <id>.engine.csv per corpus track (run_harness.sh). Prints per-track and per-class tables.
+
+The measures read the Pulse column, so they describe the Pulse movement, where the whole edge swells on each beat:
+run the harness with --movement Pulse, as for the baselines in docs/PROGRESS.md (made before the Flow movement,
+H-033). In Flow, the app's default, the whole-edge pulse is 40 % of the beat and the ripples carry the rest round the
+edge, which the CSV leaves out: no pulse peak reaches a hit, and the size, depth and false-pulse measures shrink too.
 
 Definitions (times are the CSV's frame times: when the frame is computed, display not included):
   pulse peaks       local maxima of the Pulse column (the last frame of a rise), with their height.
@@ -20,8 +26,9 @@ Definitions (times are the CSV's frame times: when the frame is computed, displa
                     are those within 80 ms after a broadband (non-kick) onset of the oracle (voice, strums, snares).
   smoothness        Intensity resampled to a uniform 60 Hz grid: the share of its variance above 3 Hz (Welch), the
                     95th percentile of |dIntensity/dt| (per second), and pulse peaks >= 0.2 per minute. "Shown" is
-                    what the overlay draws before Visibility: SoftClip(Intensity x (1 + 0.25 x Pulse)) (Platform's
-                    GlowProfile.Gain), with the same measures.
+                    what the overlay draws before Visibility in the Pulse movement: SoftClip(Intensity x (1 + 0.25 x
+                    Pulse)) (Platform's GlowProfile.Gain, which in Flow also multiplies by 1 + 0.3 x the Flow
+                    amount), with the same measures.
   proportionality   Pearson r of Intensity against the short-term loudness (3 s, LUFS) relative to the track's loud
                     level (its 95th percentile), and of each hit's pulse size against the momentary loudness (400 ms)
                     at the kick; mean Intensity in loud sections / in quiet ones (mid when a track has no quiet one);
