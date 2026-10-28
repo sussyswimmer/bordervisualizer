@@ -227,9 +227,13 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
             Assert.Equal(drawn[i].Spread, frames[i].Spread);
             Assert.Equal(drawn[i].Visibility, frames[i].Visibility);
             Assert.Equal(drawn[i].Phase, frames[i].Phase);
+            Assert.Equal(drawn[i].Flow.Amount, frames[i].FlowAmount);
+            Assert.Equal(drawn[i].Flow.CometPhase, frames[i].CometPhase);
             Assert.Equal(Dt, frames[i].Dt);
             Assert.True(frames[i].FollowsMusic);
         }
+        Assert.True(frames[^1].FlowAmount > 0.5f, $"Flow amount {frames[^1].FlowAmount}"); // the default movement
+        Assert.NotEqual(frames[0].CometPhase, frames[^1].CometPhase); // its comets moved
         Assert.Equal(600 * (double)Dt, frames[^1].Time, 6);
         Assert.Equal(delivered, frames.Sum(f => (long)f.Samples)); // how many samples the analyzer drained, as counts
         // The analyzer's own numbers on the last frame: at 60 Hz every frame publishes a snapshot, so the last one has them.
@@ -402,6 +406,9 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
         Assert.Equal(AnalysisRecordingCsv.Header, lines.Single(l => !l.StartsWith('#') && l.StartsWith("time,", StringComparison.Ordinal)));
         Assert.Equal(RecordingCsv.Header, AnalysisRecordingCsv.Header); // the app writes what the tools read
         Assert.Equal(13 + 1 + 120, lines.Length); // the comments, the header row, one row per frame
+        // Frame 100's light: phase, then the Flow movement's amount and comet phase, then followsMusic.
+        Assert.EndsWith(",0.05000,0.2000,0.07000,1", lines[13 + 1 + 100], StringComparison.Ordinal);
+        Assert.Contains(lines, l => l.StartsWith("# columns: ", StringComparison.Ordinal) && l.Contains("flowAmount: how much of the Flow movement showed", StringComparison.Ordinal));
 
         // Changes during the recording: a device change, a Sensitivity slider, a tuning edit and the demo.
         RecordingSource atEnd = Source(settings with { Sensitivity = 0.5f }, new AudioTuning { Sensitivity = 0.5f, BeatDecaySeconds = 0.2f }, dropped: 3)
@@ -462,7 +469,7 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
         RecordedFrame[] frames = recording.Frames(recording.Count).ToArray();
         string csv = Write(new RecordingInfo("9.8.7", Started, Source(settings, new AudioTuning(), 0), Source(settings, new AudioTuning(), 0), RecordingEnd.Stopped), frames,
             CommaDecimals());
-        Assert.All(csv.Split('\n', StringSplitOptions.RemoveEmptyEntries).Where(l => !l.StartsWith('#')), l => Assert.Equal(17, l.Split(',').Length));
+        Assert.All(csv.Split('\n', StringSplitOptions.RemoveEmptyEntries).Where(l => !l.StartsWith('#')), l => Assert.Equal(19, l.Split(',').Length));
 
         Recording back = RecordingCsv.Read(new StringReader(csv), "test.csv");
 
@@ -488,9 +495,12 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
             Assert.Equal(f.Spread, r.Spread, 4);
             Assert.Equal(f.Visibility, r.Visibility, 4);
             Assert.Equal(f.Phase, r.Phase, 5);
+            Assert.Equal(f.FlowAmount, r.FlowAmount, 4);
+            Assert.Equal(f.CometPhase, r.CometPhase, 5);
             Assert.Equal(f.FollowsMusic, r.FollowsMusic);
         }
         Assert.Contains(back.Rows, r => !r.FollowsMusic); // the paused stretch
+        Assert.Contains(back.Rows, r => r.FlowAmount > 0.5f); // the default movement, Flow
         Assert.Equal("Rimlight 9.8.7", back.Comment("app"));
         Assert.Equal("off", back.Comment("demo"));
 
@@ -526,7 +536,10 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
     private static bool Append(AnalysisRecording recording, int i, float dt = Dt)
     {
         var features = new AudioFeatures(i * 1e-3f, i * 2e-3f, i * 3e-3f, i % 2 == 0);
-        var light = new LightState(new Rgb(1, 0, 0), new Rgb(0, 0, 1), 0.6f, i * 4e-3f, 0.45f, 6, i * 5e-4f, i * 5e-3f, 1);
+        var light = new LightState(new Rgb(1, 0, 0), new Rgb(0, 0, 1), 0.6f, i * 4e-3f, 0.45f, 6, i * 5e-4f, i * 5e-3f, 1)
+        {
+            Flow = new FlowMotion(i * 2e-3f, i * 7e-4f, default, default, default, default),
+        };
         return recording.Append(dt, i * 10, in features, i, i * 0.5f, i * 0.25f, 120, in light, i % 3 != 0);
     }
 
@@ -534,7 +547,8 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
     {
         if (frame.BeatCount == i && frame.Samples == i * 10 && frame.Features.Level == i * 1e-3f && frame.Features.Beat == i * 3e-3f
             && frame.Features.IsSilent == (i % 2 == 0) && frame.Flux == i * 0.5f && frame.Threshold == i * 0.25f && frame.Bpm == 120
-            && frame.Intensity == i * 4e-3f && frame.Pulse == i * 5e-3f && frame.Phase == i * 5e-4f && frame.FollowsMusic == (i % 3 != 0))
+            && frame.Intensity == i * 4e-3f && frame.Pulse == i * 5e-3f && frame.Phase == i * 5e-4f
+            && frame.FlowAmount == i * 2e-3f && frame.CometPhase == i * 7e-4f && frame.FollowsMusic == (i % 3 != 0))
             return;
         Assert.Fail($"Frame {i} is not whole: {frame}");
     }

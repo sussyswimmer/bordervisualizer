@@ -24,6 +24,11 @@ namespace Rimlight.AudioTools;
 /// <param name="Spread">The light state's Spread; NaN without light columns.</param>
 /// <param name="Visibility">The light state's Visibility; NaN without light columns.</param>
 /// <param name="Phase">The light state's Phase; NaN without light columns.</param>
+/// <param name="FlowAmount">
+/// How much of the Flow movement showed, 0..1; 0 when the file has no flowAmount column (one from before the Flow
+/// movement, when the whole edge pulsed).
+/// </param>
+/// <param name="CometPhase">Where the Flow movement's comets were, 0..1; 0 without a cometPhase column.</param>
 /// <param name="FollowsMusic">Whether the light engine got this audio (music sync, glow on, not paused, no demo).</param>
 public readonly record struct RecordingRow(
     double Time,
@@ -39,6 +44,8 @@ public readonly record struct RecordingRow(
     float Spread,
     float Visibility,
     float Phase,
+    float FlowAmount,
+    float CometPhase,
     bool FollowsMusic);
 
 /// <summary>A recording read back by <see cref="RecordingCsv"/>: its header comments and its rows.</summary>
@@ -102,7 +109,8 @@ public static class RecordingCsv
 {
     /// <summary>The header row the app writes (a test keeps it equal to the app's).</summary>
     public const string Header =
-        "time,dt,samples,level,bass,beat,isSilent,beatCount,flux,threshold,bpm,intensity,pulse,spread,visibility,phase,followsMusic";
+        "time,dt,samples,level,bass,beat,isSilent,beatCount,flux,threshold,bpm,intensity,pulse,spread,visibility,phase,"
+        + "flowAmount,cometPhase,followsMusic";
 
     /// <summary>
     /// The columns a file must have: what the plot draws and where the beats are. A CSV that wav-analyze writes has no
@@ -180,6 +188,8 @@ public static class RecordingCsv
                 row.Single("spread", float.NaN),
                 row.Single("visibility", float.NaN),
                 row.Single("phase", float.NaN),
+                row.Single("flowAmount", 0),
+                row.Single("cometPhase", 0),
                 row.Flag("followsMusic", true)));
             lastTime = time;
         }
