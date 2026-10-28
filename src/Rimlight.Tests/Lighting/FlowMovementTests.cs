@@ -394,19 +394,30 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(MovementStyle.Flow, MovementStyle.Pulse)]
-    [InlineData(MovementStyle.Pulse, MovementStyle.Flow)]
-    public void AMovementChangedWhileHiddenIsThereWhenTheLightReturns(MovementStyle from, MovementStyle to)
+    [InlineData(MovementStyle.Flow, MovementStyle.Pulse, false)]
+    [InlineData(MovementStyle.Pulse, MovementStyle.Flow, false)]
+    [InlineData(MovementStyle.Flow, MovementStyle.Pulse, true)]
+    [InlineData(MovementStyle.Pulse, MovementStyle.Flow, true)]
+    public void AMovementChangedWhileHiddenIsThereWhenTheLightReturns(MovementStyle from, MovementStyle to, bool silentHide)
     {
-        // Nothing shows, so nothing needs a crossfade: the light fades back in with the new movement in full, and
-        // changing it keeps a hidden engine static.
-        Settings before = Flow with { Movement = from }, after = Flow with { Movement = to };
+        // Nothing shows, so nothing needs a crossfade: the light comes back with the new movement in full, and changing
+        // it keeps a hidden engine static, whether a pause or silence (WhenSilent = Hide) hid it. Silence leaves the
+        // gate open, so that case checks the movement's own rule for a hidden light, not the gate's.
+        Settings before = Flow with { Movement = from, WhenSilent = silentHide ? SilentBehavior.Hide : SilentBehavior.IdleGlow };
+        Settings after = before with { Movement = to };
+        AudioFeatures hiddenAudio = silentHide ? Silent : Loud;
+        bool hiddenPaused = !silentHide;
         var engine = Settled(before, Loud);
-        Frames(engine, 30, Loud, before, paused: true);
+        Frames(engine, silentHide ? 100 : 30, hiddenAudio, before, hiddenPaused);
         Assert.True(engine.IsStatic);
-        LightState hidden = engine.Update(Dt, Loud, Palette.Default, after, true);
+        LightState hidden = engine.Update(Dt, hiddenAudio, Palette.Default, after, hiddenPaused);
         Assert.True(engine.IsStatic);
         Assert.Equal(0f, hidden.Visibility);
+        foreach (float dt in new[] { 0f, Dt, Dt, 3600f })
+        {
+            Assert.Equal(hidden, engine.Update(dt, hiddenAudio, Palette.Default, after, hiddenPaused));
+            Assert.True(engine.IsStatic);
+        }
         foreach (LightState state in Frames(engine, 18, Loud with { Beat = 0.5f }, after))
         {
             Assert.Equal(to == MovementStyle.Flow ? 1f : 0f, state.Flow.Amount);
