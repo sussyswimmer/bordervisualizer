@@ -237,22 +237,23 @@ final class GlowMathTests: XCTestCase {
         }
     }
 
-    func testTheMotionDimsTheEdgeBetweenTheCometsAndBlendsToItsMeanDeepInside() throws {
+    func testTheMotionDimsTheEdgeAwayFromTheCometAndBlendsToItsMeanDeepInside() throws {
         let golden = try XCTUnwrap(Self.golden().cases.first { $0.name == "flow-glow-1080p-half" })
         var k = Self.constants(golden.constants)
         k.flowAmount = 1
         k.cometPhase = 0
         k.ripples = (RlGlowRipple(), RlGlowRipple(), RlGlowRipple(), RlGlowRipple())
-        // At the edge: 1 at a comet's head (t 0, the top-left corner), and near the floor of 0.5 at the end of its
-        // tail, just before the next head (t 0.5).
+        // At the edge: 1 at the comet's head (t 0, the top-left corner), still above a quarter of it half way round
+        // its tail, and near the floor of 0.1 at the tail's end, just before it comes round to the head again.
         XCTAssertEqual(gm_motion_at(k, 0, 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(gm_motion_at(k, 0.47, 0), 0.5, accuracy: 0.02)
-        // Deep inside it is the mean, wherever the comets are.
-        XCTAssertEqual(gm_motion_at(k, 0, 1), 0.62886227, accuracy: 1e-6)
-        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 0.62886227, accuracy: 1e-6)
+        XCTAssertGreaterThan(gm_motion_at(k, 0.47, 0), 0.25)
+        XCTAssertEqual(gm_motion_at(k, 0.9, 0), 0.15, accuracy: 0.02)
+        // Deep inside it is the mean, wherever the comet is.
+        XCTAssertEqual(gm_motion_at(k, 0, 1), 0.38429615, accuracy: 1e-6)
+        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 0.38429615, accuracy: 1e-6)
         // Half the amount is half way to 1.
         k.flowAmount = 0.5
-        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 1 - 0.5 * (1 - 0.62886227), accuracy: 1e-6)
+        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 1 - 0.5 * (1 - 0.38429615), accuracy: 1e-6)
     }
 
     func testThePerimeterRunsClockwiseFromTheTopLeftCorner() {
