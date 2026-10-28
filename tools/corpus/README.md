@@ -17,11 +17,13 @@ python3 -m venv ~/rimlight-venv && ~/rimlight-venv/bin/pip install -r tools/corp
 ~/rimlight-venv/bin/python -I tools/corpus/fetch.py ~/rimlight-corpus     # about 320 MB of WAV, plus the MP3s
 ~/rimlight-venv/bin/python -I tools/corpus/oracle.py ~/rimlight-corpus    # HPSS needs 2–3 GB of memory
 dotnet build tools/wav-analyze -c Release
-sh tools/corpus/run_harness.sh ~/rimlight-corpus ~/rimlight-runs/now
+sh tools/corpus/run_harness.sh ~/rimlight-corpus ~/rimlight-runs/now --movement Pulse
 ~/rimlight-venv/bin/python -I tools/corpus/metrics.py ~/rimlight-corpus ~/rimlight-runs/now --md now.md
 ```
 
 To compare builds, build each one into its own folder, point `WAV_ANALYZE` at that folder's `wav-analyze.dll`, write each run to its own folder, and pass all the run folders to `metrics.py`. `run_harness.sh` passes any extra options on to wav-analyze, for example `--tuning params.json` or `--sensitivity 0.5`.
+
+The pulse measures (hits, pulse size, false pulses, bounce depth, "Shown") describe the Pulse movement, where the whole edge swells on each beat, so every run passes `--movement Pulse`, as the baselines in `docs/PROGRESS.md` were made. In Flow, the app's default since H-033, the whole-edge pulse is only 40 % of the beat and the ripples carry the rest round the edge, which the CSV leaves out: no pulse reaches a hit (0.5), so the hit rate would read 0 %. A build from before the Flow movement has only Pulse and rejects `--movement`, so leave the option out when `WAV_ANALYZE` points at one.
 
 ## Results
 
