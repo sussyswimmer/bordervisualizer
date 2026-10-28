@@ -48,6 +48,10 @@ internal partial class MotionPage : UserControl, ISettingsPage
         bool pulse = settings.Movement == MovementStyle.Pulse; // anything else is Flow, the default
         FlowChoice.IsChecked = !pulse;
         PulseChoice.IsChecked = pulse;
+        FlowChoice.IsEnabled = PulseChoice.IsEnabled = settings.Animation == AnimationMode.MusicSync;
+        MovementDescription.Text = settings.Animation == AnimationMode.MusicSync
+            ? "How the light moves with the music."
+            : "Only matters in Music Sync.";
         WhenSilentBox.SelectedIndex = settings.WhenSilent == SilentBehavior.Hide ? 1 : 0;
         WhenSilentBox.IsEnabled = settings.Animation == AnimationMode.MusicSync;
         WhenSilentDescription.Text = settings.Animation == AnimationMode.MusicSync
