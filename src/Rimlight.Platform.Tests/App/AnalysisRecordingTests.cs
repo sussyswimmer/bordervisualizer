@@ -389,7 +389,7 @@ public sealed class AnalysisRecordingTests(ITestOutputHelper output) : IDisposab
         Assert.Contains("# ended: when Stop was clicked", lines);
         Assert.Contains(lines, l => l.StartsWith("# frameRate: 60.00 frames a second, measured; fpsCap=60 ", StringComparison.Ordinal));
         Assert.Contains("# capture: 48000 Hz, 2 ch, 32-bit float, captured at 48000 Hz, analyzed at 48000 Hz; 12 samples dropped during the recording", lines);
-        Assert.Contains("# settings: enabled=true animation=MusicSync whenSilent=IdleGlow brightness=0.9 glow=0.45 coreThicknessDip=6 "
+        Assert.Contains("# settings: enabled=true animation=MusicSync whenSilent=IdleGlow movement=Flow brightness=0.9 glow=0.45 coreThicknessDip=6 "
             + "cornerRadiusDip=0 edgeStyle=Glow primaryRatio=0.6 sensitivity=1.5 fpsCap=60 onBattery=Reduce "
             + "pauseInFullscreen=true", lines);
         string tuning = lines.Single(l => l.StartsWith("# tuning: ", StringComparison.Ordinal))["# tuning: ".Length..];

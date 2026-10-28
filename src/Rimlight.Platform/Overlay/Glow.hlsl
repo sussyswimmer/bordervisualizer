@@ -38,7 +38,9 @@ cbuffer Light : register(b0)
 Texture2D<float4> Gradient : register(t0);
 SamplerState GradientSampler : register(s0);
 
-static const float HalfPi = 1.5707963;
+// GlowProfile's MathF.PI / 2 to the bit (1.5707963 would round to the float below it, moving the perimeter coordinate,
+// and so the Flow movement's comets, by an ulp against the reference).
+static const float HalfPi = 1.57079637;
 
 // The Flow movement's shape (GlowProfile's constants of the same names; GlowShaderTests compares them).
 // Lengths are in perimeters.
