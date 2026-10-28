@@ -165,12 +165,15 @@ internal struct GlowConstants : IEquatable<GlowConstants>
         NotchLeftPx == other.NotchLeftPx && NotchRightPx == other.NotchRightPx &&
         NotchHeightPx == other.NotchHeightPx && NotchRadiusPx == other.NotchRadiusPx;
 
-    // The Flow movement draws the same light: as much of it, its comets within a pixel or so, and each ripple as
+    // The Flow movement draws the same light: as much of it, and either too little on both to see (the motion then
+    // moves the alpha by at most half the amount, under a quarter of a code value, so the comets and ripples don't
+    // matter: the engine drops them once the amount reaches 0) or its comets within a pixel or so and each ripple as
     // bright (none on both, or the same one within a pixel or so of where it was).
     private readonly bool FlowLooksLike(in GlowConstants other) =>
-        Near(FlowAmount, other.FlowAmount) && PhaseNear(CometPhase, other.CometPhase) &&
-        Ripple0.LooksLike(other.Ripple0) && Ripple1.LooksLike(other.Ripple1) && Ripple2.LooksLike(other.Ripple2) &&
-        Ripple3.LooksLike(other.Ripple3);
+        Near(FlowAmount, other.FlowAmount) &&
+        (FlowAmount <= ValueTolerance && other.FlowAmount <= ValueTolerance ||
+         PhaseNear(CometPhase, other.CometPhase) && Ripple0.LooksLike(other.Ripple0) &&
+         Ripple1.LooksLike(other.Ripple1) && Ripple2.LooksLike(other.Ripple2) && Ripple3.LooksLike(other.Ripple3));
 
     private static float Finite(float value) => float.IsFinite(value) ? value : 0;
 

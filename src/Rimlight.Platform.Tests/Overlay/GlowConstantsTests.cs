@@ -290,6 +290,25 @@ public sealed class GlowConstantsTests
         Assert.True(a.LooksLike(empty));
     }
 
+    [Fact]
+    public void AFlowTooFaintToSeeLooksTheSameWhereverItsCometsAndRipplesAre()
+    {
+        // The last frames of a fade to Idle Glow: the amount is under half a code value, then the engine drops the
+        // comets and ripples (default). The motion moves the alpha by at most half the amount, so none of it shows
+        // and nothing needs presenting.
+        var fading = new FlowMotion(0.4f / 255, 0.319f, new Ripple(0.2f, 0.3f, 0.4f), default, default, default);
+        GlowConstants last = GlowConstants.Create(State with { Flow = fading }, 1920, 1080, 1, 1, 0, Mean);
+        GlowConstants none = GlowConstants.Create(State with { Flow = default }, 1920, 1080, 1, 1, 0, Mean);
+        Assert.True(last.LooksLike(none));
+        Assert.True(none.LooksLike(last));
+        Assert.False(last.Equals(none));
+
+        // As soon as either amount can be seen, the comets and ripples count again.
+        GlowConstants visible = last;
+        visible.FlowAmount = 1f / 255;
+        Assert.False(visible.LooksLike(none with { FlowAmount = 1f / 255 }));
+    }
+
     [Theory]
     [InlineData(1920, 1080, 1f, 0f, 6f)]
     [InlineData(2560, 1440, 1.25f, 12f, 0f)]
