@@ -155,9 +155,9 @@ GM_FN float gm_quarter_angle(float y, float x) {
 // Glow.hlsl's PerimeterT: arc length clockwise along a rounded rectangle with corner radius r, starting at the
 // top-left corner (the middle of its arc), as a fraction of the perimeter in [0, 1).
 GM_FN float gm_perimeter_t(float px, float py, float sx, float sy, float r) {
-    // GlowProfile's MathF.PI / 2 to the bit. Glow.hlsl's 1.5707963 rounds to the float below it, which moves t by an
-    // ulp: invisible in the colour, but the Flow movement's comet heads are steep enough in t for the golden table to
-    // see it.
+    // GlowProfile's MathF.PI / 2 to the bit, as in Glow.hlsl. 1.5707963 would round to the float below it and move t
+    // by an ulp: invisible in the colour, but the Flow movement's comet heads are steep enough in t for the golden
+    // table to see it.
     const float halfPi = 1.57079637f;
     float topLen = sx - 2.0f * r;
     float sideLen = sy - 2.0f * r;
