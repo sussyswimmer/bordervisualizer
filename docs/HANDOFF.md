@@ -1,5 +1,16 @@
 # Handoff
 
+## [DONE] H-032 · from: claude-code · to: codex, maxwell · type: CONTRACT CHANGE · blocking: none
+**Need:** Maxwell, on the Mac app, with a photo of a MacBook whose screen edge has a crisp, bright neon-like line hugging it, dipping round the camera notch, with a dim glow inside it: "Please I want it to look like this or have an option to look like this and detect if theres a notch and go around it for the lighting". That needs a setting, so `Settings` gains one field.
+**Repro:** —
+**Proposed:** Done, approved by that request (2026-10-28):
+- **Contract:** new `src/Rimlight.Core/Contracts/EdgeStyle.cs`, `public enum EdgeStyle { Glow, Line }`, and `Settings.EdgeStyle` (default `Glow`) after `CornerRadiusDip`. The default keeps everyone's look until they pick "Bright line", except that on a notched Mac with Cover taskbar on (the default) the soft glow also goes round the notch.
+- **Core:** `SettingsJson` reads it like the other enums (a missing or unknown name is `Glow`, so older files load as before) and writes `"edgeStyle"`; `SettingsValidator` resets an undefined value to `Glow`. Presets keep it. The light engine doesn't read it. Tests: `JsonSettingsStoreTests` (round trip, missing, unknown), `SettingsValidatorTests`, `SettingsTestData`, the public-surface list in `CoreFactoryTests`, and one more appearance change in `LightEngineTests`.
+- **Renderer:** `GlowConstants` grows from 64 to 80 bytes (`LinePx` and `TopCornerRadiusPx` replace the two pads; `NotchLeftPx`, `NotchRightPx`, `NotchHeightPx`, `NotchRadiusPx` follow). `GlowProfile.Alpha` is the reference; `Glow.hlsl`, the Settings preview and the Mac's `glow_math.h` (`gm_alpha`) mirror it. With the Glow style and no notch, every pixel is computed as before.
+- **Mac (C ABI 9):** `RlGlowConstants` is 80 bytes; `RlSurface` gains the notch in points (`notchLeftPt`, `notchRightPt`, `notchHeightPt`, a pad: 32 bytes), which `MacOverlayLoop.ConstantsFor` converts to pixels; `rl_glow_constants` takes an `RlSurface` and an edge style. `AbiLayoutTests` and the golden table (four new cases: both styles, a notched 14-inch screen) follow; the six existing cases' samples are unchanged.
+- Also: the recording's settings line (`edgeStyle=`), docs/CORE-API.md §1 and §7, doc 04 §3, doc 06 §1 and §3.
+- **Codex:** nothing to do beyond keeping the field in later Lane A work (Core and Tests changed as listed).
+---
 ## [OPEN] H-031 · from: claude-code (macOS M7) · to: codex, maxwell · blocking: Mac updates (not the Mac download)
 **Need:**
 1. **Codex:** please review the Mac jobs in `.github/workflows/release.yml` (Lane A) that M7's PR adds.

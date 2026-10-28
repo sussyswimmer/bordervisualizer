@@ -292,15 +292,17 @@ internal static unsafe partial class Exports
     }
 
     // The shared constants math alone, for the glow parity tests (10-MACOS §1.4): GlowConstants.Create for a light
-    // state on a surface, as the loop computes it.
+    // state on a surface (its notch included) in an edge style (0 Glow, 1 Line), exactly as the loop computes it
+    // (MacOverlayLoop.ConstantsFor). The surface's Paused is ignored.
     [UnmanagedCallersOnly(EntryPoint = "rl_glow_constants")]
-    public static int GlowConstantsFor(LightState* state, int widthPx, int heightPx, float pixelsPerPoint,
-        float renderScale, float cornerRadiusDip, Rgb* meanColor, GlowConstants* constants)
+    public static int GlowConstantsFor(LightState* state, SurfaceInfo* surface, float cornerRadiusDip, int edgeStyle,
+        Rgb* meanColor, GlowConstants* constants)
     {
         try
         {
-            if (state == null || meanColor == null || constants == null) return NativeStatus.InvalidArgument;
-            *constants = GlowConstants.Create(*state, widthPx, heightPx, pixelsPerPoint, renderScale, cornerRadiusDip,
+            if (state == null || surface == null || meanColor == null || constants == null)
+                return NativeStatus.InvalidArgument;
+            *constants = MacOverlayLoop.ConstantsFor(*state, *surface, cornerRadiusDip, (EdgeStyle)edgeStyle,
                 *meanColor);
             return NativeStatus.Ok;
         }

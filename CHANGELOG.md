@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-28
+
+### Added
+
+- **Bright line edge style.** **Settings > Appearance > Edge** now offers **Bright line**: a crisp, bright line along the very edge of the screen, with a dimmer glow inside it. Thickness sets how wide the line is. **Soft glow** stays the default, so nothing else changes until you pick it (on a Mac with a notch, the soft glow also goes around the notch, below). On Windows and Mac.
+- **Mac: the light goes around the notch.** On a MacBook with a camera notch, the glow and the bright line go down, along and back up around it while they cover the menu bar (the default). The bright line also follows the screen's rounded top corners.
+
 ## [1.0.2] - 2026-10-23
 
 ### Fixed
@@ -52,7 +59,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Black-and-white covers give a white glow.** A black-and-white cover now glows soft white and grey, not blue, even when its black and white lean a little blue. A black cover with white text no longer falls back to your own colors; only a blank cover, or none, does.
 - **Settings says why it can't open.** If the Settings window, one of its pages or the visualizer can't open, a message says what went wrong and offers to open the logs folder (`%APPDATA%\Rimlight\logs`). Before, the welcome window could show up in its place, or nothing at all.
 
-[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/sussyswimmer/bordervisualizer/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/sussyswimmer/bordervisualizer/releases/tag/v1.0.0

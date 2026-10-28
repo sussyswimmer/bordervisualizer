@@ -333,7 +333,7 @@ internal sealed class OverlayLoopModel
     private GlowConstants Constants(in LightState state, ModelOverlay overlay, float visibility)
     {
         GlowConstants constants = GlowConstants.Create(state, overlay.BufferWidth, overlay.BufferHeight, overlay.Scale,
-            overlay.RenderScale, applied!.CornerRadiusDip, meanColor);
+            overlay.RenderScale, applied!.CornerRadiusDip, meanColor, applied!.EdgeStyle);
         constants.Visibility = visibility;
         return constants;
     }

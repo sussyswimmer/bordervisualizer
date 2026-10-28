@@ -97,6 +97,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal("Manual", json.RootElement.GetProperty("colorMode").GetString());
         Assert.Equal("Custom", json.RootElement.GetProperty("monitors").GetString());
         Assert.Equal("Pause", json.RootElement.GetProperty("onBattery").GetString());
+        Assert.Equal("Line", json.RootElement.GetProperty("edgeStyle").GetString());
         Assert.Equal(0.9, json.RootElement.GetProperty("glow").GetDouble(), 6);
         Assert.Equal(JsonValueKind.Array, json.RootElement.GetProperty("customMonitorIds").ValueKind);
     }
@@ -115,6 +116,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal(0.45, root.GetProperty("glow").GetDouble(), 6);
         Assert.Equal(1, root.GetProperty("brightness").GetDouble());
         Assert.Equal(0.25, root.GetProperty("sensitivity").GetDouble());
+        Assert.Equal("Glow", root.GetProperty("edgeStyle").GetString());
         Assert.Equal(60, root.GetProperty("fpsCap").GetInt32());
         Assert.Equal("Ctrl+Alt+L", root.GetProperty("toggleHotkey").GetString());
         Assert.Equal(new[] { "A" }, root.GetProperty("customMonitorIds").EnumerateArray().Select(e => e.GetString()!));
@@ -195,6 +197,35 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.Equal(0.3f, loaded.Brightness);
         Assert.Equal(ColorMode.Manual, loaded.ColorMode);
         Assert.False(loaded.AutoUpdate);
+        Assert.False(File.Exists(dir.BadFile));
+    }
+
+    [Fact]
+    public void EdgeStyleRoundTrips()
+    {
+        // The edge style Maxwell asked for ("a bright line along the edge, round the notch") is saved by name.
+        foreach (EdgeStyle style in Enum.GetValues<EdgeStyle>())
+        {
+            var store = new JsonSettingsStore(dir.Path);
+            store.Save(new Settings { EdgeStyle = style });
+            using (JsonDocument json = JsonDocument.Parse(File.ReadAllBytes(dir.SettingsFile)))
+                Assert.Equal(style.ToString(), json.RootElement.GetProperty("edgeStyle").GetString());
+            Assert.Equal(style, new JsonSettingsStore(dir.Path).Load().EdgeStyle);
+        }
+    }
+
+    [Theory]
+    [InlineData("""{ "version": 1, "glow": 0.7 }""", EdgeStyle.Glow)] // a file saved before the edge style existed
+    [InlineData("""{ "edgeStyle": "Line" }""", EdgeStyle.Line)]
+    [InlineData("""{ "EDGESTYLE": "line" }""", EdgeStyle.Line)]
+    [InlineData("""{ "edgeStyle": "Neon" }""", EdgeStyle.Glow)]    // an unknown name
+    [InlineData("""{ "edgeStyle": "Line, Glow" }""", EdgeStyle.Glow)]
+    [InlineData("""{ "edgeStyle": 1 }""", EdgeStyle.Glow)]         // enums are names, never numbers
+    [InlineData("""{ "edgeStyle": null }""", EdgeStyle.Glow)]
+    public void AMissingOrUnknownEdgeStyleIsTheSoftGlow(string json, EdgeStyle expected)
+    {
+        dir.Create().Write(json);
+        Assert.Equal(expected, new JsonSettingsStore(dir.Path).Load().EdgeStyle);
         Assert.False(File.Exists(dir.BadFile));
     }
 

@@ -5,7 +5,8 @@ import XCTest
 @testable import RimlightKit
 
 /// Glow.metal on the GPU against glow_math.h on the CPU (docs/10-MACOS.md §1.4): renders the golden cases offscreen
-/// and compares each pixel's alpha. Skipped where the machine has no Metal device.
+/// (both edge styles, and a notch shrunk with the surface) and compares each pixel's alpha. Skipped where the machine
+/// has no Metal device.
 final class GlowGpuTests: XCTestCase {
     func testTheShaderDrawsTheProfile() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device on this machine") }
@@ -16,12 +17,13 @@ final class GlowGpuTests: XCTestCase {
 
         let width = 320, height = 180
         for c in try GlowMathTests.golden().cases {
-            // The case's light state on a small surface, so the whole profile fits.
+            // The case's light state, edge style and notch on a small surface, so the whole profile fits.
             var state = GlowMathTests.lightState(c.state)
+            var surface = GlowMathTests.surface(c.surface, width: Int32(width), height: Int32(height))
             var mean = RlRgb(r: c.mean[0], g: c.mean[1], b: c.mean[2])
             var k = RlGlowConstants()
-            XCTAssertEqual(rl_glow_constants(&state, Int32(width), Int32(height), c.surface.pixelsPerPoint, 1,
-                                             c.surface.cornerRadiusDip, &mean, &k), RL_OK)
+            XCTAssertEqual(rl_glow_constants(&state, &surface, c.surface.cornerRadiusDip,
+                                             GlowMathTests.edgeStyle(c.edgeStyle), &mean, &k), RL_OK)
 
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width,
                                                                       height: height, mipmapped: false)

@@ -413,6 +413,257 @@ public sealed class GlowProfileTests
         Assert.Equal(540f, GlowProfile.GlowRadius(0, 380, 40, 540));
     }
 
+    [Theory]
+    [MemberData(nameof(Surfaces))]
+    public void AlphaIsTheGlowAsBeforeInTheGlowStyleWithoutANotch(int width, int height, float dpi, bool half)
+    {
+        // GlowProfile.Alpha, which the shader and the Mac mirror, draws the Glow style without a notch bit for bit as
+        // before the Line style: GlowProfile.Glow through the rounded field, times the gain and Visibility.
+        foreach (float thickness in new[] { 0f, 6, 40 })
+            foreach (float glow in new[] { 0f, 0.45f, 1 })
+            {
+                GlowConstants c = Surface(width, height, dpi, half, thickness, glow, 0.8f, 0.6f);
+                c.Visibility = 0.7f;
+                float shoulder = GlowProfile.PulsedShoulder(c.ShoulderPx, c.Pulse);
+                float spread = GlowProfile.PulsedSpread(c.SpreadPx, c.Pulse);
+                for (float x = 0.5f; x < c.ScreenWidthPx; x += 37)
+                    for (float y = 0.5f; y < c.ScreenHeightPx; y += 23)
+                    {
+                        float depth = GlowProfile.Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.GlowRadiusPx);
+                        float before = GlowProfile.Glow(depth, shoulder, spread) * c.Gain * c.Visibility;
+                        Assert.Equal(before, GlowProfile.Alpha(c, x, y));
+                    }
+            }
+    }
+
+    [Theory]
+    [MemberData(nameof(Surfaces))]
+    public void TheLineIsTheEdgeAtFullGainAndTheHaloCarriesOnPastIt(int width, int height, float dpi, bool half)
+    {
+        // Maxwell's request (the Line style): a bright line along the very edge, with a dimmer glow inside it. Across
+        // the line the light is the full gain; past its width plus the softness only the halo is left, HaloPeak at most
+        // and fading as the glow does; the light never brightens going in.
+        foreach (float thickness in Thicknesses)
+            foreach (float glow in Glows)
+                foreach ((float intensity, float pulse) in new[] { (0.72f, 0f), (0.8f, 1f), (1f, 1f) })
+                {
+                    GlowConstants c = LineSurface(width, height, dpi, half, thickness, glow, intensity, pulse);
+                    string what = Describe(width, height, dpi, half, thickness, glow, intensity, pulse) + ", Line";
+                    float full = c.Gain * c.Visibility;
+                    float y = 0.5f * c.ScreenHeightPx;
+                    float shoulder = GlowProfile.PulsedShoulder(c.ShoulderPx, c.Pulse);
+                    float spread = GlowProfile.PulsedSpread(c.SpreadPx, c.Pulse);
+                    float previous = float.PositiveInfinity;
+                    for (float x = 0.5f; x < 0.5f * c.ScreenWidthPx; x++)
+                    {
+                        float alpha = GlowProfile.Alpha(c, x, y);
+                        Assert.True(alpha <= previous + 1e-6f, $"{what}: pixel {x} is brighter than the one outside");
+                        previous = alpha;
+                        float depth = GlowProfile.Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.GlowRadiusPx);
+                        if (x <= c.LinePx - GlowProfile.LineSoftnessPx)
+                            Assert.Equal(full, alpha);
+                        else if (x >= c.LinePx + GlowProfile.LineSoftnessPx)
+                            Assert.Equal(GlowProfile.Halo(depth, shoulder, spread) * full, alpha, 1e-6f);
+                    }
+                    // The halo at its brightest, just past the line, is HaloPeak's share of the line's brightness.
+                    float past = MathF.Ceiling(c.LinePx + GlowProfile.LineSoftnessPx) + 0.5f;
+                    Assert.True(GlowProfile.Alpha(c, past, y) <= GlowProfile.HaloPeak * full + 1e-6f, what);
+                    // The outermost pixel is lit even by a line narrower than a pixel (Thickness 0 at half scale).
+                    Assert.True(GlowProfile.Alpha(c, 0.5f, y) >= 0.5f * full, $"{what}: the edge is dim");
+                }
+    }
+
+    [Fact]
+    public void TheLinesWidthIsTheThicknessWithAOneDipFloor()
+    {
+        Assert.Equal(9f, GlowProfile.LineFor(6 * 1.5f, 1.5f));
+        Assert.Equal(1.5f, GlowProfile.LineFor(0, 1.5f));
+        Assert.Equal(1.5f, GlowProfile.LineFor(0.5f * 1.5f, 1.5f)); // Thickness 0, 0.5 and 1 draw the same line
+        Assert.Equal(0.5f, GlowProfile.LineFor(0, 0.5f));           // half scale on a 100 % monitor
+        Assert.Equal(1f, GlowProfile.LineFor(-3, 1));
+        Assert.Equal(1f, GlowProfile.LineFor(float.NaN, 1));
+        Assert.Equal(1f, GlowProfile.LineFor(float.PositiveInfinity, 1));
+
+        // The line is as wide as that: its coverage is LinePeak inside, half at its width, 0 past the softness, and
+        // summed over the pixels it is the width itself, so Thickness 6 draws 6 pixels' worth of line at 100 %.
+        foreach (float width in new[] { 1f, 1.5f, 2, 6, 9, 40, 80 })
+        {
+            Assert.Equal(GlowProfile.LinePeak, GlowProfile.Line(0, width));
+            Assert.Equal(0.5f, GlowProfile.Line(width, width), 6);
+            Assert.Equal(0, GlowProfile.Line(width + GlowProfile.LineSoftnessPx, width));
+            double sum = 0;
+            for (int k = 0; k < 200; k++)
+                sum += GlowProfile.Line(k + 0.5f, width);
+            Assert.Equal(width, sum, 2);
+        }
+
+        // Through the constants: Thickness 6 at 150 % is a 9 px line, ending within the softness of 9 px.
+        var state = new LightState(default, default, 0.6f, 0.72f, 0.45f, 6, 0, 0, 1);
+        GlowConstants c = GlowConstants.Create(state, 2880, 1620, 1.5f, 1, 0, Mean, EdgeStyle.Line);
+        Assert.Equal(9f, c.LinePx, 5);
+        Assert.Equal(c.Gain, GlowProfile.Alpha(c, 7.5f, 810));
+        Assert.True(GlowProfile.Alpha(c, 10.5f, 810) <= GlowProfile.HaloPeak * c.Gain);
+    }
+
+    [Fact]
+    public void TheLineDoesNotPulseInWidth()
+    {
+        // The beat brightens the line through the gain and swells the halo inward, but the line keeps its width.
+        foreach (float thickness in new[] { 0f, 6, 20 })
+        {
+            GlowConstants calm = LineSurface(1920, 1080, 1, false, thickness, 0.45f, 0.72f, 0);
+            GlowConstants beat = LineSurface(1920, 1080, 1, false, thickness, 0.45f, 0.72f, 1);
+            Assert.Equal(calm.LinePx, beat.LinePx);
+            Assert.True(beat.Gain > calm.Gain);
+            for (float x = 0.5f; x < calm.LinePx + GlowProfile.LineSoftnessPx; x++)
+            {
+                // Taken apart from the halo, the line's coverage is the same on the beat.
+                float calmLine = LineOf(calm, x), beatLine = LineOf(beat, x);
+                Assert.Equal(calmLine, beatLine, 1e-4f);
+            }
+            float inside = calm.LinePx + 3;
+            float haloOnTheBeat = GlowProfile.Alpha(beat, inside, 540) / beat.Gain;
+            Assert.True(haloOnTheBeat > GlowProfile.Alpha(calm, inside, 540) / calm.Gain);
+        }
+
+        // 1 - (1 - line)(1 - halo), solved for the line.
+        static float LineOf(in GlowConstants c, float x)
+        {
+            float halo = GlowProfile.Halo(x, GlowProfile.PulsedShoulder(c.ShoulderPx, c.Pulse),
+                GlowProfile.PulsedSpread(c.SpreadPx, c.Pulse));
+            float profile = GlowProfile.Alpha(c, x, 0.5f * c.ScreenHeightPx) / (c.Gain * c.Visibility);
+            return 1 - (1 - profile) / (1 - halo);
+        }
+    }
+
+    [Fact]
+    public void TheTopAndBottomCornersCanHaveTheirOwnRadius()
+    {
+        // The screen's own shape for the line: the top corners' radius in the top half, the bottom corners' below.
+        Assert.Equal(0, GlowProfile.Depth(0.5f, 0.5f, 1920, 1080, 20, 0));                 // outside the top arc
+        Assert.Equal(0.5f, GlowProfile.Depth(0.5f, 1079.5f, 1920, 1080, 20, 0), 5);        // a square bottom corner
+        Assert.Equal(GlowProfile.Depth(3.5f, 6.5f, 1920, 1080, 20), GlowProfile.Depth(3.5f, 6.5f, 1920, 1080, 20, 4));
+        Assert.Equal(GlowProfile.Depth(3.5f, 1070.5f, 1920, 1080, 4),
+            GlowProfile.Depth(3.5f, 1070.5f, 1920, 1080, 20, 4));
+        // The halves meet without a seam: the radius only matters in the corners.
+        for (float x = 0.5f; x < 200; x += 0.5f)
+            Assert.Equal(GlowProfile.Depth(x, 539.99f, 1920, 1080, 30, 0),
+                GlowProfile.Depth(x, 540.01f, 1920, 1080, 30, 0), 0.05f);
+
+        // With a notch the line follows the screen's rounded top corners and the bottom ones stay square: along the
+        // diagonal into the top-left corner the line starts at the arc, into the bottom-left one at the corner itself.
+        var state = new LightState(default, default, 0.6f, 0.72f, 0, 2, 0, 0, 1);
+        var notch = new NotchPx(1262, 1762, 64);
+        GlowConstants c = GlowConstants.Create(state, 3024, 1964, 2, 1, 0, Mean, EdgeStyle.Line, notch);
+        float r = c.TopCornerRadiusPx;
+        float atArc = r * (1 - MathF.Sqrt(0.5f)); // where the diagonal crosses the arc
+        Assert.Equal(c.Gain, GlowProfile.Alpha(c, atArc + 1, atArc + 1));
+        Assert.Equal(c.Gain, GlowProfile.Alpha(c, 1, c.ScreenHeightPx - 1));
+        Assert.True(GlowProfile.Alpha(c, atArc + 20, atArc + 20) < 0.5f * c.Gain);
+    }
+
+    [Fact]
+    public void TheLightGoesRoundTheNotch()
+    {
+        // A 14-inch MacBook Pro at 2 px per point: the notch from x 1262 to 1762, 64 px tall, lower corners 19.2 px.
+        var notch = new NotchPx(1262, 1762, 64);
+        foreach (EdgeStyle style in new[] { EdgeStyle.Glow, EdgeStyle.Line })
+        {
+            GlowConstants c = GlowConstants.Create(new LightState(default, default, 0.6f, 0.72f, 0.45f, 6, 0, 0.5f, 1),
+                3024, 1964, 2, 1, 0, Mean, style, notch);
+            float k = c.NotchRadiusPx;
+            Assert.Equal(19.2f, k, 4);
+
+            // Inside the notch the depth is 0: the light is at its brightest there.
+            Assert.Equal(0, NotchedDepth(c, 1512, 30));
+            Assert.Equal(0, NotchedDepth(c, 1300, 62)); // 2 px above its bottom, beside its rounded corner
+            Assert.Equal(GlowProfile.Alpha(c, 1512, 0.5f), GlowProfile.Alpha(c, 1512, 30));
+            // Just outside it, the distance from its bottom and its sides (out of the fillets' reach).
+            Assert.Equal(10.5f, NotchedDepth(c, 1512, 74.5f), 1e-4f);
+            Assert.Equal(10.5f, NotchedDepth(c, 1251.5f, 40), 1e-4f);
+            Assert.Equal(10.5f, NotchedDepth(c, 1772.5f, 40), 1e-4f);
+            // Past its rounded lower corner, the distance from the arc.
+            float cx = 1262 + k, cy = 64 - k;
+            float diagonal = k + 10;
+            float px = cx - diagonal * MathF.Sqrt(0.5f), py = cy + diagonal * MathF.Sqrt(0.5f);
+            Assert.Equal(10, NotchedDepth(c, px, py), 1e-3f);
+            // Far from it, the depth from the edge as before.
+            Assert.Equal(GlowProfile.Depth(200.5f, 30.5f, 3024, 1964, c.GlowRadiusPx), NotchedDepth(c, 200.5f, 30.5f));
+            // The light under the notch is the light under the top edge, pushed down by the notch's height.
+            Assert.Equal(GlowProfile.Alpha(c, 600, 10.5f), GlowProfile.Alpha(c, 1512, 74.5f), 1e-5f);
+        }
+    }
+
+    [Fact]
+    public void TheNotchsEarsAreSmooth()
+    {
+        // Where the notch meets the top edge, the smooth minimum rounds the inside corner (the notch's "ears"): the
+        // depth is finite, never more than either distance, 0 in the corner itself, and continuous with a slope of at
+        // most 1 across a fine grid, in both styles' fields.
+        var notch = new NotchPx(1262, 1762, 64);
+        foreach (EdgeStyle style in new[] { EdgeStyle.Glow, EdgeStyle.Line })
+        {
+            var state = new LightState(default, default, 0.6f, 1, 0.45f, 6, 0, 1, 1);
+            GlowConstants c = GlowConstants.Create(state, 3024, 1964, 2, 1, 0, Mean, style, notch);
+            Assert.Equal(0, NotchedDepth(c, 1262, 0.01f));
+            Assert.True(NotchedDepth(c, 1257, 5) < 5); // rounded: nearer than both the edge and the notch's side
+            const float Step = 0.25f;
+            foreach (float left in new[] { c.NotchLeftPx, c.NotchRightPx })
+                for (float x = left - 60; x <= left + 60; x += Step)
+                    for (float y = 0.125f; y <= 100; y += Step)
+                    {
+                        float d = NotchedDepth(c, x, y);
+                        float a = GlowProfile.Alpha(c, x, y);
+                        string at = $"{style} at ({x}, {y})";
+                        Assert.True(float.IsFinite(d) && float.IsFinite(a) && a >= 0 && a <= 1, at);
+                        float edge = GlowProfile.Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.GlowRadiusPx);
+                        float fromNotch = GlowProfile.NotchDistance(x, y, c.NotchLeftPx, c.NotchRightPx,
+                            c.NotchHeightPx, c.NotchRadiusPx);
+                        Assert.True(d <= MathF.Min(edge, fromNotch) + 1e-4f, at);
+                        Assert.True(MathF.Abs(NotchedDepth(c, x + Step, y) - d) <= Step + 1e-3f, at);
+                        Assert.True(MathF.Abs(NotchedDepth(c, x, y + Step) - d) <= Step + 1e-3f, at);
+                    }
+        }
+    }
+
+    [Fact]
+    public void WithoutANotchTheNotchChangesNothing()
+    {
+        // NotchHeightPx 0 is no notch: the depth and the alpha are exactly those without one, in both styles.
+        foreach (EdgeStyle style in new[] { EdgeStyle.Glow, EdgeStyle.Line })
+        {
+            var state = new LightState(default, default, 0.6f, 0.8f, 0.45f, 6, 0, 0.5f, 1);
+            GlowConstants plain = GlowConstants.Create(state, 3024, 1964, 2, 1, 8, Mean, style);
+            var flat = new NotchPx(1262, 1762, 0);
+            GlowConstants zero = GlowConstants.Create(state, 3024, 1964, 2, 1, 8, Mean, style, flat);
+            Assert.Equal(plain, zero);
+            for (float x = 0.5f; x < 3024; x += 41)
+                for (float y = 0.5f; y < 300; y += 3)
+                    Assert.Equal(GlowProfile.Alpha(plain, x, y), GlowProfile.Alpha(zero, x, y));
+        }
+        // The smooth minimum with no radius is the plain minimum.
+        Assert.Equal(3f, GlowProfile.SmoothMin(3, 5, 0));
+        Assert.Equal(3f, GlowProfile.SmoothMin(5, 3, -1));
+        Assert.Equal(3f, GlowProfile.SmoothMin(3, 5, 2));        // further apart than k: untouched
+        Assert.Equal(3f - 0.25f * 4, GlowProfile.SmoothMin(3, 3, 4)); // equal: lowered by k / 4
+    }
+
+    // The depth GlowProfile.Alpha uses for the light's field, round the notch.
+    private static float NotchedDepth(in GlowConstants c, float x, float y) =>
+        GlowProfile.AroundNotch(GlowProfile.Depth(x, y, c.ScreenWidthPx, c.ScreenHeightPx, c.GlowRadiusPx),
+            GlowProfile.NotchDistance(x, y, c.NotchLeftPx, c.NotchRightPx, c.NotchHeightPx, c.NotchRadiusPx),
+            c.NotchRadiusPx);
+
+    private static GlowConstants LineSurface(int width, int height, float dpi, bool half, float thicknessDip,
+        float glow, float intensity, float pulse)
+    {
+        int w = OverlaySurface.BufferSize(width, half);
+        int h = OverlaySurface.BufferSize(height, half);
+        var state = new LightState(default, default, 0.6f, intensity, glow, thicknessDip, 0, pulse, 1);
+        float renderScale = OverlaySurface.RenderScaleFor(width, half);
+        return GlowConstants.Create(state, w, h, dpi, renderScale, 0, Mean, EdgeStyle.Line);
+    }
+
     internal static GlowConstants Surface(int width, int height, float dpi, bool half, float thicknessDip, float glow,
         float intensity, float pulse)
     {

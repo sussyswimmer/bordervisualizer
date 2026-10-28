@@ -34,6 +34,8 @@ public sealed record Settings
     public float Sensitivity { get; init; } = 1.0f;                            // 0.25..2
     /// <summary>Corner Radius Dip (0..40).</summary>
     public float CornerRadiusDip { get; init; } = 0f;                          // 0..40
+    /// <summary>Edge Style (Glow | Line).</summary>
+    public EdgeStyle EdgeStyle { get; init; } = EdgeStyle.Glow;                // Glow | Line
     /// <summary>Cover Taskbar.</summary>
     public bool CoverTaskbar { get; init; } = true;
 

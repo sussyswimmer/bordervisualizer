@@ -17,6 +17,7 @@ struct AppSettings: Codable, Equatable {
     var brightness: Double
     var sensitivity: Double
     var cornerRadiusDip: Double
+    var edgeStyle: String          // Glow | Line: the soft glow, or a bright line along the edge with a glow inside
     var coverTaskbar: Bool         // the Mac's "Cover the menu bar and Dock"
     var monitors: String           // All | PrimaryOnly | Custom
     var customMonitorIds: [String] // display UUIDs on the Mac

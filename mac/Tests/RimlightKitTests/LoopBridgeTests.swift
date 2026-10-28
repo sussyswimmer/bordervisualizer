@@ -19,8 +19,11 @@ final class LoopBridgeTests: XCTestCase {
     func testTheDemoDrawsEveryScreenAtTheFullRate() throws {
         let loop = try XCTUnwrap(CoreLoop(settingsDirectory: directory.path, demo: true))
         XCTAssertTrue(loop.demo)
-        let surfaces = [RlSurface(widthPx: 1920, heightPx: 1080, pixelsPerPoint: 1, paused: 0),
-                        RlSurface(widthPx: 3024, heightPx: 1964, pixelsPerPoint: 2, paused: 0)]
+        // An external display, and a 14-inch MacBook Pro whose notch spans 659...853 points, 32 points down.
+        let surfaces = [RlSurface(widthPx: 1920, heightPx: 1080, pixelsPerPoint: 1, paused: 0, notchLeftPt: 0,
+                                  notchRightPt: 0, notchHeightPt: 0, pad: 0),
+                        RlSurface(widthPx: 3024, heightPx: 1964, pixelsPerPoint: 2, paused: 0, notchLeftPt: 659,
+                                  notchRightPt: 853, notchHeightPt: 32, pad: 0)]
         XCTAssertEqual(rl_loop_set_surfaces(loop.handle, surfaces, 2, 10), RL_OK)
         XCTAssertEqual(rl_loop_set_display(loop.handle, 120, 0, 0), RL_OK)
 
@@ -39,6 +42,9 @@ final class LoopBridgeTests: XCTestCase {
                 actions.append(action)
                 if action > 0 {
                     XCTAssertGreaterThan(k.screenWidthPx, 0)
+                    // The light goes round the notch, in the drawable's pixels.
+                    XCTAssertEqual(k.notchHeightPx, index == 1 ? 64 : 0)
+                    XCTAssertEqual(k.notchLeftPx, index == 1 ? 1318 : 0)
                     XCTAssertEqual(rl_loop_surface_done(loop.handle, Int32(index), 1, Int64(now * 1000)), 0)
                 }
             }

@@ -22,7 +22,7 @@ This reference describes Core as of C13. It is derived from the code, its XML do
 | `Settings` | record | The doc 06 §1 settings model. |
 | `ISettingsStore` | interface | Loads and saves `settings.json`. |
 | `Presets` | static class | The five built-in looks. |
-| `AnimationMode`, `SilentBehavior`, `ColorMode`, `MonitorSelection`, `BatteryBehavior` | enums | Settings choices. |
+| `AnimationMode`, `SilentBehavior`, `ColorMode`, `MonitorSelection`, `BatteryBehavior`, `EdgeStyle` | enums | Settings choices. |
 | `NowPlaying` | record | Media metadata. Platform's `NowPlayingService` fills it; Core never reads it. |
 | `AppInfo` | static class | `AppInfo.Name` = `"Rimlight"`, the one place Core spells the app name. |
 
@@ -321,6 +321,7 @@ The settings preview may own another engine and blender on the UI thread (H-017)
 | `Brightness` | 0.80 | 0.1–1 |
 | `Sensitivity` | 1.0 | 0.25–2 |
 | `CornerRadiusDip` | 0 | 0–40 |
+| `EdgeStyle` | Glow | Glow (the soft glow, flat at the edge and fading inward), Line (a bright line along the very edge, with a dimmer glow inside it; `CoreThicknessDip` is then the line's width). Added at Maxwell's request (H-032). A file without it loads as Glow. Core only stores it: the renderer reads it, and the light engine doesn't. |
 | `CoverTaskbar` | true | |
 | `Monitors` | All | All, PrimaryOnly, Custom. |
 | `CustomMonitorIds` | empty | Opaque device IDs, compared ordinally. Null and empty entries are dropped. Duplicates, whitespace and unplugged monitors are kept (H-009). |
@@ -368,6 +369,7 @@ The format is camelCase JSON with enums as names, indented, UTF-8 without a BOM,
   "brightness": 0.8,
   "sensitivity": 1,
   "cornerRadiusDip": 0,
+  "edgeStyle": "Glow",
   "coverTaskbar": true,
   "monitors": "All",
   "customMonitorIds": [],
@@ -384,7 +386,7 @@ The format is camelCase JSON with enums as names, indented, UTF-8 without a BOM,
 
 ### 7.3 Presets
 
-`Presets.All` is a read-only list of `(string Name, Func<Settings, Settings> Apply)` in menu order. Each `Apply` returns new, validated settings and throws `ArgumentNullException` for null. Every preset sets the same six appearance fields, sets `OverrideAlbumColor = true` and keeps `ColorMode`, so the look shows even in Album Art mode, and turning Override off brings the album colors back (H-009). Corner radius and taskbar coverage are kept. Applying presets one after another gives the last one's look, except that Minimal's Idle Glow mode stays until the user changes the mode. For swatches, read the colors of `Apply(new Settings())`.
+`Presets.All` is a read-only list of `(string Name, Func<Settings, Settings> Apply)` in menu order. Each `Apply` returns new, validated settings and throws `ArgumentNullException` for null. Every preset sets the same six appearance fields, sets `OverrideAlbumColor = true` and keeps `ColorMode`, so the look shows even in Album Art mode, and turning Override off brings the album colors back (H-009). Corner radius, the edge style and taskbar coverage are kept. Applying presets one after another gives the last one's look, except that Minimal's Idle Glow mode stays until the user changes the mode. For swatches, read the colors of `Apply(new Settings())`.
 
 | Name | Primary | Secondary | Ratio | Core (DIP) | Glow | Brightness | Also |
 |---|---|---|---|---|---|---|---|

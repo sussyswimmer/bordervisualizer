@@ -10,11 +10,17 @@ using Rimlight.Core;
 namespace Rimlight.App.SettingsUi;
 
 /// <summary>
-/// Appearance (doc 06 §3.1): the live preview, the shape sliders (ranges from doc 06 §1), Cover taskbar, and the
-/// presets as color chips (<see cref="Presets.All"/>; the section is hidden only if the catalog is ever empty).
+/// Appearance (doc 06 §3.1): the live preview, the edge style (soft glow or bright line), the shape sliders (ranges
+/// from doc 06 §1), Cover taskbar, and the presets as color chips (<see cref="Presets.All"/>; the section is hidden
+/// only if the catalog is ever empty).
 /// </summary>
 internal partial class AppearancePage : UserControl, ISettingsPage
 {
+    // The Thickness row says what the slider sets in each edge style: the soft shoulder, or the line's width.
+    private const string GlowThicknessText = "How wide the soft, bright part along the edges is. More keeps the light "
+        + "bright further in; 0 starts the fade right at the edge.";
+    private const string LineThicknessText = "How wide the bright line along the edges is.";
+
     private readonly AppController app;
     private readonly PageEdits edits;
     private readonly GlowPreview preview;
@@ -31,6 +37,10 @@ internal partial class AppearancePage : UserControl, ISettingsPage
 
     public void Refresh(Settings settings) => edits.Refresh(() =>
     {
+        bool line = settings.EdgeStyle == EdgeStyle.Line;
+        SoftGlowChoice.IsChecked = !line;
+        BrightLineChoice.IsChecked = line;
+        ThicknessDescription.Text = line ? LineThicknessText : GlowThicknessText;
         PageEdits.Set(ThicknessSlider, settings.CoreThicknessDip);
         PageEdits.Set(GlowSlider, settings.Glow * 100);
         PageEdits.Set(BrightnessSlider, settings.Brightness * 100);
@@ -53,6 +63,12 @@ internal partial class AppearancePage : UserControl, ISettingsPage
         GlowValue.Text = Percent(settings.Glow);
         BrightnessValue.Text = Percent(settings.Brightness);
         CornerValue.Text = Pixels(settings.CornerRadiusDip);
+    }
+
+    private void OnEdgeChanged(object sender, RoutedEventArgs e)
+    {
+        EdgeStyle style = ReferenceEquals(sender, BrightLineChoice) ? EdgeStyle.Line : EdgeStyle.Glow;
+        edits.Update(s => s with { EdgeStyle = style });
     }
 
     // The sliders work in the units they show (pixels, percent); the settings store doc 06 §1's ranges.

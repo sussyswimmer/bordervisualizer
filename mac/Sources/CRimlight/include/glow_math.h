@@ -1,7 +1,8 @@
 // The glow's per-pixel math, shared by the Metal shader (Resources/Shaders/Glow.metal includes it) and the Swift tests
 // (which call it as C and compare it with the golden table that src/Rimlight.Native.Tests writes from GlowProfile).
-// A line-by-line port of src/Rimlight.Platform/Overlay/Glow.hlsl steps 1-5 and GlowProfile.cs: keep them in sync.
-// Valid both as Metal Shading Language and as C11. Keep this file ASCII-only.
+// A line-by-line port of src/Rimlight.Platform/Overlay/Glow.hlsl steps 1-5 and GlowProfile.cs (GlowProfile.Alpha per
+// pixel): both edge styles (the soft glow, and the Line style's bright line with a halo inside it) and the way round a
+// camera notch. Keep them in sync. Valid both as Metal Shading Language and as C11. Keep this file ASCII-only.
 
 #ifndef RIMLIGHT_GLOW_MATH_H
 #define RIMLIGHT_GLOW_MATH_H
@@ -29,27 +30,31 @@
 #define GM_FLOOR(x) floorf(x)
 #endif
 
-// The Light constant buffer: GlowConstants.cs's 16 floats in the same order (64 bytes). rl_loop_plan_surface fills it.
+// The Light constant buffer: GlowConstants.cs's 20 floats in the same order (80 bytes). rl_loop_plan_surface fills it.
 typedef struct RlGlowConstants {
-    float screenWidthPx;   // drawable size in pixels
+    float screenWidthPx;     // drawable size in pixels
     float screenHeightPx;
-    float cornerRadiusPx;  // shape corner radius; 0 = square corners
-    float shoulderPx;      // the soft shoulder at the edge: the Thickness setting, at least one point
-    float spreadPx;        // glow reach (e-folding distance)
-    float gain;            // Intensity x the beat's gain, rolled off under 1 (GlowProfile.Gain)
-    float pulse;           // 0..1 beat kick
-    float phase;           // 0..1 gradient rotation
-    float visibility;      // 0..1 fades; multiplies alpha like gain
-    float colorRadiusPx;   // corner radius of the colour path
-    float glowRadiusPx;    // corner radius of the light's field
-    float pad0;
-    float meanRed;         // average of the gradient, linear RGB: the colour deep inside
+    float cornerRadiusPx;    // the shape's (bottom) corner radius; 0 = square corners
+    float shoulderPx;        // the soft shoulder at the edge: the Thickness setting, at least one point (Line: one)
+    float spreadPx;          // glow reach (e-folding distance)
+    float gain;              // Intensity x the beat's gain, rolled off under 1 (GlowProfile.Gain)
+    float pulse;             // 0..1 beat kick
+    float phase;             // 0..1 gradient rotation
+    float visibility;        // 0..1 fades; multiplies alpha like gain
+    float colorRadiusPx;     // corner radius of the colour path
+    float glowRadiusPx;      // corner radius of the light's field
+    float linePx;            // the Line style's line width: the Thickness, at least one point; 0 = the Glow style
+    float meanRed;           // average of the gradient, linear RGB: the colour deep inside
     float meanGreen;
     float meanBlue;
-    float pad1;
+    float topCornerRadiusPx; // the screen's top corners, for the line: rounder on a notched screen
+    float notchLeftPx;       // the camera notch hanging from the top edge, in pixels; all 0 without one
+    float notchRightPx;
+    float notchHeightPx;     // 0 = no notch
+    float notchRadiusPx;     // the notch's lower corners, and the fillets where it meets the top edge
 } RlGlowConstants;
 
-GM_STATIC_ASSERT(sizeof(RlGlowConstants) == 64, "RlGlowConstants must match GlowConstants.SizeInBytes");
+GM_STATIC_ASSERT(sizeof(RlGlowConstants) == 80, "RlGlowConstants must match GlowConstants.SizeInBytes");
 
 // GlowProfile.Depth: distance in from the edge through a field whose corners have radius r; 0 at the edge and outside
 // the rounded corners, growing inward (Glow.hlsl step 1).
@@ -62,13 +67,86 @@ GM_FN float gm_depth(float x, float y, float width, float height, float radius) 
     return GM_MAX(-(outside + GM_MIN(GM_MAX(qx, qy), 0.0f) - radius), 0.0f);
 }
 
-// Glow.hlsl step 2: the light's alpha at a pixel centre, before the colour (GlowProfile.Glow x Gain x Visibility).
+// GlowProfile.Depth with per-corner radii: the top two corners have radius topRadius and the bottom two bottomRadius,
+// the radius of the half the pixel is in. The Line style's line follows the screen's own shape through it.
+GM_FN float gm_depth_corners(float x, float y, float width, float height, float topRadius, float bottomRadius) {
+    return gm_depth(x, y, width, height, y < 0.5f * height ? topRadius : bottomRadius);
+}
+
+// HLSL's smoothstep (GlowProfile.SmoothStep): 0 up to edge0, 1 from edge1, t^2 (3 - 2t) between.
+GM_FN float gm_smoothstep(float edge0, float edge1, float x) {
+    float t = GM_MIN(GM_MAX((x - edge0) / (edge1 - edge0), 0.0f), 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// GlowProfile.Line: the Line style's line at depthPx in from the edge, 1 (LinePeak) across its width linePx, then an
+// anti-aliased inner edge 0.75 px (LineSoftnessPx) either side of it. Its width never pulses.
+GM_FN float gm_line(float depthPx, float linePx) {
+    return 1.0f * (1.0f - gm_smoothstep(linePx - 0.75f, linePx + 0.75f, depthPx));
+}
+
+// GlowProfile.Halo: the Line style's halo, the glow's own shape at 0.5 (HaloPeak) instead of 0.85.
+GM_FN float gm_halo(float distancePx, float shoulderPx, float spreadPx) {
+    return 0.5f * GM_EXP(-(GM_SQRT(distancePx * distancePx + shoulderPx * shoulderPx) - shoulderPx) / spreadPx);
+}
+
+// GlowProfile.LineAndHalo: the line in front of the halo, combined like light through two filters.
+GM_FN float gm_line_and_halo(float lineDepthPx, float linePx, float haloDistancePx, float shoulderPx,
+                             float spreadPx) {
+    return 1.0f - (1.0f - gm_line(lineDepthPx, linePx)) * (1.0f - gm_halo(haloDistancePx, shoulderPx, spreadPx));
+}
+
+// GlowProfile.NotchDistance: distance from (x, y) to a notch hanging from the top edge between leftPx and rightPx,
+// down to heightPx, with lower corners of radius radiusPx; 0 inside it, growing outward. A rounded box centred on the
+// top edge under the notch's middle, its half height the notch's height, so only its lower corners show.
+GM_FN float gm_notch_distance(float x, float y, float leftPx, float rightPx, float heightPx, float radiusPx) {
+    float halfWidth = 0.5f * (rightPx - leftPx);
+    float r = GM_MIN(radiusPx, GM_MIN(halfWidth, heightPx));
+    float qx = GM_ABS(x - 0.5f * (leftPx + rightPx)) - halfWidth + r;
+    float qy = GM_ABS(y) - heightPx + r;
+    float ox = GM_MAX(qx, 0.0f);
+    float oy = GM_MAX(qy, 0.0f);
+    float outside = GM_SQRT(ox * ox + oy * oy);
+    return GM_MAX(outside + GM_MIN(GM_MAX(qx, qy), 0.0f) - r, 0.0f);
+}
+
+// GlowProfile.SmoothMin: min(a, b) - h^2 k / 4 with h = max(k - |a - b|, 0) / k, which rounds the crease where two
+// distance fields meet into a fillet about k across; k <= 0 is the plain minimum.
+GM_FN float gm_smooth_min(float a, float b, float k) {
+    if (!(k > 0.0f))
+        return GM_MIN(a, b);
+    float h = GM_MAX(k - GM_ABS(a - b), 0.0f) / k;
+    return GM_MIN(a, b) - h * h * k / 4.0f;
+}
+
+// GlowProfile.AroundNotch: a depth taken round the notch too, 0 inside it, the distance from it beside and below it,
+// and the inside corners where it meets the top edge rounded like the notch's "ears".
+GM_FN float gm_around_notch(float depthPx, float notchDistancePx, float notchRadiusPx) {
+    return GM_MAX(gm_smooth_min(depthPx, notchDistancePx, notchRadiusPx), 0.0f);
+}
+
+// Glow.hlsl steps 1-2, GlowProfile.Alpha: the light's alpha at a pixel centre, before the colour. The Glow style
+// (linePx 0) is GlowProfile.Glow x Gain x Visibility; the Line style the line in front of its halo, x Gain x
+// Visibility. With a notch every depth goes round it; without one (and in the Glow style) nothing else is computed.
 GM_FN float gm_alpha(RlGlowConstants k, float x, float y) {
     float d = gm_depth(x, y, k.screenWidthPx, k.screenHeightPx, k.glowRadiusPx);
+    int notched = k.notchHeightPx > 0.0f;
+    float notch = 0.0f;
+    if (notched) {
+        notch = gm_notch_distance(x, y, k.notchLeftPx, k.notchRightPx, k.notchHeightPx, k.notchRadiusPx);
+        d = gm_around_notch(d, notch, k.notchRadiusPx);
+    }
     float spread = GM_MAX(k.spreadPx * (1.0f + 0.35f * k.pulse), 0.5f);
     float shoulder = k.shoulderPx * (1.0f + 0.35f * k.pulse);
-    float glow = 0.85f * GM_EXP(-(GM_SQRT(d * d + shoulder * shoulder) - shoulder) / spread);
-    return glow * k.gain * k.visibility;
+    if (!(k.linePx > 0.0f)) {
+        float glow = 0.85f * GM_EXP(-(GM_SQRT(d * d + shoulder * shoulder) - shoulder) / spread);
+        return glow * k.gain * k.visibility;
+    }
+    float lineDepth = gm_depth_corners(x, y, k.screenWidthPx, k.screenHeightPx, k.topCornerRadiusPx,
+                                       k.cornerRadiusPx);
+    if (notched)
+        lineDepth = gm_around_notch(lineDepth, notch, k.notchRadiusPx);
+    return gm_line_and_halo(lineDepth, k.linePx, d, shoulder, spread) * k.gain * k.visibility;
 }
 
 GM_FN float gm_frac(float x) {

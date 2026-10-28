@@ -28,6 +28,10 @@ internal struct SurfaceInfo
     public int HeightPx;
     public float PixelsPerPoint; // the screen's backing scale factor
     public int Paused;           // 1 while a full-screen window covers this screen (doc 04 §4's per-monitor pause)
+    public float NotchLeftPt;    // the camera notch in points from the overlay's top-left: NotchLeftPt to NotchRightPt
+    public float NotchRightPt;   // across, NotchHeightPt down from the top; all 0 without one (OverlayController.swift)
+    public float NotchHeightPt;
+    public int Pad;
 }
 
 /// <summary>What one frame needs from the render thread (<c>RlFrameInfo</c> in rimlight_core.h).</summary>
@@ -329,11 +333,28 @@ internal sealed class MacOverlayLoop
         return true;
     }
 
-    // The surface's size and pixels per point already include any render scale (SetSurfaces).
+    /// <summary>
+    /// The constants for <paramref name="state"/> on one surface, as the loop draws it: the settings' corner radius and
+    /// edge style, and the surface's notch converted from points to its pixels, so the light goes round it.
+    /// <c>rl_glow_constants</c> calls this too, so the golden table's constants come the app's way. Allocation-free.
+    /// </summary>
+    /// <remarks>
+    /// The surface's size and pixels per point already include any render scale (<see cref="SetSurfaces"/>), so the
+    /// notch lands in the drawable's own pixels at half scale too. <see cref="GlowConstants.Create"/> drops a notch
+    /// that is empty, off the surface or not finite.
+    /// </remarks>
+    public static GlowConstants ConstantsFor(in LightState state, in SurfaceInfo info, float cornerRadiusDip,
+        EdgeStyle style, Rgb meanColor)
+    {
+        float scale = info.PixelsPerPoint;
+        var notch = new NotchPx(info.NotchLeftPt * scale, info.NotchRightPt * scale, info.NotchHeightPt * scale);
+        return GlowConstants.Create(state, info.WidthPx, info.HeightPx, scale, 1, cornerRadiusDip, meanColor, style,
+            notch);
+    }
+
     private GlowConstants Constants(in LightState state, in Surface s, float visibility)
     {
-        GlowConstants c = GlowConstants.Create(state, s.Info.WidthPx, s.Info.HeightPx, s.Info.PixelsPerPoint, 1,
-            applied.CornerRadiusDip, meanColor);
+        GlowConstants c = ConstantsFor(state, s.Info, applied.CornerRadiusDip, applied.EdgeStyle, meanColor);
         c.Visibility = visibility;
         return c;
     }

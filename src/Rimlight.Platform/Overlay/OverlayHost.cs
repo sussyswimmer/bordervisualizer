@@ -781,6 +781,7 @@ public sealed class OverlayHost : IDisposable
             }
 
             float cornerRadiusDip = applied!.CornerRadiusDip;
+            EdgeStyle edgeStyle = applied!.EdgeStyle;
             float visibility = float.IsFinite(state.Visibility) ? Math.Clamp(state.Visibility, 0, 1) : 0;
             foreach (Overlay overlay in overlays)
             {
@@ -796,7 +797,7 @@ public sealed class OverlayHost : IDisposable
                     // refresh, as it would have shown it when the display came back.
                     if (surface is not null && !surface.ShowsNothing)
                     {
-                        GlowConstants clear = Constants(state, overlay, surface, cornerRadiusDip, 0);
+                        GlowConstants clear = Constants(state, overlay, surface, cornerRadiusDip, edgeStyle, 0);
                         Result cleared = surface.Render(clear, gradientVersion, out bool done);
                         if (cleared.Failure)
                         {
@@ -854,7 +855,7 @@ public sealed class OverlayHost : IDisposable
                     rescaled = true;
                 }
 
-                GlowConstants constants = Constants(state, overlay, surface, cornerRadiusDip, shown);
+                GlowConstants constants = Constants(state, overlay, surface, cornerRadiusDip, edgeStyle, shown);
                 // Static: nothing new to present (doc 02). A rescaled surface always presents, so its commit follows.
                 if (!rescaled && surface.Shows(constants, gradientVersion)) continue;
 
@@ -888,11 +889,13 @@ public sealed class OverlayHost : IDisposable
         surface.SkippingSinceMs is long since && nowMs - since >= StalledCheckMs;
 
     // One overlay's constants for this frame. At half scale the swap chain's pixels are twice as large, so every
-    // pixel measure is converted at the surface's render scale, the shoulder and the spread alike (GlowProfile).
-    private GlowConstants Constants(in LightState state, Overlay overlay, OverlaySurface surface, float cornerRadiusDip, float visibility)
+    // pixel measure is converted at the surface's render scale, the shoulder and the spread alike (GlowProfile). The
+    // edge style is the settings' (soft glow or bright line); Windows screens have no notch.
+    private GlowConstants Constants(in LightState state, Overlay overlay, OverlaySurface surface, float cornerRadiusDip,
+        EdgeStyle edgeStyle, float visibility)
     {
         GlowConstants constants = GlowConstants.Create(state, surface.Width, surface.Height, overlay.Monitor.Scale,
-            surface.RenderScale, cornerRadiusDip, meanColor);
+            surface.RenderScale, cornerRadiusDip, meanColor, edgeStyle);
         constants.Visibility = visibility;
         return constants;
     }

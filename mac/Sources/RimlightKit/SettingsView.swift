@@ -82,6 +82,13 @@ struct WelcomeBanner: View {
 struct AppearancePage: View {
     @ObservedObject var model: SettingsModel
 
+    /// What Thickness sets in each edge style (doc 06 §3.1): the soft part along the edges, or the line's width.
+    private var thicknessHelp: String {
+        model.settings.edgeStyle == "Line"
+            ? "How wide the bright line along the edges is."
+            : "How wide the soft, bright part along the edges is. More keeps the light bright further in."
+    }
+
     var body: some View {
         Form {
             Section {
@@ -91,8 +98,16 @@ struct AppearancePage: View {
                     .frame(maxWidth: .infinity)
             }
             Section {
+                // The soft glow, or a bright line along the very edge with a dimmer glow inside it (Maxwell's
+                // request); on a screen with a notch either goes round it.
+                Picker("Edge", selection: $model.settings.edgeStyle) {
+                    Text("Soft glow").tag("Glow")
+                    Text("Bright line").tag("Line")
+                }
+                .pickerStyle(.segmented)
                 PercentSlider("Thickness", value: $model.settings.coreThicknessDip, range: 0...40, step: 1,
                               format: { "\(Int($0)) pt" })
+                    .help(thicknessHelp)
                 PercentSlider("Glow", value: $model.settings.glow, range: 0...1)
                 PercentSlider("Brightness", value: $model.settings.brightness, range: 0.1...1)
                 PercentSlider("Corner radius", value: $model.settings.cornerRadiusDip, range: 0...40, step: 1,

@@ -199,9 +199,10 @@ internal static class AnalysisRecordingCsv
     // The settings that shape the light and its timing, named as in settings.json. Colors, monitors and the shortcut
     // don't change what the analyzer or the light engine compute.
     private static string DescribeSettings(Settings s) => string.Create(C,
-        $"enabled={Bool(s.Enabled)} animation={s.Animation} whenSilent={s.WhenSilent} brightness={s.Brightness:0.###} glow={s.Glow:0.###} "
-        + $"coreThicknessDip={s.CoreThicknessDip:0.###} cornerRadiusDip={s.CornerRadiusDip:0.###} primaryRatio={s.PrimaryRatio:0.###} "
-        + $"sensitivity={s.Sensitivity:0.###} fpsCap={s.FpsCap} onBattery={s.OnBattery} pauseInFullscreen={Bool(s.PauseInFullscreen)}");
+        $"enabled={Bool(s.Enabled)} animation={s.Animation} whenSilent={s.WhenSilent} brightness={s.Brightness:0.###} "
+        + $"glow={s.Glow:0.###} coreThicknessDip={s.CoreThicknessDip:0.###} cornerRadiusDip={s.CornerRadiusDip:0.###} "
+        + $"edgeStyle={s.EdgeStyle} primaryRatio={s.PrimaryRatio:0.###} sensitivity={s.Sensitivity:0.###} "
+        + $"fpsCap={s.FpsCap} onBattery={s.OnBattery} pauseInFullscreen={Bool(s.PauseInFullscreen)}");
 
     private static string Bool(bool value) => value ? "true" : "false";
 

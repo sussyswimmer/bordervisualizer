@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 8
+#define RL_ABI_VERSION 9
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -55,6 +55,10 @@ typedef struct RlSurface {
     int32_t heightPx;
     float pixelsPerPoint; // the screen's backing scale factor
     int32_t paused;       // 1 while a full-screen window covers this screen
+    float notchLeftPt;    // the camera notch in points from the overlay's top-left: notchLeftPt to notchRightPt across,
+    float notchRightPt;   // notchHeightPt down from the top; all 0 without one. The light goes round it.
+    float notchHeightPt;
+    int32_t pad;
 } RlSurface;
 
 /// What a frame needs from the render thread (FrameInfo).
@@ -84,7 +88,7 @@ typedef struct RlLightState {
     float ratio, intensity, spread, coreThicknessDip, phase, pulse, visibility;
 } RlLightState;
 
-GM_STATIC_ASSERT(sizeof(RlSurface) == 16, "RlSurface must match SurfaceInfo");
+GM_STATIC_ASSERT(sizeof(RlSurface) == 32, "RlSurface must match SurfaceInfo");
 GM_STATIC_ASSERT(sizeof(RlFrameInfo) == 16, "RlFrameInfo must match FrameInfo");
 GM_STATIC_ASSERT(sizeof(RlPace) == 24, "RlPace must match PaceInfo");
 GM_STATIC_ASSERT(sizeof(RlLightState) == 52, "RlLightState must match LightState");
@@ -204,9 +208,13 @@ int32_t rl_hotkey_parse(const char *text, int32_t *modifiers, int32_t *virtualKe
 /// The setting's text for a shortcut, or RL_INVALID_ARGUMENT if it isn't allowed. Any thread.
 int32_t rl_hotkey_format(int32_t modifiers, int32_t virtualKey, char *buffer, int32_t capacity);
 
-/// GlowConstants.Create alone, for tests: the constants for a light state on a surface.
-int32_t rl_glow_constants(const RlLightState *state, int32_t widthPx, int32_t heightPx, float pixelsPerPoint,
-                          float renderScale, float cornerRadiusDip, const RlRgb *meanColor, RlGlowConstants *constants);
+static const int32_t RL_EDGE_GLOW = 0; // Settings' EdgeStyle: the soft glow (the default)
+static const int32_t RL_EDGE_LINE = 1; // a bright line along the very edge, with a dimmer glow inside it
+
+/// GlowConstants.Create alone, for tests: the constants for a light state on a surface (its notch included) in an edge
+/// style (RL_EDGE_*), exactly as the loop computes them. The surface's paused is ignored.
+int32_t rl_glow_constants(const RlLightState *state, const RlSurface *surface, float cornerRadiusDip, int32_t edgeStyle,
+                          const RlRgb *meanColor, RlGlowConstants *constants);
 
 // ---- Helpers implemented in C (CRimlight.c) ----
 
