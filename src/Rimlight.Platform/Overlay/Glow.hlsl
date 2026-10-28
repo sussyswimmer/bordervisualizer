@@ -4,7 +4,8 @@
 // edge styles (the soft glow, and the Line style's bright line with a halo inside it) and round a camera notch, is
 // GlowProfile.cs (GlowProfile.Alpha per pixel), which the Settings preview runs on the CPU and the Mac's glow_math.h
 // mirrors: keep those in sync too. With LinePx and NotchHeightPx both 0 (the Glow style on Windows) the new work is
-// branched over and the glow is drawn as before the Line style. Keep this file ASCII-only.
+// branched over and the glow is drawn as before the Line style; with FlowAmount 0 (the Pulse movement, Idle Glow) so
+// is the Flow movement's, and the light is drawn as before it. Keep this file ASCII-only.
 
 cbuffer Light : register(b0)
 {
@@ -25,6 +26,11 @@ cbuffer Light : register(b0)
     float  NotchRightPx;
     float  NotchHeightPx;     // 0 = no notch
     float  NotchRadiusPx;     // the notch's lower corners, and the fillets where it meets the top edge
+    float  FlowAmount;        // the Flow movement's share, 0..1 (GlowProfile.Motion); 0 = the edge lit evenly
+    float  CometPhase;        // 0..1, where the comets are (GlowProfile.Comets)
+    float  FlowPad0;
+    float  FlowPad1;
+    float4 Ripples[4];        // the beats' ripples (GlowProfile.RippleAt): x origin, y radius, z strength (0 = none)
 };
 
 // 64 x 1, linear RGB. Texel i is the colour at perimeter position u = (i + 0.5) / 64 before Phase is applied
@@ -33,6 +39,16 @@ Texture2D<float4> Gradient : register(t0);
 SamplerState GradientSampler : register(s0);
 
 static const float HalfPi = 1.5707963;
+
+// The Flow movement's shape (GlowProfile's constants of the same names; GlowShaderTests compares them).
+// Lengths are in perimeters.
+static const int CometCount = 2;          // comets chasing round the edge, evenly spaced
+static const float CometHead = 0.01;      // a comet's light ahead of its head: exp(-(a / CometHead)^2)
+static const float CometTail = 0.12;      // and behind it: exp(-b / CometTail), a long trail
+static const float FlowFloor = 0.5;       // the light between the comets, as a share of a comet's peak
+static const float RippleFront = 0.015;   // a ripple's light ahead of its front: exp(-(x / RippleFront)^2)
+static const float RippleTrail = 0.06;    // and behind it, back toward its origin: exp(x / RippleTrail)
+static const float FlowMean = 0.62886227; // the comets' light averaged round the edge: what it blends to deep inside
 
 // Full-screen triangle from SV_VertexID: (-1, 1), (3, 1), (-1, -3) in clip space. No vertex buffer.
 float4 VSMain(uint id : SV_VertexID) : SV_Position
@@ -140,6 +156,59 @@ float PerimeterT(float2 p, float2 size, float r)
     return frac((s + 0.5 * arcLen) / total);
 }
 
+// The Flow movement (GlowProfile.Comets, RippleAt, Flow and Motion; H-033). Positions are perimeter coordinates t
+// (PerimeterT, before Phase), so the light travels round the edge with the colours.
+
+// The comets' light at t, 0..1: the brightest of CometCount comets whose heads sit at k / CometCount - CometPhase. Each
+// is 1 at its head, falls ahead of it as a Gaussian and fades behind it over its tail; the larger exponent wins, so the
+// light is continuous everywhere, the heads included. frac keeps both distances in [0, 1) round the loop.
+float Comets(float t)
+{
+    float brightest = -1e30;
+    [unroll] for (int k = 0; k < CometCount; k++)
+    {
+        float head = (float)k / CometCount - CometPhase;
+        float behind = frac(t - head) / CometTail;
+        float ahead = frac(head - t) / CometHead;
+        brightest = max(brightest, max(-behind, -ahead * ahead));
+    }
+    return exp(brightest);
+}
+
+// To [-0.5, 0.5): the signed way round the perimeter, the shorter one.
+float Wrap(float x)
+{
+    return x - floor(x + 0.5);
+}
+
+// One ripple's light at t (ripple: x origin, y radius, z strength): two fronts y either way from x, each falling ahead
+// of it over RippleFront and fading behind it, back toward the origin, over RippleTrail, times z. Strength 0 is no
+// ripple, and the branch skips its exp. A ternary evaluates both sides; both are finite here (|Wrap| <= 0.5 and the
+// radius is finite), so the select is safe.
+float RippleAt(float t, float4 ripple)
+{
+    float light = 0;
+    [branch] if (ripple.z > 0)
+    {
+        float x = abs(Wrap(t - ripple.x)) - ripple.y;
+        float exponent = x >= 0 ? -(x / RippleFront) * (x / RippleFront) : x / RippleTrail;
+        light = ripple.z * exp(exponent);
+    }
+    return light;
+}
+
+// What the Flow movement multiplies the alpha by at perimeter coordinate t, at most 1: the comets over the dimmer edge
+// (FlowFloor..1), each ripple on top like light through two filters (so it never passes 1), blended to FlowMean by
+// deep (the colour's own blend to its mean, before the perimeter coordinate's seam) and faded in by FlowAmount.
+float Motion(float t, float deep)
+{
+    float m = FlowFloor + (1 - FlowFloor) * Comets(t);
+    [unroll] for (int i = 0; i < 4; i++)
+        m = 1 - (1 - m) * (1 - RippleAt(t, Ripples[i]));
+    m += (FlowMean - m) * deep;
+    return 1 + (m - 1) * FlowAmount;
+}
+
 float3 LinearToSrgb(float3 c)
 {
     float3 low = c * 12.92;
@@ -209,13 +278,27 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
         return 0;
 
     // 3-5. Colour around the perimeter from the Oklab-blended gradient (built on the CPU when the palette changes).
-    float u = frac(PerimeterT(p, ScreenPx, ColorRadiusPx) + Phase);
-    float3 rgb = Gradient.SampleLevel(GradientSampler, float2(u, 0.5), 0).rgb;
     // The perimeter coordinate has a seam deep inside (its medial axis, at least ColorRadiusPx from every edge). The
     // colour blends to the gradient's mean before that depth, so both sides of the seam agree even when a wide glow
     // (ColorRadiusPx clamped to half the screen) still lights it.
+    float t = PerimeterT(p, ScreenPx, ColorRadiusPx);
     float depth = min(min(p.x, p.y), min(ScreenPx.x - p.x, ScreenPx.y - p.y));
-    rgb = lerp(rgb, MeanColor, smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth));
+    float deep = smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth);
+
+    // The Flow movement (GlowProfile.Motion, Maxwell's request): comets chase round the edge and the beats' ripples
+    // run along it, on the colours' own coordinate t, blending to their mean where the colours blend to theirs. The
+    // motion is at most 1, so the test above was an upper bound; dimmed by it, the pixel may now fall under half a
+    // code value too. With FlowAmount 0 it is branched over.
+    [branch] if (FlowAmount > 0)
+    {
+        a *= Motion(t, deep);
+        [branch] if (a < 0.5 / 255)
+            return 0;
+    }
+
+    float u = frac(t + Phase);
+    float3 rgb = Gradient.SampleLevel(GradientSampler, float2(u, 0.5), 0).rgb;
+    rgb = lerp(rgb, MeanColor, deep);
 
     // 7. Premultiplied output, then 6. the dither. The swap chain is 8-bit UNORM, which DWM reads as sRGB-encoded,
     // so the linear gradient colour is encoded here before it is multiplied by alpha. The same noise goes on all
