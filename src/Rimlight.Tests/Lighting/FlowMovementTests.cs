@@ -414,6 +414,37 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
         }
     }
 
+    [Theory]
+    [InlineData(MovementStyle.Flow, MovementStyle.Pulse)]
+    [InlineData(MovementStyle.Pulse, MovementStyle.Flow)]
+    public void AHideFadeKeepsTheMovementItStartsWith(MovementStyle from, MovementStyle to)
+    {
+        // The twin of LightEngineTests.AHideFadeKeepsTheLookItStartsWith. Silence (WhenSilent = Hide) has just started
+        // fading the light out when the Movement is switched: it fades out over 1.5 s with the comets and the pulse's
+        // share it had, instead of crossfading as it goes (Flow to Pulse brightened the edge between the comets mid
+        // fade-out). Once it is gone, sound brings it back with the new movement in full, within 150 ms.
+        Settings before = Flow with { Movement = from, WhenSilent = SilentBehavior.Hide };
+        Settings after = before with { Movement = to };
+        var engine = Settled(before, Loud);
+        var quiet = Silent with { Beat = 0.5f };
+        List<LightState> fade = Frames(engine, 3, quiet, before);
+        fade.AddRange(Frames(engine, 97, quiet, after));
+        Assert.All(fade, s => Assert.Equal(from == MovementStyle.Flow ? 1f : 0f, s.Flow.Amount));
+        Assert.All(fade, s => Assert.Equal(from == MovementStyle.Flow ? 0.2f : 0.5f, s.Pulse, 1e-6f));
+        Assert.Equal(0.5f, fade[44].Visibility, 1e-3f);       // 0.75 s
+        Assert.True(fade[88].Visibility > 0);
+        Assert.Equal(0f, fade[89].Visibility);                  // 1.5 s
+        for (int i = 1; i < fade.Count; i++) Assert.True(fade[i].Visibility <= fade[i - 1].Visibility);
+
+        List<LightState> back = Frames(engine, 9, Loud with { Beat = 0.5f }, after);
+        Assert.Equal(1f, back[8].Visibility);
+        foreach (LightState state in back)
+        {
+            Assert.Equal(to == MovementStyle.Flow ? 1f : 0f, state.Flow.Amount);
+            Assert.Equal(to == MovementStyle.Flow ? 0.2f : 0.5f, state.Pulse, 1e-6f);
+        }
+    }
+
     // ---- hidden ----
 
     [Fact]
