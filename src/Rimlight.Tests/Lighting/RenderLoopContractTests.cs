@@ -65,6 +65,8 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
         return (engine, state);
     }
 
+    private const int VisibilityBits = 12;                  // where Bits puts Visibility
+
     private static int[] Bits(in LightState s) =>
     [
         BitConverter.SingleToInt32Bits(s.ColorA.R), BitConverter.SingleToInt32Bits(s.ColorA.G), BitConverter.SingleToInt32Bits(s.ColorA.B),
@@ -72,10 +74,15 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
         BitConverter.SingleToInt32Bits(s.Ratio), BitConverter.SingleToInt32Bits(s.Intensity), BitConverter.SingleToInt32Bits(s.Spread),
         BitConverter.SingleToInt32Bits(s.CoreThicknessDip), BitConverter.SingleToInt32Bits(s.Phase), BitConverter.SingleToInt32Bits(s.Pulse),
         BitConverter.SingleToInt32Bits(s.Visibility),
+        BitConverter.SingleToInt32Bits(s.Flow.Amount), BitConverter.SingleToInt32Bits(s.Flow.CometPhase),
+        .. RippleBits(s.Flow.Ripple0), .. RippleBits(s.Flow.Ripple1), .. RippleBits(s.Flow.Ripple2), .. RippleBits(s.Flow.Ripple3),
     ];
 
+    private static int[] RippleBits(Ripple r) =>
+        [BitConverter.SingleToInt32Bits(r.Origin), BitConverter.SingleToInt32Bits(r.Radius), BitConverter.SingleToInt32Bits(r.Strength)];
+
     // FramePacer.ChangeRate restated: the fastest change of anything the glow shows, per second (colors reach the
-    // screen through the gradient and are left out).
+    // screen through the gradient and are left out), the Flow movement's comets and ripples included (H-033).
     private static float ChangeRate(in LightState a, in LightState b, float dt)
     {
         float phase = MathF.Abs(b.Phase - a.Phase) % 1;
@@ -84,8 +91,17 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
                 MathF.Max(MathF.Abs(b.Pulse - a.Pulse), MathF.Abs(b.Spread - a.Spread))),
             MathF.Max(MathF.Max(MathF.Abs(b.Ratio - a.Ratio), MathF.Abs(b.CoreThicknessDip - a.CoreThicknessDip) / 40),
                 MathF.Min(phase, 1 - phase)));
+        FlowMotion fa = a.Flow, fb = b.Flow;
+        float comets = MathF.Abs(fb.CometPhase - fa.CometPhase) % 1;
+        change = MathF.Max(change, MathF.Max(MathF.Abs(fb.Amount - fa.Amount), MathF.Min(comets, 1 - comets)));
+        change = MathF.Max(change, MathF.Max(MathF.Max(RippleChange(fa.Ripple0, fb.Ripple0), RippleChange(fa.Ripple1, fb.Ripple1)),
+            MathF.Max(RippleChange(fa.Ripple2, fb.Ripple2), RippleChange(fa.Ripple3, fb.Ripple3))));
         return change / dt;
     }
+
+    // A ripple changes by its strength, and while it shows by how far its fronts have run.
+    private static float RippleChange(Ripple a, Ripple b) =>
+        MathF.Max(MathF.Abs(b.Strength - a.Strength), a.Strength > 0 || b.Strength > 0 ? MathF.Abs(b.Radius - a.Radius) : 0);
 
     // ---- 1. IsStatic means time alone changes nothing ----
 
@@ -129,7 +145,7 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
             reference ??= wake;
             Assert.Equal(reference, wake);
         }
-        Assert.Equal(BitConverter.SingleToInt32Bits(1f), reference![^1][12]); // and the light is fully back
+        Assert.Equal(BitConverter.SingleToInt32Bits(1f), reference![^1][VisibilityBits]); // and the light is fully back
     }
 
     [Theory]
@@ -276,18 +292,27 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData(60f, 0f, false)]
-    [InlineData(30f, 0f, false)]
-    [InlineData(144f, 0.2f, false)]
-    [InlineData(240f, 0.2f, false)]
-    [InlineData(60f, 0.2f, true)]
-    public void SilenceHandsOverToIdleGlowBeforeK3SlowsDown(float fps, float jitter, bool beatsWhileSilent)
+    [InlineData(60f, 0f, false, MovementStyle.Flow)]
+    [InlineData(30f, 0f, false, MovementStyle.Flow)]
+    [InlineData(144f, 0.2f, false, MovementStyle.Flow)]
+    [InlineData(240f, 0.2f, false, MovementStyle.Flow)]
+    [InlineData(60f, 0.2f, true, MovementStyle.Flow)]
+    [InlineData(60f, 0f, false, MovementStyle.Pulse)]
+    [InlineData(30f, 0f, false, MovementStyle.Pulse)]
+    [InlineData(144f, 0.2f, false, MovementStyle.Pulse)]
+    [InlineData(240f, 0.2f, false, MovementStyle.Pulse)]
+    [InlineData(60f, 0.2f, true, MovementStyle.Pulse)]
+    public void SilenceHandsOverToIdleGlowBeforeK3SlowsDown(float fps, float jitter, bool beatsWhileSilent, MovementStyle movement)
     {
         // Music sync with When silent = Idle Glow. K3 drops to 10 fps once IsSilent has held for 1.75 s (counted like
         // MusicGlowSource: the dt of every frame since the first silent one). By then the crossfade must be over: Level
         // no longer matters (two engines that hear different levels agree bit for bit), Pulse is 0 even if the analyzer
-        // still reports a beat, the phase has stopped (unless beats keep arriving) and nothing moves faster than 0.25
-        // per second. The last beat lands on the first silent frame, the latest a beat's push can start.
+        // still reports a beat, the Flow movement is gone (its comets and ripples stop with the music), the phase has
+        // stopped (unless beats keep arriving) and nothing moves faster than 0.25 per second. The last beat lands on the
+        // first silent frame, the latest a beat's push can start. In Flow the colors drift faster when the music is
+        // louder, so the two engines' phases part during the crossfade and stop where it leaves each: there they agree
+        // in everything else.
+        Settings music = Music with { Movement = movement };
         ILightEngine a = CoreFactory.CreateLightEngine(), b = CoreFactory.CreateLightEngine();
         var random = new Random(5);
         float beat = 0, silentSeconds = 0, settledPhase = float.NaN;
@@ -304,8 +329,9 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
                 || (beatsWhileSilent && silent && random.Next((int)(fps / 2)) == 0);
             beat = onBeat ? 1 : beat * MathF.Exp(-dt / 0.12f);
             float level = (float)random.NextDouble();
-            LightState stateA = a.Update(dt, new AudioFeatures(level, 0.5f, beat, silent), Palette.Default, Music, false);
-            LightState stateB = b.Update(dt, new AudioFeatures(silent ? 1 - level : level, 0.5f, beat, silent), Palette.Default, Music, false);
+            LightState stateA = a.Update(dt, new AudioFeatures(level, 0.5f, beat, silent), Palette.Default, music, false);
+            LightState stateB = b.Update(dt, new AudioFeatures(silent ? 1 - level : level, 0.5f, beat, silent), Palette.Default, music, false);
+            if (movement == MovementStyle.Flow) stateB = stateB with { Phase = stateA.Phase };
             bool agree = Bits(stateA).SequenceEqual(Bits(stateB));
             if (!silent || !agree) done = float.NaN;
             else if (float.IsNaN(done)) done = silentSeconds;
@@ -313,6 +339,7 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
             {
                 Assert.Equal(Bits(stateA), Bits(stateB));
                 Assert.Equal(0f, stateA.Pulse);
+                Assert.Equal(default, stateA.Flow);
                 Assert.Equal(1f, stateA.Visibility);
                 Assert.InRange(stateA.Intensity, 0.8f * 0.9f * 0.9f - 1e-6f, 0.8f * 0.9f * 1.1f + 1e-6f);
                 if (float.IsNaN(settledPhase)) settledPhase = stateA.Phase;
@@ -324,7 +351,7 @@ public sealed class RenderLoopContractTests(ITestOutputHelper output)
             }
             previous = stateA;
         }
-        output.WriteLine($"{fps} fps ±{jitter * 100}%: Idle Glow reached {done:F3} s after IsSilent (K3 slows at {IdleSettleSeconds} s)");
+        output.WriteLine($"{movement}, {fps} fps ±{jitter * 100}%: Idle Glow reached {done:F3} s after IsSilent (K3 slows at {IdleSettleSeconds} s)");
         Assert.InRange(done, 1.4f, IdleSettleSeconds);          // a fade (1.5 s in doc 01 §2), done in time
     }
 
