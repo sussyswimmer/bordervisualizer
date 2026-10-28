@@ -30,6 +30,8 @@ final class LoopBridgeTests: XCTestCase {
         var now = 10.0
         var actions: [Int32] = []
         var pace = RlPace()
+        var flowAmount: Float = 0
+        var cometPhases = Set<Float>()
         for _ in 0..<30 {
             rl_loop_apply_inputs(loop.handle, now)
             var info = RlFrameInfo()
@@ -45,6 +47,8 @@ final class LoopBridgeTests: XCTestCase {
                     // The light goes round the notch, in the drawable's pixels.
                     XCTAssertEqual(k.notchHeightPx, index == 1 ? 64 : 0)
                     XCTAssertEqual(k.notchLeftPx, index == 1 ? 1318 : 0)
+                    flowAmount = max(flowAmount, k.flowAmount)
+                    cometPhases.insert(k.cometPhase)
                     XCTAssertEqual(rl_loop_surface_done(loop.handle, Int32(index), 1, Int64(now * 1000)), 0)
                 }
             }
@@ -55,6 +59,9 @@ final class LoopBridgeTests: XCTestCase {
         XCTAssertTrue(actions.dropFirst(2).contains(RL_SURFACE_DRAW))
         XCTAssertEqual(pace.pace, RL_PACE_FULL)
         XCTAssertEqual(pace.fullRateHz, 60, accuracy: 1e-6) // the default 60 fps cap on a 120 Hz screen
+        // The default movement is Flow: the demo's music moves comets round the edge, through the constants.
+        XCTAssertGreaterThan(flowAmount, 0)
+        XCTAssertGreaterThan(cometPhases.count, 1)
     }
 
     func testGlowOffIsSavedAndPublished() throws {

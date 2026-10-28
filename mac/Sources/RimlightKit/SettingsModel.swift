@@ -201,12 +201,12 @@ extension Color {
 extension AppSettings {
     /// Core's defaults (CORE-API §7.1), only if the library can't be read.
     static let fallback = AppSettings(
-        version: 1, enabled: true, animation: "MusicSync", whenSilent: "IdleGlow", colorMode: "AlbumArt",
-        overrideAlbumColor: false, primaryHex: "#7C5CFF", secondaryHex: "#22D3EE", primaryRatio: 0.6,
-        coreThicknessDip: 6, glow: 0.45, brightness: 0.8, sensitivity: 1, cornerRadiusDip: 0, edgeStyle: "Glow",
-        coverTaskbar: true, monitors: "All", customMonitorIds: [], fpsCap: 60, pauseInFullscreen: true,
-        onBattery: "Reduce", hideFromScreenCapture: false, launchAtStartup: true, toggleHotkey: "Ctrl+Alt+L",
-        autoUpdate: true, firstRunComplete: false)
+        version: 1, enabled: true, animation: "MusicSync", whenSilent: "IdleGlow", movement: "Flow",
+        colorMode: "AlbumArt", overrideAlbumColor: false, primaryHex: "#7C5CFF", secondaryHex: "#22D3EE",
+        primaryRatio: 0.6, coreThicknessDip: 6, glow: 0.45, brightness: 0.8, sensitivity: 1, cornerRadiusDip: 0,
+        edgeStyle: "Glow", coverTaskbar: true, monitors: "All", customMonitorIds: [], fpsCap: 60,
+        pauseInFullscreen: true, onBattery: "Reduce", hideFromScreenCapture: false, launchAtStartup: true,
+        toggleHotkey: "Ctrl+Alt+L", autoUpdate: true, firstRunComplete: false)
 }
 
 /// The Motion page's level meter (doc 06 §3.3): the analyzer's latest loudness and beat, read 30 times a second only
