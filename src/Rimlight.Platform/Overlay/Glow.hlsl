@@ -13,7 +13,7 @@ cbuffer Light : register(b0)
     float  CornerRadiusPx;    // the shape's (bottom) corner radius; 0 = square. The field radii are at least this
     float  ShoulderPx;        // width of the soft shoulder at the edge: the Thickness, at least one DIP (Line: one DIP)
     float  SpreadPx;          // glow reach (e-folding distance)
-    float  Gain;              // Intensity x the beat's 1 + 0.25 Pulse, rolled off under 1 (GlowProfile.Gain)
+    float  Gain;              // Intensity x (1 + 0.25 Pulse)(1 + 0.3 FlowAmount), rolled off under 1 (GlowProfile.Gain)
     float  Pulse;             // 0..1 beat kick
     float  Phase;             // 0..1 gradient rotation
     float  Visibility;        // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Gain
