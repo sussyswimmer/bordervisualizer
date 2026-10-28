@@ -35,7 +35,7 @@ internal sealed class PaceModel
     public const float MinVisibility = 0.5f / 255;
     /// <summary>How much the light changes per perimeter a Flow comet's head travels, at most (FramePacer.CometSlope:
     /// (1 - GlowProfile.FlowFloor) / GlowProfile.CometHead).</summary>
-    public const float CometSlope = (1 - 0.5f) / 0.01f;
+    public const float CometSlope = (1 - 0.1f) / 0.03f;
     /// <summary>... and per perimeter a ripple's front travels, at full strength (FramePacer.FrontSlope:
     /// 1 / GlowProfile.RippleFront).</summary>
     public const float FrontSlope = 1 / 0.015f;

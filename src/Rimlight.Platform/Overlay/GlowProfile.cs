@@ -63,8 +63,8 @@ namespace Rimlight.Platform.Overlay;
 /// whose light travels round it: "I want the rimlight to be like the video I sent where it moves around and doesn't
 /// just bounce"; he picked all three of light chasing round the edge, colours flowing round it and beats rippling
 /// round it. Along the perimeter (<see cref="PerimeterT"/>, the colours' own coordinate) the light varies by
-/// <see cref="Flow"/>: <see cref="CometCount"/> comets, a crisp head and a long fading tail
-/// (<see cref="Comets"/>), over a dimmer edge (<see cref="FlowFloor"/>), and the beats' ripples
+/// <see cref="Flow"/>: one comet, a soft head and a tail lighting about half the edge (<see cref="Comets"/>), over an
+/// edge that is nearly dark (<see cref="FlowFloor"/>), as in the frames of his reference clip, and the beats' ripples
 /// (<see cref="RippleAt"/>), each two fronts running both ways from where the beat landed. Deep inside it blends to its
 /// mean (<see cref="FlowMean"/>) where the colours blend to theirs, so the perimeter coordinate's seam never shows.
 /// The light state's Flow amount fades all of it in and out (<see cref="Motion"/>), and the gain rises with it
@@ -112,26 +112,29 @@ public static class GlowProfile
     /// </summary>
     public const float NotchedDisplayTopCornerDip = 10f;
 
-    /// <summary>How many comets chase round the edge in the Flow movement, evenly spaced.</summary>
-    public const int CometCount = 2;
+    /// <summary>
+    /// How many comets chase round the edge in the Flow movement, evenly spaced: one, as in Maxwell's reference clip,
+    /// whose frames show a single lit arc of about 50-70 % of the edge chasing round it with the rest dark.
+    /// </summary>
+    public const int CometCount = 1;
 
     /// <summary>
-    /// A comet's head: its light falls ahead of the head as a Gaussian, exp(-(a / this)²), a in perimeters, so it ends
-    /// crisply where it is going.
+    /// A comet's head: its light falls ahead of the head as a Gaussian, exp(-(a / this)²), a in perimeters, so its
+    /// leading end fades over about 0.05 of the perimeter, softly, like the clip's.
     /// </summary>
-    public const float CometHead = 0.01f;
+    public const float CometHead = 0.03f;
 
     /// <summary>
-    /// A comet's tail: its light fades behind the head as exp(-b / this), b in perimeters, a long trail over about a
-    /// quarter of the perimeter.
+    /// A comet's tail: its light fades behind the head as exp(-b / this), b in perimeters: over the
+    /// <see cref="FlowFloor"/> it keeps about 58 % of the edge at a quarter of its peak or more, the clip's arc.
     /// </summary>
-    public const float CometTail = 0.12f;
+    public const float CometTail = 0.3f;
 
     /// <summary>
-    /// The Flow movement's light between the comets, as a share of a comet's peak: the whole edge stays lit, dimmer, so
-    /// the line still outlines the screen.
+    /// The Flow movement's light away from the comet, as a share of its peak: nearly dark, as in the clip, but never
+    /// quite off, so the Line style still outlines the screen faintly.
     /// </summary>
-    public const float FlowFloor = 0.5f;
+    public const float FlowFloor = 0.1f;
 
     /// <summary>A ripple's front: its light falls ahead of the front as exp(-(x / this)²), x in perimeters.</summary>
     public const float RippleFront = 0.015f;
@@ -142,15 +145,16 @@ public static class GlowProfile
     /// <summary>
     /// The Flow movement's light averaged round the perimeter, ripples aside: <see cref="FlowFloor"/> + (1 -
     /// <see cref="FlowFloor"/>) × <see cref="CometCount"/> × (<see cref="CometHead"/> √π / 2 +
-    /// <see cref="CometTail"/>), what each comet adds (its tails barely overlap the next head). Deep inside, where the
+    /// <see cref="CometTail"/> (1 - exp(-1 / (<see cref="CometCount"/> <see cref="CometTail"/>)))), what each comet
+    /// adds: its head's Gaussian half and its tail, cut where it reaches the next head. Deep inside, where the
     /// perimeter coordinate has its seam, the light blends to this, as the colours blend to their mean. The shaders
     /// carry the same number.
     /// </summary>
-    public const float FlowMean = 0.62886227f;
+    public const float FlowMean = 0.38429615f;
 
     /// <summary>
-    /// How much the gain rises at the full Flow amount: the comets' heads shine 30 % brighter than the even edge did,
-    /// and the edge between them at <see cref="FlowFloor"/> × 1.3 of it (<see cref="Gain"/>).
+    /// How much the gain rises at the full Flow amount: the comet's head shines 30 % brighter than the even edge did,
+    /// and the edge away from it at <see cref="FlowFloor"/> × 1.3 of it (<see cref="Gain"/>).
     /// </summary>
     public const float FlowBoost = 0.3f;
 

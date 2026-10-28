@@ -232,22 +232,18 @@ GM_FN float gm_profile_alpha(RlGlowConstants k, float x, float y) {
 
 // The Flow movement (GlowProfile.Comets, RippleAt, Flow and Motion; Maxwell's request, H-033). Positions are perimeter
 // coordinates t (gm_perimeter_t, before the phase) and lengths are in perimeters, so the light travels round the edge
-// with the colours. The constants are GlowProfile's: 2 comets (CometCount), a head of 0.01 (CometHead) and a tail of
-// 0.12 (CometTail) over a floor of 0.5 (FlowFloor); a ripple's front of 0.015 (RippleFront) and trail of 0.06
-// (RippleTrail); the light's mean round the edge, 0.62886227 (FlowMean).
+// with the colours. The constants are GlowProfile's: 1 comet (CometCount), a head of 0.03 (CometHead) and a tail of
+// 0.3 (CometTail) over a floor of 0.1 (FlowFloor); a ripple's front of 0.015 (RippleFront) and trail of 0.06
+// (RippleTrail); the light's mean round the edge, 0.38429615 (FlowMean).
 
-// GlowProfile.Comets: the comets' light at t, 0..1, the brightest of two comets whose heads sit at i / 2 - cometPhase.
-// Each is 1 at its head, falls ahead of it as a Gaussian and fades behind it over its tail; the larger exponent wins,
-// so the light is continuous everywhere, the heads included.
+// GlowProfile.Comets: the comet's light at t, 0..1, its head at -cometPhase (GlowProfile's loop over its one comet).
+// It is 1 at its head, falls ahead of it as a Gaussian and fades behind it over its tail; the larger exponent wins,
+// so the light is continuous everywhere, the head included.
 GM_FN float gm_comets(float t, float cometPhase) {
-    float brightest = -1e30f;
-    for (int i = 0; i < 2; i++) {
-        float head = (float)i / 2.0f - cometPhase;
-        float behind = gm_frac(t - head) / 0.12f;
-        float ahead = gm_frac(head - t) / 0.01f;
-        brightest = GM_MAX(brightest, GM_MAX(-behind, -ahead * ahead));
-    }
-    return GM_EXP(brightest);
+    float head = -cometPhase;
+    float behind = gm_frac(t - head) / 0.3f;
+    float ahead = gm_frac(head - t) / 0.03f;
+    return GM_EXP(GM_MAX(-behind, -ahead * ahead));
 }
 
 // To [-0.5, 0.5): the signed way round the perimeter, the shorter one (GlowProfile.Wrap).
@@ -265,10 +261,10 @@ GM_FN float gm_ripple_at(float t, float origin, float radius, float strength) {
     return strength * GM_EXP(exponent);
 }
 
-// GlowProfile.Flow: the Flow movement's light at t, 0.5..1, before the blend deep inside: the comets over the dimmer
-// edge, then each ripple on top, combined like light through two filters, so it never passes 1.
+// GlowProfile.Flow: the Flow movement's light at t, 0.1..1, before the blend deep inside: the comet over the nearly
+// dark edge, then each ripple on top, combined like light through two filters, so it never passes 1.
 GM_FN float gm_flow(RlGlowConstants k, float t) {
-    float m = 0.5f + (1.0f - 0.5f) * gm_comets(t, k.cometPhase);
+    float m = 0.1f + (1.0f - 0.1f) * gm_comets(t, k.cometPhase);
     for (int i = 0; i < 4; i++) {
         RlGlowRipple r = k.ripples[i];
         m = 1.0f - (1.0f - m) * (1.0f - gm_ripple_at(t, r.origin, r.radius, r.strength));
@@ -281,7 +277,7 @@ GM_FN float gm_flow(RlGlowConstants k, float t) {
 // the Flow amount, at most 1. Glow.metal computes t and deep once for the colour and the motion.
 GM_FN float gm_motion_at(RlGlowConstants k, float t, float deep) {
     float m = gm_flow(k, t);
-    m += (0.62886227f - m) * deep;
+    m += (0.38429615f - m) * deep;
     return 1.0f + (m - 1.0f) * k.flowAmount;
 }
 

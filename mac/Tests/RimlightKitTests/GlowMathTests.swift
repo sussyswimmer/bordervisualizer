@@ -193,12 +193,11 @@ final class GlowMathTests: XCTestCase {
     // MARK: - The Flow movement's pieces
 
     func testTheCometsAreBrightestAtTheirHeadsAndContinuous() {
-        // Two heads half a perimeter apart, at 1 / 2 - phase and 1 - phase; nothing jumps anywhere round the loop.
+        // One head, at 1 - phase; nothing jumps anywhere round the loop.
         let phase: Float = 0.3
-        XCTAssertEqual(gm_comets(0.2, phase), 1, accuracy: 1e-6)
         XCTAssertEqual(gm_comets(0.7, phase), 1, accuracy: 1e-6)
-        XCTAssertLessThan(gm_comets(0.45, phase), 0.2) // a quarter of the perimeter (about two tails) behind the first head
-        XCTAssertGreaterThan(gm_comets(0.21, phase), gm_comets(0.19, phase)) // the tail fades slower than the head
+        XCTAssertLessThan(gm_comets(0.2, phase), 0.2) // half a perimeter behind it the tail is down to exp(-0.5 / 0.3)
+        XCTAssertGreaterThan(gm_comets(0.71, phase), gm_comets(0.69, phase)) // the tail fades slower than the head
         var previous = gm_comets(0, phase)
         for i in 1...20_000 {
             let value = gm_comets(Float(i) / 20_000, phase)
