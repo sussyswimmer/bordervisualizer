@@ -15,10 +15,10 @@ public sealed unsafe class ExportsTests : IDisposable
     }
 
     [Fact]
-    public void AbiVersionIsNine()
+    public void AbiVersionIsTen()
     {
         delegate* unmanaged<int> abi = &Exports.AbiVersion;
-        Assert.Equal(9, abi());
+        Assert.Equal(10, abi());
     }
 
     [Fact]
@@ -91,6 +91,18 @@ public sealed unsafe class ExportsTests : IDisposable
         Assert.Contains("\"coreThicknessDip\":6", json);
         Assert.Contains("\"animation\":\"MusicSync\"", json);
         Assert.Contains("\"customMonitorIds\":[]", json);
+        Assert.Contains("\"movement\":\"Flow\"", json); // the Flow movement, the default (H-033)
+    }
+
+    [Fact]
+    public void TheMovementCrossesByName()
+    {
+        // The Mac's Motion page sets "movement" as the file does: Flow, the default when it is left out, or Pulse.
+        Assert.Equal(MovementStyle.Pulse, SettingsTransport.Deserialize("""{ "movement": "Pulse" }""")?.Movement);
+        Assert.Equal(MovementStyle.Flow, SettingsTransport.Deserialize("""{ "glow": 0.5 }""")?.Movement);
+        string pulse = SettingsTransport.Serialize(new Settings { Movement = MovementStyle.Pulse });
+        Assert.Contains("\"movement\":\"Pulse\"", pulse);
+        Assert.Null(SettingsTransport.Deserialize("""{ "movement": "Sideways" }"""));
     }
 
     [Fact]
