@@ -57,6 +57,7 @@ internal static class SettingsValidator
             Brightness = Clamp(settings.Brightness, MinBrightness, MaxBrightness, d.Brightness),
             Sensitivity = Clamp(settings.Sensitivity, MinSensitivity, MaxSensitivity, d.Sensitivity),
             CornerRadiusDip = Clamp(settings.CornerRadiusDip, MinCornerRadiusDip, MaxCornerRadiusDip, d.CornerRadiusDip),
+            EdgeStyle = Defined(settings.EdgeStyle, d.EdgeStyle),
             Monitors = Defined(settings.Monitors, d.Monitors),
             CustomMonitorIds = CleanMonitorIds(settings.CustomMonitorIds),
             FpsCap = IsValidFpsCap(settings.FpsCap) ? settings.FpsCap : d.FpsCap,

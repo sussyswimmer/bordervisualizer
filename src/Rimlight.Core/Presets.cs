@@ -8,7 +8,8 @@ namespace Rimlight.Core;
 /// <see cref="Settings.SecondaryHex"/>, <see cref="Settings.PrimaryRatio"/>, <see cref="Settings.CoreThicknessDip"/>,
 /// <see cref="Settings.Glow"/> and <see cref="Settings.Brightness"/>. Applying presets one after another therefore
 /// gives the same look as applying the last one alone (only Minimal's Idle Glow mode stays until the user changes the
-/// mode). Corner radius and taskbar coverage fit the user's screen, not the look, so they are kept.</para>
+/// mode). Corner radius and taskbar coverage fit the user's screen, not the look, so they are kept, and so is
+/// <see cref="Settings.EdgeStyle"/>: soft glow or bright line is the user's pick, and every preset suits both.</para>
 /// <para>Every preset also sets <see cref="Settings.OverrideAlbumColor"/> to true and keeps
 /// <see cref="Settings.ColorMode"/>, so the look shows even in Album Art mode, and turning Override off brings the album
 /// colors back (H-009). Minimal also sets <see cref="Settings.Animation"/> to <see cref="AnimationMode.IdleGlow"/>.

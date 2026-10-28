@@ -83,7 +83,8 @@ All functions are on `libRimlightCore`. The functions with a handle take the pip
 - **The shader matches `GlowProfile` exactly.** The Metal shader is a line-by-line port of `Glow.hlsl`. Its math (rounded-box depth, eased distance, profile, perimeter coordinate) lives in `GlowMath.h`, which is valid both as Metal Shading Language and as C with `<simd/simd.h>`. Two checks use it:
   1. **CPU parity.** A C# test writes a golden table (`mac/Tests/Fixtures/glow-golden.json`): `GlowProfile` and `GlowConstants` for a grid of distances, sizes, thicknesses, glows, pulses and corner radii. A Swift test (`swift test`) compiles `GlowMath.h` as C and must match it within 1e-5.
      - A second C# test fails if the committed table is stale, so the profile can't change on one side alone.
-     - `GlowMath.h` declares the uniform struct with `static_assert(sizeof(GlowConstants) == 64)`, mirroring `GlowConstants.SizeInBytes`.
+     - `GlowMath.h` declares the uniform struct with `static_assert(sizeof(GlowConstants) == 80)`, mirroring `GlowConstants.SizeInBytes`.
+     - The table covers both edge styles and a notched 14-inch screen: samples across the line's anti-aliased edge, in the top and bottom corners, and inside, beside, below and in the "ears" of the notch. Its constants come from the screen as the app describes it (`RlSurface`, notch in points) through `rl_glow_constants`, the loop's own conversion; the alpha from `gm_alpha` on the table's constants.
   2. **GPU parity.** A Swift test renders the shader offscreen at known constants and compares the pixels with the same table (within one 8-bit code value, dither excluded).
      - It skips itself when no Metal device exists. Whether GitHub's arm64 macOS runners expose Metal is **unverified**, and M1 finds out. If they don't, it runs on Maxwell's Mac through `swift test`.
 
@@ -189,11 +190,13 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
 
 ### 3.2 Notch and rounded corners
 
-- **The notch.**
-  - `NSScreen.safeAreaInsets` and `auxiliaryTopLeftArea`/`auxiliaryTopRightArea` describe it [Apple: NSScreen].
-  - The glow runs along the top edge as everywhere else. Under the notch it falls on no pixels, the way a display's bezel hides it, so there is nothing to draw around.
-  - The menu bar is above the overlay only when Cover taskbar is off.
-  - A notch-hugging outline is out of v1 (roadmap).
+- **The notch: the light goes round it** (both edge styles). *Maxwell, with a photo of a MacBook whose edge light dips round the camera notch:* "detect if theres a notch and go around it for the lighting".
+  - `NSScreen.safeAreaInsets.top` is the notch's height (0 on a screen without one), and the menu bar's areas either side of it (`auxiliaryTopLeftArea`, `auxiliaryTopRightArea`) give its sides [Apple: NSScreen]. Only their widths are used: they are measured from the screen's own left and right edges, so the notch spans `leftArea.width` to `frame.width - rightArea.width` with no coordinate-space question.
+  - `OverlayController.notch(screenFrame:panelFrame:topInset:leftAreaWidth:rightAreaWidth:)` turns that into points from the overlay's top-left (a plain static function, unit-tested with the 14-inch MacBook Pro's numbers: 659 to 853 points across, 32 down). It is passed in `RlSurface` (`notchLeftPt`, `notchRightPt`, `notchHeightPt`; 0 without one), and the loop converts it to the drawable's pixels with the surface's pixels per point, render scale included (`MacOverlayLoop.ConstantsFor`).
+  - The shader's depth becomes the smooth minimum of the depth in from the edge and the distance from the notch (`GlowProfile.NotchDistance`, `SmoothMin`): the light runs down the notch's side, along its bottom and up again, and the inside corners where it meets the top edge are rounded like the notch's own "ears". The colours stay on the outer rectangle, so the notch's outline takes the top edge's colours.
+  - A notched screen has rounded top corners, about 10 points (`GlowProfile.NotchedDisplayTopCornerDip`); the Bright line follows them (a larger Corner radius setting wins).
+  - With Cover taskbar off, the overlay starts below the menu bar, which is at least as tall as the notch, so there is no notch to go round. An external display has none.
+- **Edge style** (Settings › Appearance › Edge, `EdgeStyle`, on both platforms): *Soft glow* (the default; unchanged, except that on a notched Mac with Cover taskbar on, the default, it now goes round the notch, above) or *Bright line*, a crisp line along the very edge, the Thickness wide (at least one point), with a dimmer glow inside it (doc 04 §3). Round 2 took a thin bright rim out of the default look at Maxwell's request, so the line is an option: nobody sees it until they pick it.
 - **Rounded display corners.** NSScreen has **no public corner-radius API**; `_displayCornerRadius` is a private iOS selector [Apple's NSScreen symbol list; 3P].
   - Doesn't matter much here: the light's distance field already rounds its corners to at least two spreads plus the shoulder (`GlowProfile.GlowRadius`: about 80 px at the defaults on a 1080p screen, and more on a Retina one), well beyond a MacBook's corner. The hardware corner just crops a soft glow.
   - `CornerRadiusDip` stays the user's setting (default 0), as on Windows. No private API.
@@ -209,8 +212,8 @@ The setup Apple DTS gave in May 2026, tested on macOS 26 [Apple DTS: developer.a
   - Half render scale (on battery with Reduce) draws at half size, and the layer stretches it.
   - Pixels per DIP are `backingScaleFactor × render scale`: one macOS point stands for the DIP, and both `GlowConstants.Create` and the Thickness and corner settings take it as their scale.
   - Thickness 6 is therefore 6 pt: 12 px on a Retina screen, the same pixel count as 6 DIP at 200 % on Windows.
-- **`Glow.metal` is a line-by-line port of `Glow.hlsl`:** the same uniform block (`GlowConstants`, 64 bytes), a full-screen triangle from `vertex_id`, the 64-texel gradient as a 64 × 1 `rgba32Float` texture with linear filtering and repeat addressing, the same perimeter coordinate, mean-colour blend, sRGB encode and dither, and premultiplied output.
-  - The profile functions sit in `GlowMath.h` and are tested against `GlowProfile` (§1.4).
+- **`Glow.metal` is a line-by-line port of `Glow.hlsl`:** the same uniform block (`GlowConstants`, 80 bytes: the Line style's width, the top corners and the notch fill what were two pads and a fifth register), a full-screen triangle from `vertex_id`, the 64-texel gradient as a 64 × 1 `rgba32Float` texture with linear filtering and repeat addressing, the same perimeter coordinate, mean-colour blend, sRGB encode and dither, and premultiplied output.
+  - The profile functions sit in `GlowMath.h` and are tested against `GlowProfile` (§1.4). `gm_alpha` is `GlowProfile.Alpha`: both edge styles, and the way round the notch; the soft glow without a notch computes nothing new.
 
 ### 3.4 Pacing: the display link, and nothing when static
 

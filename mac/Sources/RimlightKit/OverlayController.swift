@@ -122,8 +122,14 @@ final class OverlayController {
                                                    height: max((full.height * renderScale).rounded(), 2))
             let size = panel.metalLayer.drawableSize
             let id = Self.uuid(of: screen) ?? ""
+            // The light goes round the camera notch (Maxwell's request: "detect if theres a notch and go around it").
+            let notch = Self.notch(screenFrame: screen.frame, panelFrame: frame, topInset: screen.safeAreaInsets.top,
+                                   leftAreaWidth: screen.auxiliaryTopLeftArea?.width,
+                                   rightAreaWidth: screen.auxiliaryTopRightArea?.width) ?? .zero
             let info = RlSurface(widthPx: Int32(size.width), heightPx: Int32(size.height),
-                                 pixelsPerPoint: Float(scale * renderScale), paused: fullscreen.contains(id) ? 1 : 0)
+                                 pixelsPerPoint: Float(scale * renderScale), paused: fullscreen.contains(id) ? 1 : 0,
+                                 notchLeftPt: Float(notch.minX), notchRightPt: Float(notch.maxX),
+                                 notchHeightPt: Float(notch.height), pad: 0)
             surfaces.append(OverlaySurface(panel: panel, layer: panel.metalLayer, info: info))
             newPanels.append(panel)
             ids.append(id)
@@ -136,6 +142,25 @@ final class OverlayController {
         let link = primary?.displayLink(target: render, selector: RenderThread.tickSelector)
         refreshHz = Double(primary?.maximumFramesPerSecond ?? 60)
         render.setSurfaces(surfaces, link: link, refreshHz: refreshHz, onBattery: onBattery, lowPower: lowPower)
+    }
+
+    /// The camera notch of a screen whose frame is `screenFrame`, as a rectangle in points from the top-left of an
+    /// overlay at `panelFrame` (y down, as RlSurface takes it), or nil when the overlay has none. Both frames are
+    /// AppKit's (y up). `topInset` is the screen's safe area at the top, the notch's height (0 on a screen without
+    /// one); `leftAreaWidth` and `rightAreaWidth` are the widths of the menu bar's areas either side of it
+    /// (NSScreen.auxiliaryTopLeftArea and auxiliaryTopRightArea), measured from the screen's own left and right edges.
+    /// An overlay on the visible frame starts below the menu bar, which is at least as tall as the notch: no notch.
+    nonisolated static func notch(screenFrame: CGRect, panelFrame: CGRect, topInset: CGFloat, leftAreaWidth: CGFloat?,
+                                  rightAreaWidth: CGFloat?) -> CGRect? {
+        guard topInset > 0, let leftAreaWidth, let rightAreaWidth else { return nil }
+        let left = leftAreaWidth
+        let right = screenFrame.width - rightAreaWidth
+        guard right > left else { return nil }
+        let dx = panelFrame.minX - screenFrame.minX     // the overlay's left edge, right of the screen's
+        let topGap = screenFrame.maxY - panelFrame.maxY // the overlay's top edge, below the screen's
+        let height = topInset - topGap
+        guard height > 0 else { return nil }
+        return CGRect(x: left - dx, y: 0, width: right - left, height: height)
     }
 
     /// The screens the settings choose (doc 06 §1 Monitors): all, the primary, or those whose display UUID is listed.

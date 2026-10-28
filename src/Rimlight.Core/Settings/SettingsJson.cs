@@ -113,6 +113,7 @@ internal static class SettingsJson
             Brightness = ReadFloat(f, nameof(Settings.Brightness), d.Brightness),
             Sensitivity = ReadFloat(f, nameof(Settings.Sensitivity), d.Sensitivity),
             CornerRadiusDip = ReadFloat(f, nameof(Settings.CornerRadiusDip), d.CornerRadiusDip),
+            EdgeStyle = ReadEnum(f, nameof(Settings.EdgeStyle), d.EdgeStyle),
             CoverTaskbar = ReadBool(f, nameof(Settings.CoverTaskbar), d.CoverTaskbar),
             Monitors = ReadEnum(f, nameof(Settings.Monitors), d.Monitors),
             CustomMonitorIds = ReadStringList(f, nameof(Settings.CustomMonitorIds), d.CustomMonitorIds),

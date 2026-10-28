@@ -1,8 +1,9 @@
 // Rimlight edge glow on the Mac (docs/10-MACOS.md §3.3): a line-by-line port of
 // src/Rimlight.Platform/Overlay/Glow.hlsl. One full-screen triangle per overlay; every pixel is computed from the
-// constants (RlGlowConstants, GlowConstants.cs) and the 64-texel palette gradient. Compiled at runtime from source:
-// build.sh (and ShaderSource.swift for tests) replaces the include line below with glow_math.h, since runtime
-// compilation can't resolve includes. Keep this file ASCII-only.
+// constants (RlGlowConstants, GlowConstants.cs) and the 64-texel palette gradient, in either edge style (the soft glow,
+// or the bright line with a halo inside it) and round the camera notch of a notched MacBook screen (gm_alpha). Compiled
+// at runtime from source: build.sh (and ShaderSource.swift for tests) replaces the include line below with
+// glow_math.h, since runtime compilation can't resolve includes. Keep this file ASCII-only.
 
 #include <metal_stdlib>
 using namespace metal;
@@ -39,13 +40,15 @@ fragment float4 glow_fragment(GlowVertex in [[stage_in]],
     constexpr sampler gradientSampler(filter::linear, address::repeat);
     float2 p = in.position.xy; // pixel centre, origin at the top-left, as in Direct3D
 
-    // 1-2. The light's alpha: one light, flat at the edge and fading smoothly inward (GlowProfile.cs).
+    // 1-2. The light's alpha (GlowProfile.Alpha): the soft glow, flat at the edge and fading smoothly inward, or the
+    // Line style's bright line in front of a dimmer halo; round the notch when the screen has one.
     RlGlowConstants constants = k;
     float a = gm_alpha(constants, p.x, p.y);
     if (a < 0.5f / 255.0f)
         return float4(0.0f);
 
-    // 3-5. Colour around the perimeter from the Oklab-blended gradient, blended to the mean colour deep inside.
+    // 3-5. Colour around the perimeter from the Oklab-blended gradient, blended to the mean colour deep inside. Both
+    // follow the outer rectangle, so the notch's outline takes the top edge's colours.
     float u = gm_frac(gm_perimeter_t(p.x, p.y, k.screenWidthPx, k.screenHeightPx, k.colorRadiusPx) + k.phase);
     float3 rgb = gradient.sample(gradientSampler, float2(u, 0.5f), level(0.0f)).rgb;
     float depth = gm_edge_depth(p.x, p.y, k.screenWidthPx, k.screenHeightPx);

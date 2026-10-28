@@ -22,6 +22,7 @@ public sealed record Settings
     public float Brightness { get; init; } = 0.80f;                            // 0.1..1
     public float Sensitivity { get; init; } = 1.0f;                            // 0.25..2
     public float CornerRadiusDip { get; init; } = 0f;                          // 0..40
+    public EdgeStyle EdgeStyle { get; init; } = EdgeStyle.Glow;                // Glow | Line
     public bool CoverTaskbar { get; init; } = true;
 
     public MonitorSelection Monitors { get; init; } = MonitorSelection.All;    // All | PrimaryOnly | Custom
@@ -42,6 +43,7 @@ public sealed record Settings
 - Validate and clamp all values on load, and reset invalid fields to their defaults. Never crash on a bad settings file. Back it up as `settings.bad.json` and continue.
 - Monitor IDs come from `DISPLAY_DEVICE.DeviceID` via `EnumDisplayDevices(..., EDD_GET_DEVICE_INTERFACE_NAME)` so selections survive reboots and re-plugging.
 - A `Presets` list of 5 built-in looks, applied in one click from Settings: **Aurora** (teal/violet, glow 0.6), **Sunset** (orange/pink), **Neon** (magenta/cyan, thick core), **Ember** (red/amber, slow), **Minimal** (soft white hairline, Idle Glow). A preset changes the appearance fields only.
+- *Clarification (Maxwell's request, H-032): `EdgeStyle` picks how the light meets the edge. **Glow** (the default) is the soft glow of doc 04 §3; **Line** is a bright line along the very edge with a dimmer glow inside it. In Line, `CoreThicknessDip` is the line's width. Both go round a camera notch where the screen has one (the Mac; doc 04 §3). Presets keep the edge style: it is the user's pick, and every preset suits both.*
 
 ## 2. Tray icon (H.NotifyIcon.Wpf)
 - The icon shows a rounded-square outline with a glowing edge. Generate it as SVG in `assets/icon.svg`, then render a multi-size `.ico` (16/20/24/32/48/64/256) via a script in `build/` (use Svg.Skia or Magick.NET in a tiny console tool).
@@ -65,7 +67,7 @@ public sealed record Settings
 
 ## 3. Settings window (WPF + WPF-UI)
 - `FluentWindow` with Mica backdrop, following the system light/dark theme. Size about 760×560, with a left `NavigationView`:
-  1. **Appearance**: live preview at the top (a 16:9 rounded card rendering a miniature of the glow with the current settings and palette; reuse `LightEngine` and draw with WPF `DrawingVisual`/`WriteableBitmap` at about 30 fps only while the window is visible). Then the Thickness, Glow, Brightness, and Corner radius sliders, and the Cover taskbar toggle. Then the Presets row as clickable color chips.
+  1. **Appearance**: live preview at the top (a 16:9 rounded card rendering a miniature of the glow with the current settings and palette; reuse `LightEngine` and draw with WPF `DrawingVisual`/`WriteableBitmap` at about 30 fps only while the window is visible). Then the Thickness, Glow, Brightness, and Corner radius sliders, and the Cover taskbar toggle. Then the Presets row as clickable color chips. *Clarification (H-032): an **Edge** choice comes first in the Shape section, "Soft glow" or "Bright line" (radio buttons with a line of description each, like Motion's Mode); in Bright line the Thickness row's description says it sets how wide the line is, and the preview draws the line.*
   2. **Color**: Album art / Manual segmented control, the Override toggle, two color pickers (hex input + hue/sat picker), and the ratio slider. Show "Now playing: Title · Artist" with a tiny thumbnail and the two extracted color swatches.
   3. **Motion**: Mode (Music Sync / Idle Glow / Off), When silent, Sensitivity, and a small live level meter so users can see that audio is detected.
   4. **Displays**: a per-monitor list with friendly names (`DisplayConfigGetDeviceInfo` target name, e.g. "DELL U2720Q") and a toggle per monitor, plus FPS cap.

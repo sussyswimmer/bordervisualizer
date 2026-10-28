@@ -93,8 +93,10 @@ internal sealed class MacPreview
             filledRatio = state.Ratio;
         }
 
+        // The card is no notched screen: the edge style shows, with no notch.
         float pixelsPerPoint = widthPx / ScreenWidthPoints;
-        return GlowConstants.Create(state, widthPx, heightPx, pixelsPerPoint, 1, settings.CornerRadiusDip, meanColor);
+        return GlowConstants.Create(state, widthPx, heightPx, pixelsPerPoint, 1, settings.CornerRadiusDip, meanColor,
+            settings.EdgeStyle);
     }
 
     // The analyzer's latest features while music drives the glow; silence when the render thread stopped sending them

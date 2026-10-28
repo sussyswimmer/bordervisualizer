@@ -5,10 +5,11 @@ namespace Rimlight.App.SettingsUi;
 
 /// <summary>
 /// Draws the glow on the CPU for the Appearance page's preview: a port of <c>Glow.hlsl</c> (doc 04 §3) into a small
-/// premultiplied BGRA buffer, as if the card were a 1280-DIP-wide screen. The edge profile and the Glow mapping are
-/// <see cref="GlowProfile"/>'s, the same the overlay uses. Everything that depends only on the shape is cached per
-/// pixel and recomputed when the shape changes, so a frame costs one square root and one exp per lit pixel. No
-/// allocation after construction. Pure code; any one thread.
+/// premultiplied BGRA buffer, as if the card were a 1280-DIP-wide screen. The edge profile, in either edge style (the
+/// soft glow, or the bright line with its halo), and the Glow mapping are <see cref="GlowProfile"/>'s, the same the
+/// overlay uses. Everything that depends only on the shape is cached per pixel and recomputed when the shape changes,
+/// so a frame costs one square root and one exp per lit pixel. No allocation after construction. Pure code; any one
+/// thread.
 /// </summary>
 internal sealed class GlowRaster
 {
@@ -24,6 +25,7 @@ internal sealed class GlowRaster
     private const float SpreadCacheTolerance = 0.1f;
 
     private readonly float[] glowDepth;  // distance into the light's rounded field
+    private readonly float[] lineDepth;  // distance in from the screen's own edge, for the Line style's line
     private readonly float[] perimeter;  // perimeter coordinate t in [0, 1)
     private readonly float[] meanBlend;  // how far the color has blended to the mean (deep inside)
     private readonly float[] lut = new float[LutSize * 3]; // the gradient around the perimeter, sRGB-encoded
@@ -43,6 +45,7 @@ internal sealed class GlowRaster
         Height = height;
         Pixels = new int[width * height];
         glowDepth = new float[width * height];
+        lineDepth = new float[width * height];
         perimeter = new float[width * height];
         meanBlend = new float[width * height];
     }
@@ -89,18 +92,23 @@ internal sealed class GlowRaster
     /// </summary>
     /// <param name="state">The light state, from a light engine.</param>
     /// <param name="cornerRadiusDip">The settings' corner radius, which the overlay takes from the settings too.</param>
-    public bool Render(in LightState state, float cornerRadiusDip)
+    /// <param name="style">The settings' edge style, as the overlay draws it (GlowConstants.Create): in the Line style
+    /// the Thickness is the line's width and the halo inside it has the narrowest shoulder.</param>
+    public bool Render(in LightState state, float cornerRadiusDip, EdgeStyle style = EdgeStyle.Glow)
     {
         float scale = Width / ScreenWidthDip; // pixels per DIP
         int shortSide = Math.Min(Width, Height);
         float minHalf = 0.5f * shortSide;
         float spread = GlowProfile.SpreadFor(state.Spread, shortSide, scale);
         float corner = Math.Clamp(Finite(cornerRadiusDip) * scale, 0, minHalf);
-        float shoulder = GlowProfile.ShoulderFor(MathF.Max(0, Finite(state.CoreThicknessDip)) * scale, scale);
+        float thickness = MathF.Max(0, Finite(state.CoreThicknessDip)) * scale;
+        bool line = style == EdgeStyle.Line;
+        float shoulder = GlowProfile.ShoulderFor(line ? 0 : thickness, scale);
+        float lineWidth = line ? GlowProfile.LineFor(thickness, scale) : 0;
         float pulse = Clamp01(state.Pulse);
 
-        var frame = new Frame(corner, shoulder, spread, Clamp01(state.Intensity), pulse, Fraction(state.Phase),
-            Clamp01(state.Visibility), gradientVersion);
+        var frame = new Frame(corner, shoulder, spread, lineWidth, Clamp01(state.Intensity), pulse,
+            Fraction(state.Phase), Clamp01(state.Visibility), gradientVersion);
         if (drawn && frame == last) return false;
 
         if (corner != shapeCorner || shoulder != shapeShoulder || !(MathF.Abs(spread - shapeSpread) <= SpreadCacheTolerance * shapeSpread))
@@ -114,24 +122,29 @@ internal sealed class GlowRaster
         float pulsedSpread = GlowProfile.PulsedSpread(spread, pulse);
         float gain = GlowProfile.Gain(frame.Intensity, pulse);
         float visibility = frame.Visibility;
-        // Beyond this depth the light is under half a code value: GlowPeak gain visibility e^(-eased / spread) < 1/510
-        // where the eased distance sqrt(depth^2 + w^2) - w passes h = spread ln(strongest), that is where
-        // depth^2 = h (h + 2w).
-        float strongest = GlowProfile.GlowPeak * gain * visibility * 510;
+        // Beyond this depth the light (or the Line style's halo) is under half a code value: peak gain visibility
+        // e^(-eased / spread) < 1/510 where the eased distance sqrt(depth^2 + w^2) - w passes h = spread ln(strongest),
+        // that is where depth^2 = h (h + 2w). The line itself ends at its width plus the softness.
+        float peak = line ? GlowProfile.HaloPeak : GlowProfile.GlowPeak;
+        float strongest = peak * gain * visibility * 510;
         float eased = strongest > 1 ? pulsedSpread * MathF.Log(strongest) : -1;
         float cutoff = eased > 0 ? MathF.Sqrt(eased * (eased + 2 * pulsedShoulder)) : -1;
+        float lineEnd = lineWidth + GlowProfile.LineSoftnessPx;
         float phase = frame.Phase;
 
         int[] pixels = Pixels;
         for (int p = 0; p < pixels.Length; p++)
         {
             float depth = glowDepth[p];
-            if (depth > cutoff)
+            if (depth > cutoff && (!line || lineDepth[p] >= lineEnd))
             {
                 pixels[p] = 0;
                 continue;
             }
-            float alpha = GlowProfile.Glow(depth, pulsedShoulder, pulsedSpread) * gain * visibility;
+            float profile = line
+                ? GlowProfile.LineAndHalo(lineDepth[p], lineWidth, depth, pulsedShoulder, pulsedSpread)
+                : GlowProfile.Glow(depth, pulsedShoulder, pulsedSpread);
+            float alpha = profile * gain * visibility;
             if (alpha < 0.5f / 255)
             {
                 pixels[p] = 0;
@@ -166,6 +179,8 @@ internal sealed class GlowRaster
                 float px = x + 0.5f;
                 int p = y * Width + x;
                 glowDepth[p] = GlowProfile.Depth(px, py, Width, Height, glowRadius);
+                // The screen's own shape, which the overlay's line follows (no notch on Windows: four corners alike).
+                lineDepth[p] = GlowProfile.Depth(px, py, Width, Height, corner, corner);
                 perimeter[p] = PerimeterT(px, py, Width, Height, colorRadius);
                 float edgeDepth = MathF.Min(MathF.Min(px, py), MathF.Min(Width - px, Height - py));
                 meanBlend[p] = SmoothStep(0.5f * colorRadius, colorRadius, edgeDepth);
@@ -224,6 +239,6 @@ internal sealed class GlowRaster
     private static float Fraction(float value) => float.IsFinite(value) ? value - MathF.Floor(value) : 0;
 
     // Everything a frame's pixels depend on.
-    private readonly record struct Frame(float Corner, float Shoulder, float Spread, float Intensity, float Pulse, float Phase,
-        float Visibility, int GradientVersion);
+    private readonly record struct Frame(float Corner, float Shoulder, float Spread, float LineWidth, float Intensity,
+        float Pulse, float Phase, float Visibility, int GradientVersion);
 }

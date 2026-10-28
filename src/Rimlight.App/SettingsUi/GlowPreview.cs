@@ -109,7 +109,7 @@ internal sealed class GlowPreview
                 filledRatio = state.Ratio;
             }
 
-            if (raster.Render(state, settings.CornerRadiusDip))
+            if (raster.Render(state, settings.CornerRadiusDip, settings.EdgeStyle))
                 bitmap.WritePixels(new Int32Rect(0, 0, PixelWidth, PixelHeight), raster.Pixels, PixelWidth * 4, 0);
         }
         catch (Exception exception)

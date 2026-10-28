@@ -26,7 +26,10 @@ public sealed class SettingsPageTests : UiTest
             settingsPage.Refresh(settings);
             Size wide = Layout(page, 572, 520); // the default window's content area beside the navigation pane
             Size narrow = Layout(page, 372, 360); // the minimum window
-            settingsPage.Refresh(settings with { Animation = AnimationMode.IdleGlow, ColorMode = ColorMode.Manual });
+            settingsPage.Refresh(settings with
+            {
+                Animation = AnimationMode.IdleGlow, ColorMode = ColorMode.Manual, EdgeStyle = EdgeStyle.Line,
+            });
             settingsPage.SetActive(false);
             Assert.True(wide.Height > 100, $"{name} measured {wide}");
             Assert.True(narrow.Height > 100, $"{name} measured {narrow} at the minimum width");
@@ -64,6 +67,29 @@ public sealed class SettingsPageTests : UiTest
             Assert.Same(before, Controller.SettingsService.Current);
             page.ThicknessSlider.Value = 0;
             Assert.Equal(0f, Controller.SettingsService.Current.CoreThicknessDip);
+        });
+        AssertNoFailures();
+    }
+
+    [WindowsFact]
+    public void TheEdgeChoiceSwitchesBetweenTheSoftGlowAndTheBrightLine()
+    {
+        // Maxwell's request: the bright line is an option on the Appearance page; the Thickness row then sets the
+        // line's width, and says so.
+        UiThread.Run(() =>
+        {
+            var page = new AppearancePage(Controller);
+            Settings before = Controller.SettingsService.Current;
+            ((ISettingsPage)page).Refresh(before);
+            Assert.Equal(before.EdgeStyle == EdgeStyle.Line, page.BrightLineChoice.IsChecked);
+            page.BrightLineChoice.IsChecked = true;
+            Assert.Equal(EdgeStyle.Line, Controller.SettingsService.Current.EdgeStyle);
+            ((ISettingsPage)page).Refresh(Controller.SettingsService.Current);
+            Assert.Contains("line", page.ThicknessDescription.Text, StringComparison.Ordinal);
+            page.SoftGlowChoice.IsChecked = true;
+            Assert.Equal(EdgeStyle.Glow, Controller.SettingsService.Current.EdgeStyle);
+            ((ISettingsPage)page).Refresh(Controller.SettingsService.Current);
+            Assert.DoesNotContain("line", page.ThicknessDescription.Text, StringComparison.Ordinal);
         });
         AssertNoFailures();
     }

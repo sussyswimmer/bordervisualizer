@@ -172,6 +172,128 @@ public sealed class GlowConstantsTests
     public void TheLayoutMatchesTheShadersConstantBuffer()
     {
         Assert.Equal(GlowConstants.SizeInBytes, System.Runtime.InteropServices.Marshal.SizeOf<GlowConstants>());
-        Assert.Equal(64, GlowConstants.SizeInBytes);
+        Assert.Equal(80, GlowConstants.SizeInBytes);
+    }
+
+    [Theory]
+    [InlineData(1920, 1080, 1f, 0f, 6f)]
+    [InlineData(2560, 1440, 1.25f, 12f, 0f)]
+    [InlineData(3024, 1964, 2f, 0f, 40f)]
+    public void TheGlowStyleWithoutANotchIsTheGlowAsBefore(int width, int height, float scale, float cornerDip,
+        float thickness)
+    {
+        // The default: no line, no notch, the top corners the user's corner radius, and the soft shoulder the
+        // Thickness, so the glow draws exactly what it drew before the Line style.
+        LightState state = State with { CoreThicknessDip = thickness };
+        GlowConstants c = GlowConstants.Create(state, width, height, scale, 1, cornerDip, Mean);
+        Assert.Equal(c, GlowConstants.Create(state, width, height, scale, 1, cornerDip, Mean, EdgeStyle.Glow, default));
+        Assert.Equal(c, GlowConstants.Create(state, width, height, scale, 1, cornerDip, Mean, (EdgeStyle)7)); // no Line
+        Assert.Equal(0, c.LinePx);
+        Assert.Equal(c.CornerRadiusPx, c.TopCornerRadiusPx);
+        Assert.Equal(0, c.NotchLeftPx);
+        Assert.Equal(0, c.NotchRightPx);
+        Assert.Equal(0, c.NotchHeightPx);
+        Assert.Equal(0, c.NotchRadiusPx);
+        Assert.Equal(GlowProfile.ShoulderFor(thickness * scale, scale), c.ShoulderPx);
+    }
+
+    [Fact]
+    public void TheLineStyleTakesTheThicknessAsTheLinesWidth()
+    {
+        // In the Line style the Thickness is the line's width (at least one DIP) and the halo inside it has the
+        // narrowest shoulder; the spread, the gain and everything else are the glow's.
+        foreach (float thickness in new[] { 0f, 0.5f, 1, 6, 40 })
+        {
+            LightState state = State with { CoreThicknessDip = thickness };
+            GlowConstants glow = GlowConstants.Create(state, 2880, 1620, 1.5f, 1, 8, Mean);
+            GlowConstants line = GlowConstants.Create(state, 2880, 1620, 1.5f, 1, 8, Mean, EdgeStyle.Line);
+            Assert.Equal(Math.Max(thickness, 1) * 1.5f, line.LinePx, 5);
+            Assert.Equal(GlowProfile.LineFor(thickness * 1.5f, 1.5f), line.LinePx);
+            Assert.Equal(1.5f, line.ShoulderPx);
+            Assert.Equal(GlowProfile.GlowRadius(line.CornerRadiusPx, line.SpreadPx, 1.5f, 810), line.GlowRadiusPx);
+            Assert.Equal(Math.Max(line.CornerRadiusPx, 6 * line.SpreadPx), line.ColorRadiusPx);
+            Assert.Equal(glow.SpreadPx, line.SpreadPx);
+            Assert.Equal(glow.Gain, line.Gain);
+            Assert.Equal(glow.CornerRadiusPx, line.CornerRadiusPx);
+            Assert.Equal(line.CornerRadiusPx, line.TopCornerRadiusPx);
+            Assert.False(glow.LooksLike(line));
+            Assert.False(glow.Equals(line));
+        }
+
+        // At half scale the line halves with every other measure; a beat doesn't widen it.
+        GlowConstants full = GlowConstants.Create(State, 1920, 1080, 1, 1, 0, Mean, EdgeStyle.Line);
+        GlowConstants half = GlowConstants.Create(State, 960, 540, 1, 0.5f, 0, Mean, EdgeStyle.Line);
+        Assert.Equal(full.LinePx / 2, half.LinePx, 5);
+        GlowConstants calm = GlowConstants.Create(State with { Pulse = 0 }, 1920, 1080, 1, 1, 0, Mean, EdgeStyle.Line);
+        Assert.Equal(full.LinePx, calm.LinePx);
+    }
+
+    [Fact]
+    public void ANotchIsCheckedAndRoundsTheTopCorners()
+    {
+        // A 14-inch MacBook Pro at 2 px per point: a notch about 250 pt wide and 32 pt tall at the top's middle.
+        var notch = new NotchPx(1262, 1762, 64);
+        GlowConstants c = GlowConstants.Create(State, 3024, 1964, 2, 1, 0, Mean, EdgeStyle.Line, notch);
+        Assert.Equal(1262f, c.NotchLeftPx);
+        Assert.Equal(1762f, c.NotchRightPx);
+        Assert.Equal(64f, c.NotchHeightPx);
+        Assert.Equal(GlowProfile.NotchCornerShare * 64, c.NotchRadiusPx, 5);
+        // Notched screens round their top corners by about 10 points; a larger corner radius setting wins.
+        Assert.Equal(0, c.CornerRadiusPx);
+        Assert.Equal(GlowProfile.NotchedDisplayTopCornerDip * 2, c.TopCornerRadiusPx);
+        GlowConstants rounder = GlowConstants.Create(State, 3024, 1964, 2, 1, 30, Mean, EdgeStyle.Line, notch);
+        Assert.Equal(60f, rounder.TopCornerRadiusPx);
+        Assert.Equal(60f, rounder.CornerRadiusPx);
+        // Both styles carry the notch; only the line uses the top corners.
+        GlowConstants glow = GlowConstants.Create(State, 3024, 1964, 2, 1, 0, Mean, EdgeStyle.Glow, notch);
+        Assert.Equal(64f, glow.NotchHeightPx);
+        Assert.Equal(0, glow.LinePx);
+
+        // A narrow notch keeps its corners within half its width; one past the screen's side is cut at it.
+        Assert.Equal(5f, WithNotch(new NotchPx(100, 110, 64)).NotchRadiusPx);
+        Assert.Equal(3024f, WithNotch(new NotchPx(2900, 3200, 64)).NotchRightPx);
+        Assert.Equal(0f, WithNotch(new NotchPx(-50, 300, 64)).NotchLeftPx);
+
+        // Anything that isn't a notch is none: empty, inverted, off the screen, not finite.
+        foreach (NotchPx none in new NotchPx[]
+        {
+            default, new(1262, 1762, 0), new(1262, 1762, -5), new(1762, 1262, 64), new(1262, 1262, 64),
+            new(3100, 3200, 64), new(float.NaN, 1762, 64), new(1262, float.PositiveInfinity, 64),
+            new(1262, 1762, float.NaN),
+        })
+        {
+            GlowConstants plain = WithNotch(none);
+            Assert.Equal(0, plain.NotchHeightPx);
+            Assert.Equal(0, plain.NotchLeftPx);
+            Assert.Equal(0, plain.NotchRightPx);
+            Assert.Equal(0, plain.NotchRadiusPx);
+            Assert.Equal(plain.CornerRadiusPx, plain.TopCornerRadiusPx);
+            Assert.Equal(GlowConstants.Create(State, 3024, 1964, 2, 1, 0, Mean, EdgeStyle.Line), plain);
+        }
+
+        static GlowConstants WithNotch(NotchPx notch) =>
+            GlowConstants.Create(State, 3024, 1964, 2, 1, 0, Mean, EdgeStyle.Line, notch);
+    }
+
+    [Fact]
+    public void TheLineAndTheNotchAreGeometryThatMustMatchExactly()
+    {
+        var notch = new NotchPx(1262, 1762, 64);
+        GlowConstants a = GlowConstants.Create(State, 3024, 1964, 2, 1, 0, Mean, EdgeStyle.Line, notch);
+        Assert.True(a.LooksLike(a));
+        foreach (Func<GlowConstants, GlowConstants> change in new Func<GlowConstants, GlowConstants>[]
+        {
+            k => k with { LinePx = k.LinePx + 0.001f },
+            k => k with { TopCornerRadiusPx = k.TopCornerRadiusPx + 0.001f },
+            k => k with { NotchLeftPx = k.NotchLeftPx + 0.001f },
+            k => k with { NotchRightPx = k.NotchRightPx - 0.001f },
+            k => k with { NotchHeightPx = k.NotchHeightPx + 0.001f },
+            k => k with { NotchRadiusPx = k.NotchRadiusPx + 0.001f },
+        })
+        {
+            GlowConstants b = change(a);
+            Assert.False(a.LooksLike(b));
+            Assert.False(a.Equals(b));
+        }
     }
 }

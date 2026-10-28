@@ -31,13 +31,37 @@
 
             <TextBlock Style="{StaticResource SectionHeader}" Text="Shape" />
 
+            <!-- The edge style (Settings.EdgeStyle): the soft glow, or a bright line along the very edge with a softer
+                 glow inside it (Maxwell's request). The Thickness row's description follows the choice. -->
+            <Border Style="{StaticResource Row}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource RowLabel}" Text="Edge" />
+                    <RadioButton x:Name="SoftGlowChoice" GroupName="Edge" Margin="0,8,0,0" Checked="OnEdgeChanged"
+                                 AutomationProperties.Name="Soft glow"
+                                 AutomationProperties.HelpText="The light fades in softly from the edge.">
+                        <StackPanel>
+                            <TextBlock Text="Soft glow" />
+                            <TextBlock Style="{StaticResource RowDescription}" Text="The light fades in softly from the edge." />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="BrightLineChoice" GroupName="Edge" Margin="0,8,0,0" Checked="OnEdgeChanged"
+                                 AutomationProperties.Name="Bright line"
+                                 AutomationProperties.HelpText="A crisp, bright line along the very edge, with a softer glow inside it.">
+                        <StackPanel>
+                            <TextBlock Text="Bright line" />
+                            <TextBlock Style="{StaticResource RowDescription}" Text="A crisp, bright line along the very edge, with a softer glow inside it." />
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+            </Border>
+
             <Border Style="{StaticResource Row}">
                 <StackPanel>
                     <DockPanel>
                         <TextBlock x:Name="ThicknessValue" DockPanel.Dock="Right" Style="{StaticResource ValueText}" />
                         <TextBlock Style="{StaticResource RowLabel}" Text="Thickness" />
                     </DockPanel>
-                    <TextBlock Style="{StaticResource RowDescription}" Text="How wide the soft, bright part along the edges is. More keeps the light bright further in; 0 starts the fade right at the edge." />
+                    <TextBlock x:Name="ThicknessDescription" Style="{StaticResource RowDescription}" />
                     <Slider x:Name="ThicknessSlider" Margin="0,8,0,0" Minimum="0" Maximum="40" SmallChange="1" LargeChange="5"
                             TickFrequency="1" IsSnapToTickEnabled="True" AutomationProperties.Name="Thickness in pixels"
                             ValueChanged="OnThicknessChanged" />

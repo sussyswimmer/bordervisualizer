@@ -74,6 +74,35 @@ public sealed class GlowShaderTests
         Assert.DoesNotContain("Band", shader);
     }
 
+    [Fact]
+    public void TheShaderDrawsTheLineStyleAndTheNotchAsGlowProfileDoes()
+    {
+        // GlowProfile.Alpha: the Line style behind LinePx > 0, the notch behind NotchHeightPx > 0, so the Glow style
+        // on a screen without a notch runs exactly the code above.
+        string shader = ShaderSource();
+        Assert.Contains("[branch] if (LinePx > 0)", shader);
+        Assert.Contains("[branch] if (NotchHeightPx > 0)", shader);
+        // GlowProfile.Depth with per-corner radii: the top corners' in the top half.
+        Assert.Contains("float lineRadius = p.y < halfSize.y ? TopCornerRadiusPx : CornerRadiusPx;", shader);
+        Assert.Contains("float lineDistance = max(-SdRoundBox(p - halfSize, halfSize, lineRadius), 0);", shader);
+        // GlowProfile.Line (LinePeak is 1, so the shader leaves it out), Halo and LineAndHalo.
+        Assert.Equal(1f, GlowProfile.LinePeak);
+        Assert.Contains($"float lineCoverage = 1 - smoothstep(LinePx - {F(GlowProfile.LineSoftnessPx)}, " +
+            $"LinePx + {F(GlowProfile.LineSoftnessPx)}, lineDistance);", shader);
+        Assert.Contains($"float halo = {F(GlowProfile.HaloPeak)} * " +
+            "exp(-(sqrt(glowDistance * glowDistance + shoulder * shoulder) - shoulder) / spread);", shader);
+        Assert.Contains("glow = 1 - (1 - lineCoverage) * (1 - halo);", shader);
+        // GlowProfile.NotchDistance, SmoothMin and AroundNotch, applied to both depths.
+        Assert.Contains("float2 notchHalf = float2(0.5 * (NotchRightPx - NotchLeftPx), NotchHeightPx);", shader);
+        Assert.Contains("float radius = min(NotchRadiusPx, min(notchHalf.x, notchHalf.y));", shader);
+        Assert.Contains("return max(SdRoundBox(p - float2(0.5 * (NotchLeftPx + NotchRightPx), 0), notchHalf, " +
+            "radius), 0);", shader);
+        Assert.Contains("return min(a, b) - h * h * k / 4;", shader);
+        Assert.Contains("return max(SmoothMin(depth, notchDistance, NotchRadiusPx), 0);", shader);
+        Assert.Contains("glowDistance = AroundNotch(glowDistance, notchDistance);", shader);
+        Assert.Contains("lineDistance = AroundNotch(lineDistance, notchDistance);", shader);
+    }
+
     internal static string ShaderSource()
     {
         using Stream stream = typeof(GlowConstants).Assembly.GetManifestResourceStream(ResourceName)

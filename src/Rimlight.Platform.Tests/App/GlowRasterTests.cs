@@ -73,6 +73,48 @@ public sealed class GlowRasterTests
             }
     }
 
+    [Theory]
+    [InlineData(6f, 0.45f, 0.72f, 0f)]  // the defaults, as a line
+    [InlineData(6f, 0.45f, 0.8f, 1f)]   // a full beat: brighter, not wider
+    [InlineData(0f, 0.45f, 0.72f, 0f)]  // the narrowest line, under a pixel at this scale
+    [InlineData(40f, 0.1f, 1f, 1f)]     // a wide line on a narrow halo
+    [InlineData(20f, 0f, 0.55f, 0.5f)]  // a hairline halo
+    public void ThePreviewDrawsTheLineStyle(float thicknessDip, float glow, float intensity, float pulse)
+    {
+        // Maxwell's request, drawn as the overlay draws it (GlowProfile.LineAndHalo): a line the Thickness wide along
+        // the edge, in front of a halo with the narrowest shoulder. Pixels are skipped only under half a code value.
+        var raster = new GlowRaster(Width, Height);
+        raster.SetGradient(White());
+        var state = new LightState(default, default, 0.6f, intensity, glow, thicknessDip, 0, pulse, 1);
+        Assert.True(raster.Render(state, 0, EdgeStyle.Line));
+        Assert.False(raster.Render(state, 0, EdgeStyle.Line)); // the same frame
+
+        int row = Height / 2;
+        float spread = GlowProfile.PulsedSpread(GlowProfile.SpreadFor(glow, Height, Scale), pulse);
+        float shoulder = GlowProfile.PulsedShoulder(GlowProfile.ShoulderFor(0, Scale), pulse);
+        float line = GlowProfile.LineFor(thicknessDip * Scale, Scale);
+        float gain = GlowProfile.Gain(intensity, pulse);
+        int previous = 255;
+        for (int x = 0; x < Height / 2; x++)
+        {
+            float alpha = GlowProfile.LineAndHalo(x + 0.5f, line, x + 0.5f, shoulder, spread) * gain;
+            int drawn = (int)((uint)raster.Pixels[row * Width + x] >> 24);
+            Assert.InRange(drawn - alpha * 255, -1, 1);
+            Assert.True(drawn <= previous, $"pixel {x} is brighter than the one outside it");
+            if (alpha >= 0.6f / 255)
+                Assert.True(drawn > 0, $"pixel {x} ({alpha * 255:0.00}) was skipped");
+            else if (alpha < 0.4f / 255)
+                Assert.Equal(0, drawn);
+            previous = drawn;
+        }
+
+        // Back to the soft glow: a new frame, the glow's own.
+        Assert.True(raster.Render(state, 0, EdgeStyle.Glow));
+        float glowShoulder = GlowProfile.PulsedShoulder(GlowProfile.ShoulderFor(thicknessDip * Scale, Scale), pulse);
+        int edge = (int)((uint)raster.Pixels[row * Width] >> 24);
+        Assert.InRange(edge - GlowProfile.Glow(0.5f, glowShoulder, spread) * gain * 255, -1, 1);
+    }
+
     [Fact]
     public void DrawingAFrameAllocatesNothing()
     {
@@ -86,9 +128,11 @@ public sealed class GlowRasterTests
             Draw(raster, state, i);
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
 
-        // Frames that move the beat and the colours, and a thickness that moves (the shape is rebuilt).
+        // Frames that move the beat and the colours, and a thickness and an edge style that move (the shape is
+        // rebuilt).
         static void Draw(GlowRaster raster, in LightState state, int i) =>
-            raster.Render(state with { Pulse = i % 10 / 10f, Phase = i / 60f, CoreThicknessDip = 6 + i % 2 }, 8);
+            raster.Render(state with { Pulse = i % 10 / 10f, Phase = i / 60f, CoreThicknessDip = 6 + i % 2 }, 8,
+                i % 3 == 0 ? EdgeStyle.Line : EdgeStyle.Glow);
     }
 
     private static float[] White()

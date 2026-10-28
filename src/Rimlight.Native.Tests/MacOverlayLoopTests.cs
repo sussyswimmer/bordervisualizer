@@ -175,7 +175,76 @@ public sealed class MacOverlayLoopTests
         Assert.Equal(30, loop.EndFrame(now).FullRateHz, 3);
     }
 
+    [Fact]
+    public void ANotchedScreenGetsItsNotchInPixelsAndTheSettingsEdgeStyle()
+    {
+        // A 14-inch MacBook Pro (1512 x 982 points at 2 px/pt) whose notch spans 659..853 points, 32 points tall
+        // (Maxwell's request: "detect if theres a notch and go around it"), in the Bright line style.
+        var loop = new MacOverlayLoop(new Settings { EdgeStyle = EdgeStyle.Line, CoreThicknessDip = 3 });
+        loop.SetDemo(true);
+        loop.SetDisplay(60, onBattery: false);
+        loop.SetSurfaces([Notched(3024, 1964, 2)], now);
+        loop.ApplyInputs(now);
+        loop.BeginFrame((float)Frame, [], 0);
+        Assert.Equal(SurfaceAction.ShowAndDraw, loop.PlanSurface(0, out GlowConstants k));
+        Assert.Equal((1318f, 1706f, 64f), (k.NotchLeftPx, k.NotchRightPx, k.NotchHeightPx));
+        Assert.Equal(GlowProfile.NotchRadius(1706 - 1318, 64), k.NotchRadiusPx);
+        Assert.Equal(GlowProfile.NotchedDisplayTopCornerDip * 2, k.TopCornerRadiusPx); // the screen's rounded top
+        Assert.Equal(6, k.LinePx); // 3 points
+        Assert.Equal(GlowProfile.ShoulderFor(0, 2), k.ShoulderPx); // the halo's narrowest shoulder
+
+        // At half scale the render thread halves the drawable and the pixels per point: the notch lands in its pixels.
+        loop.SetSurfaces([Notched(1512, 982, 1)], now);
+        loop.BeginFrame((float)Frame, [], 0);
+        loop.PlanSurface(0, out k);
+        Assert.Equal((659f, 853f, 32f), (k.NotchLeftPx, k.NotchRightPx, k.NotchHeightPx));
+    }
+
+    [Fact]
+    public void ChangingTheEdgeStyleDrawsAStaticGlowAgain()
+    {
+        // The same light in the other style is different pixels: the plan must not skip it as unchanged.
+        var loop = Started(new Settings { Animation = AnimationMode.IdleGlow }, demo: false, screens: 1);
+        Run(loop, seconds: 1, out _, out _, out _);
+        loop.BeginFrame((float)Frame, [], 0);
+        SurfaceAction action = loop.PlanSurface(0, out _);
+        loop.SurfaceDone(0, presented: action != SurfaceAction.None, 0);
+        loop.EndFrame(now);
+        loop.BeginFrame(0, [], 0);
+        Assert.Equal(SurfaceAction.None, loop.PlanSurface(0, out _)); // static: as AStaticGlowIsNotPresentedAgain
+        loop.EndFrame(now);
+
+        loop.ApplySettings(loop.Settings with { EdgeStyle = EdgeStyle.Line });
+        Assert.True(loop.ApplyInputs(now));
+        loop.BeginFrame(0, [], 0);
+        Assert.Equal(SurfaceAction.Draw, loop.PlanSurface(0, out GlowConstants k));
+        Assert.True(k.LinePx > 0);
+        Assert.Equal(0, k.NotchHeightPx); // no notch on this screen
+    }
+
+    [Fact]
+    public void TheConstantsAreCreateWithTheNotchInPixels()
+    {
+        // rl_glow_constants and the golden table go through ConstantsFor: it must be Create, the notch times the
+        // pixels per point, and nothing else.
+        var state = new LightState(new Rgb(0.8f, 0.2f, 0.9f), new Rgb(0.1f, 0.8f, 0.9f), 0.6f, 0.8f, 0.45f, 6, 0.3f,
+            0.6f, 1);
+        var mean = new Rgb(0.3f, 0.2f, 0.6f);
+        GlowConstants viaLoop = MacOverlayLoop.ConstantsFor(state, Notched(3024, 1964, 2), 0, EdgeStyle.Line, mean);
+        GlowConstants direct = GlowConstants.Create(state, 3024, 1964, 2, 1, 0, mean, EdgeStyle.Line,
+            new NotchPx(1318, 1706, 64));
+        Assert.True(viaLoop.Equals(direct));
+        GlowConstants plain = MacOverlayLoop.ConstantsFor(state, Info(), 0, EdgeStyle.Glow, mean);
+        Assert.True(plain.Equals(GlowConstants.Create(state, 1920, 1080, 1, 1, 0, mean)));
+    }
+
     private double now = 100;
+
+    private static SurfaceInfo Notched(int widthPx, int heightPx, float pixelsPerPoint) => new()
+    {
+        WidthPx = widthPx, HeightPx = heightPx, PixelsPerPoint = pixelsPerPoint,
+        NotchLeftPt = 659, NotchRightPt = 853, NotchHeightPt = 32,
+    };
 
     private MacOverlayLoop Started(Settings settings, bool demo, int screens)
     {

@@ -1,23 +1,30 @@
 // Rimlight edge glow (doc 04 section 3). One full-screen triangle per overlay; every pixel is computed from the
 // constant buffer and the 64-texel palette gradient. Compiled at runtime as vs_4_0 / ps_4_0 (feature level 10.0+).
-// The C# mirror of this constant buffer is GlowConstants.cs: keep the two in sync. The edge profile (step 2) is
-// GlowProfile.cs, which the Settings preview runs on the CPU: keep that in sync too. Keep this file ASCII-only.
+// The C# mirror of this constant buffer is GlowConstants.cs: keep the two in sync. The edge profile (step 2), in both
+// edge styles (the soft glow, and the Line style's bright line with a halo inside it) and round a camera notch, is
+// GlowProfile.cs (GlowProfile.Alpha per pixel), which the Settings preview runs on the CPU and the Mac's glow_math.h
+// mirrors: keep those in sync too. With LinePx and NotchHeightPx both 0 (the Glow style on Windows) the new work is
+// branched over and the glow is drawn as before the Line style. Keep this file ASCII-only.
 
 cbuffer Light : register(b0)
 {
-    float2 ScreenPx;        // swap chain size in pixels
-    float  CornerRadiusPx;  // shape corner radius; 0 = square corners. The radii below are at least this
-    float  ShoulderPx;      // width of the soft shoulder at the edge: the Thickness setting, at least one DIP
-    float  SpreadPx;        // glow reach (e-folding distance)
-    float  Gain;            // Intensity x the beat's 1 + 0.25 Pulse, rolled off under 1 (GlowProfile.Gain)
-    float  Pulse;           // 0..1 beat kick
-    float  Phase;           // 0..1 gradient rotation
-    float  Visibility;      // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Gain
-    float  ColorRadiusPx;   // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
-    float  GlowRadiusPx;    // corner radius of the light's field (>= CornerRadiusPx), see PSMain step 1
-    float  Pad0;            // unused
-    float3 MeanColor;       // average of the gradient, linear RGB; the colour deep inside, see PSMain step 4
-    float  Pad1;            // unused
+    float2 ScreenPx;          // swap chain size in pixels
+    float  CornerRadiusPx;    // the shape's (bottom) corner radius; 0 = square. The field radii are at least this
+    float  ShoulderPx;        // width of the soft shoulder at the edge: the Thickness, at least one DIP (Line: one DIP)
+    float  SpreadPx;          // glow reach (e-folding distance)
+    float  Gain;              // Intensity x the beat's 1 + 0.25 Pulse, rolled off under 1 (GlowProfile.Gain)
+    float  Pulse;             // 0..1 beat kick
+    float  Phase;             // 0..1 gradient rotation
+    float  Visibility;        // 0..1 fades (pause, off, hide, per-monitor pause); multiplies alpha like Gain
+    float  ColorRadiusPx;     // corner radius of the colour path (>= CornerRadiusPx), see PerimeterT
+    float  GlowRadiusPx;      // corner radius of the light's field (>= CornerRadiusPx), see PSMain step 1
+    float  LinePx;            // the Line style's line width: the Thickness, at least one DIP; 0 = the Glow style
+    float3 MeanColor;         // average of the gradient, linear RGB; the colour deep inside, see PSMain step 4
+    float  TopCornerRadiusPx; // the screen's top corners, for the line: rounder on a notched screen
+    float  NotchLeftPx;       // the camera notch hanging from the top edge, in pixels; all 0 without one
+    float  NotchRightPx;
+    float  NotchHeightPx;     // 0 = no notch
+    float  NotchRadiusPx;     // the notch's lower corners, and the fillets where it meets the top edge
 };
 
 // 64 x 1, linear RGB. Texel i is the colour at perimeter position u = (i + 0.5) / 64 before Phase is applied
@@ -39,6 +46,33 @@ float SdRoundBox(float2 p, float2 halfSize, float radius)
 {
     float2 q = abs(p) - halfSize + radius;
     return length(max(q, 0)) + min(max(q.x, q.y), 0) - radius;
+}
+
+// Distance from p to the camera notch (GlowProfile.NotchDistance): 0 inside it, growing outward. A rounded box
+// centred on the top edge under the notch's middle, its half height the notch's height, so it reaches from above the
+// screen down to the notch's bottom and only its lower corners show.
+float NotchDistance(float2 p)
+{
+    float2 notchHalf = float2(0.5 * (NotchRightPx - NotchLeftPx), NotchHeightPx);
+    float radius = min(NotchRadiusPx, min(notchHalf.x, notchHalf.y));
+    return max(SdRoundBox(p - float2(0.5 * (NotchLeftPx + NotchRightPx), 0), notchHalf, radius), 0);
+}
+
+// Polynomial smooth minimum (GlowProfile.SmoothMin): min(a, b) - h^2 k / 4 with h = max(k - |a - b|, 0) / k, which
+// rounds the crease where two distance fields meet into a fillet about k across; k <= 0 is the plain minimum.
+float SmoothMin(float a, float b, float k)
+{
+    if (!(k > 0))
+        return min(a, b);
+    float h = max(k - abs(a - b), 0) / k;
+    return min(a, b) - h * h * k / 4;
+}
+
+// A depth in from the edge, taken round the notch too (GlowProfile.AroundNotch): 0 inside the notch, the distance
+// from it beside and below it, and the inside corners where it meets the top edge rounded like the notch's "ears".
+float AroundNotch(float depth, float notchDistance)
+{
+    return max(SmoothMin(depth, notchDistance, NotchRadiusPx), 0);
 }
 
 // Angle in [0, pi/2] for a point in a corner zone; y and x are both >= 0 there. The x guard keeps atan2(0, 0)
@@ -128,8 +162,17 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     // doc 04 the two edges' light would meet in a visible 45-degree crease; rounded (radius >= the shoulder plus two
     // e-folding distances), it bends softly round the corners.
     float glowDistance = max(-SdRoundBox(p - halfSize, halfSize, GlowRadiusPx), 0);
+    // Round a camera notch hanging from the top edge (both styles): the light runs down its side, along its bottom
+    // and up again. Only the depth changes; the colour path below stays on the outer rectangle, so the notch's
+    // outline takes the top edge's colours.
+    float notchDistance = 0;
+    [branch] if (NotchHeightPx > 0)
+    {
+        notchDistance = NotchDistance(p);
+        glowDistance = AroundNotch(glowDistance, notchDistance);
+    }
 
-    // 2. Shape (GlowProfile.cs): one light, flat at the edge and fading smoothly inward, with no line anywhere. Doc
+    // 2. Shape (GlowProfile.cs). The Glow style: one light, flat at the edge and fading smoothly inward, no line. Doc
     // 04's solid core stepped from 1 to about 0.6 at its inner edge (a bar), and round 1's exponentials were steepest
     // at the very edge, which packed the brightest light into the outermost pixels (a thin bright line). The distance
     // is eased through a hyperbola, sqrt(d^2 + w^2) - w: about d^2 / 2w near the edge, so the light starts with zero
@@ -141,6 +184,21 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float spread = max(SpreadPx * (1 + 0.35 * Pulse), 0.5);
     float shoulder = ShoulderPx * (1 + 0.35 * Pulse);
     float glow = 0.85 * exp(-(sqrt(glowDistance * glowDistance + shoulder * shoulder) - shoulder) / spread);
+    // The Line style (GlowProfile.LineAndHalo, Maxwell's request): a bright line along the very edge, LinePx wide
+    // with a 1.5 px anti-aliased inner edge, in front of a dimmer halo, the glow above with the narrowest shoulder at
+    // 0.5 instead of 0.85. The line follows the screen's own shape (the top corners' radius in the top half), and
+    // the beat brightens it through the gain but never widens it. Line and halo combine like light through two
+    // filters, so the line never passes 1 and the halo carries on past it.
+    [branch] if (LinePx > 0)
+    {
+        float lineRadius = p.y < halfSize.y ? TopCornerRadiusPx : CornerRadiusPx;
+        float lineDistance = max(-SdRoundBox(p - halfSize, halfSize, lineRadius), 0);
+        [branch] if (NotchHeightPx > 0)
+            lineDistance = AroundNotch(lineDistance, notchDistance);
+        float lineCoverage = 1 - smoothstep(LinePx - 0.75, LinePx + 0.75, lineDistance);
+        float halo = 0.5 * exp(-(sqrt(glowDistance * glowDistance + shoulder * shoulder) - shoulder) / spread);
+        glow = 1 - (1 - lineCoverage) * (1 - halo);
+    }
     // Intensity and the beat's gain can pass 1 (Brightness above 80% on a strong beat); the CPU rolls the gain off
     // under 1 instead of clipping here, so the profile is only ever scaled: clipping (or a per-pixel knee) would
     // squash the brightest pixels into a brighter rim flashing on the beat (GlowProfile.Gain).

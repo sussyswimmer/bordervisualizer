@@ -595,6 +595,7 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         {
             settings with { Glow = 0.9f }, settings with { Brightness = 0.3f }, settings with { PrimaryRatio = 0.2f },
             settings with { CoreThicknessDip = 20 }, settings with { Sensitivity = 2 }, settings with { CornerRadiusDip = 12 },
+            settings with { EdgeStyle = EdgeStyle.Line },
         })
         {
             engine.Update(Dt, audio, palette, changed, paused);

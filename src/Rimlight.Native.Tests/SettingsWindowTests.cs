@@ -107,4 +107,16 @@ public sealed unsafe class SettingsWindowTests
         for (int i = 1; i <= 30; i++) later = preview.Frame(i / 30.0, 704, 396, out _);
         Assert.True(later.Visibility > 0.9f);
     }
+
+    [Fact]
+    public void ThePreviewShowsTheEdgeStyleWithoutANotch()
+    {
+        var loop = new MacOverlayLoop(new Settings { EdgeStyle = EdgeStyle.Line, CoreThicknessDip = 20 });
+        var preview = new MacPreview(loop);
+        GlowConstants k = preview.Frame(0, 704, 396, out _);
+        Assert.Equal(20 * 704 / 1280f, k.LinePx, 3); // the line is the Thickness wide
+        Assert.Equal(0, k.NotchHeightPx);
+        loop.ApplySettings(loop.Settings with { EdgeStyle = EdgeStyle.Glow });
+        Assert.Equal(0, preview.Frame(1 / 30.0, 704, 396, out _).LinePx);
+    }
 }

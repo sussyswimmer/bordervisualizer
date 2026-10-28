@@ -78,9 +78,10 @@ public sealed class CoreFactoryTests
         // docs/CORE-API.md documents exactly these; a new public type needs a section there.
         string[] expected =
         [
-            "AnalyzerDiagnostics", "AnimationMode", "AppInfo", "AudioFeatures", "AudioTuning", "BatteryBehavior", "ColorMode",
-            "CoreFactory", "IAudioAnalyzer", "ILightEngine", "IPaletteBlender", "IPaletteExtractor", "ISettingsStore",
-            "LightState", "MonitorSelection", "NowPlaying", "Palette", "Presets", "Rgb", "Settings", "SilentBehavior",
+            "AnalyzerDiagnostics", "AnimationMode", "AppInfo", "AudioFeatures", "AudioTuning", "BatteryBehavior",
+            "ColorMode", "CoreFactory", "EdgeStyle", "IAudioAnalyzer", "ILightEngine", "IPaletteBlender",
+            "IPaletteExtractor", "ISettingsStore", "LightState", "MonitorSelection", "NowPlaying", "Palette", "Presets",
+            "Rgb", "Settings", "SilentBehavior",
         ];
         string[] exported = typeof(CoreFactory).Assembly.GetExportedTypes().Select(t => t.Name).Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(expected, exported);
