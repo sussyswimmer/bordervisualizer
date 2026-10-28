@@ -8,9 +8,9 @@ namespace Rimlight.App.SettingsUi;
 /// premultiplied BGRA buffer, as if the card were a 1280-DIP-wide screen. The edge profile, in either edge style (the
 /// soft glow, or the bright line with its halo), the Glow mapping and the Flow movement's comets and ripples are
 /// <see cref="GlowProfile"/>'s, the same the overlay uses. Everything that depends only on the shape is cached per
-/// pixel and recomputed when the shape changes, so a frame costs one square root and one exp per lit pixel, and in the
-/// Flow movement one more exp for the comets and one per live ripple. No allocation after construction. Pure code; any
-/// one thread.
+/// pixel and recomputed when the shape changes, so a frame costs one square root and one exp per lit pixel. In the Flow
+/// movement it adds a table of the comets and the ripples round the perimeter, filled once a frame, and one
+/// interpolation in it per lit pixel. No allocation after construction. Pure code; any one thread.
 /// </summary>
 internal sealed class GlowRaster
 {
@@ -20,6 +20,10 @@ internal sealed class GlowRaster
     // Colors around the perimeter, looked up rather than filtered: 1024 steps put them within about a pixel of the
     // shader's at this size.
     private const int LutSize = 1024;
+    // The Flow movement's light round the perimeter, looked up the same way: it depends only on the perimeter
+    // coordinate and the frame, so it is computed at 2048 steps once a frame and interpolated per pixel. Computed per
+    // pixel instead, the comets and the ripples made a Flow frame cost 3 to 6 times a Pulse frame.
+    private const int FlowLutSize = 2048;
     // The shape cache is rebuilt when the spread moves more than this fraction (an engine may vary it with the music;
     // only the corner rounding of the light and color fields depends on it, which nobody can see move by 10%).
     private const float SpreadCacheTolerance = 0.1f;
@@ -29,6 +33,7 @@ internal sealed class GlowRaster
     private readonly float[] perimeter;  // perimeter coordinate t in [0, 1): the colors' and the Flow movement's
     private readonly float[] meanBlend;  // how far the color (and the Flow movement) has blended to the mean, deep inside
     private readonly float[] lut = new float[LutSize * 3]; // the gradient around the perimeter, sRGB-encoded
+    private readonly float[] flowLut = new float[FlowLutSize + 1]; // GlowProfile.Flow at t = j / FlowLutSize, this frame's
     private float meanR, meanG, meanB; // the gradient's mean, sRGB-encoded
     private int gradientVersion;
 
@@ -140,6 +145,7 @@ internal sealed class GlowRaster
         float cutoff = eased > 0 ? MathF.Sqrt(eased * (eased + 2 * pulsedShoulder)) : -1;
         float lineEnd = lineWidth + GlowProfile.LineSoftnessPx;
         float phase = frame.Phase;
+        if (flowing) FillFlow(frame);
 
         int[] pixels = Pixels;
         for (int p = 0; p < pixels.Length; p++)
@@ -207,16 +213,32 @@ internal sealed class GlowRaster
         }
     }
 
-    // GlowProfile.Motion for a pixel at perimeter coordinate t whose color has blended `deep` of the way to the mean:
-    // GlowProfile.Flow (the comets over the dimmer edge, each ripple on top), blended to FlowMean and faded in by the
-    // amount, step for step as the reference and the shader compute it.
-    private static float Motion(in Frame frame, float t, float deep)
+    // GlowProfile.Flow round the perimeter for this frame, at t = j / FlowLutSize: the comets over the dimmer edge, each
+    // ripple on top, step for step as the reference and the shader compute it. The last entry is t = 1, the first
+    // again, so a pixel interpolates without wrapping.
+    private void FillFlow(in Frame frame)
     {
-        float m = GlowProfile.FlowFloor + (1 - GlowProfile.FlowFloor) * GlowProfile.Comets(t, frame.CometPhase);
-        m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple0));
-        m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple1));
-        m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple2));
-        m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple3));
+        for (int j = 0; j <= FlowLutSize; j++)
+        {
+            float t = (float)j / FlowLutSize;
+            float m = GlowProfile.FlowFloor + (1 - GlowProfile.FlowFloor) * GlowProfile.Comets(t, frame.CometPhase);
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple0));
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple1));
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple2));
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple3));
+            flowLut[j] = m;
+        }
+    }
+
+    // GlowProfile.Motion for a pixel at perimeter coordinate t whose color has blended `deep` of the way to the mean:
+    // the frame's Flow interpolated at t, blended to FlowMean and faded in by the amount, as the reference and the
+    // shader compute it. Linear steps of 1/2048 keep the alpha within a few hundredths of a code value of theirs (0.03
+    // at worst in the tests' frames), most at the kinks: a comet's head, a ripple's fronts.
+    private float Motion(in Frame frame, float t, float deep)
+    {
+        float x = t * FlowLutSize;
+        int i = Math.Min((int)x, FlowLutSize - 1); // PerimeterT's frac can round up to 1
+        float m = flowLut[i] + (flowLut[i + 1] - flowLut[i]) * (x - i);
         m += (GlowProfile.FlowMean - m) * deep;
         return 1 + (m - 1) * frame.FlowAmount;
     }

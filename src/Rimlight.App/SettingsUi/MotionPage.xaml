@@ -44,10 +44,13 @@
             </Border>
 
             <!-- How the light moves with the music (Settings.Movement, H-033): light travelling round the edge (Maxwell's
-                 request, the default), or the whole edge pulsing on each beat as before. -->
+                 request, the default), or the whole edge pulsing on each beat as before. Only Music Sync shows it, so
+                 like When it's quiet it is off in the other modes and says so. -->
             <Border Style="{StaticResource Row}">
                 <StackPanel>
                     <TextBlock Style="{StaticResource RowLabel}" Text="Movement" />
+                    <TextBlock x:Name="MovementDescription" Style="{StaticResource RowDescription}"
+                               Text="How the light moves with the music." />
                     <RadioButton x:Name="FlowChoice" GroupName="Movement" Margin="0,8,0,0" Checked="OnMovementChanged"
                                  AutomationProperties.Name="Flow"
                                  AutomationProperties.HelpText="Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it.">

@@ -31,6 +31,12 @@ namespace Rimlight.App.Visualizer;
 /// <param name="Spread">The light state's <see cref="LightState.Spread"/>.</param>
 /// <param name="Visibility">The light state's <see cref="LightState.Visibility"/>.</param>
 /// <param name="Phase">The light state's <see cref="LightState.Phase"/>.</param>
+/// <param name="FlowAmount">
+/// The light state's <see cref="FlowMotion.Amount"/>: how much of the Flow movement showed, 0 in Pulse and Idle Glow.
+/// </param>
+/// <param name="CometPhase">
+/// The light state's <see cref="FlowMotion.CometPhase"/>: where the Flow movement's comets were.
+/// </param>
 /// <param name="FollowsMusic">
 /// Whether the light engine got this audio: music sync with the glow on, not paused and not the demo. Otherwise it
 /// heard silence (or the demo's beat), and the light doesn't follow the analyzer's numbers.
@@ -49,6 +55,8 @@ internal readonly record struct RecordedFrame(
     float Spread,
     float Visibility,
     float Phase,
+    float FlowAmount,
+    float CometPhase,
     bool FollowsMusic);
 
 /// <summary>Why an <see cref="AnalysisRecording"/> stopped taking frames.</summary>
@@ -212,7 +220,8 @@ internal sealed class AnalysisRecording
         seconds += dt;
         int index = count;
         frames[index] = new RecordedFrame(seconds, dt, samples, features, beatCount, flux, threshold, bpm,
-            light.Intensity, light.Pulse, light.Spread, light.Visibility, light.Phase, followsMusic);
+            light.Intensity, light.Pulse, light.Spread, light.Visibility, light.Phase, light.Flow.Amount,
+            light.Flow.CometPhase, followsMusic);
         Volatile.Write(ref count, index + 1); // publishes the frame: the UI may read it from now on
         if (seconds >= MaxDuration) Finish(RecordingEnd.TimeLimit);
         else if (index + 1 == frames.Length) Finish(RecordingEnd.BufferFull);

@@ -119,6 +119,18 @@ public sealed class SettingsPageTests : UiTest
             ((ISettingsPage)page).Refresh(Controller.SettingsService.Current with { Movement = (MovementStyle)7 });
             Assert.True(page.FlowChoice.IsChecked);
             Assert.False(page.PulseChoice.IsChecked);
+            // Only Music Sync moves the light, so in the other modes the choice is off and says so, like When it's quiet.
+            ((ISettingsPage)page).Refresh(Controller.SettingsService.Current with { Animation = AnimationMode.MusicSync });
+            Assert.True(page.FlowChoice.IsEnabled && page.PulseChoice.IsEnabled);
+            Assert.DoesNotContain("Only matters", page.MovementDescription.Text, StringComparison.Ordinal);
+            foreach (AnimationMode mode in new[] { AnimationMode.IdleGlow, AnimationMode.Off })
+            {
+                ((ISettingsPage)page).Refresh(Controller.SettingsService.Current with { Animation = mode });
+                Assert.False(page.FlowChoice.IsEnabled);
+                Assert.False(page.PulseChoice.IsEnabled);
+                Assert.Equal("Only matters in Music Sync.", page.MovementDescription.Text);
+                Assert.Equal(page.WhenSilentDescription.Text, page.MovementDescription.Text);
+            }
         });
         AssertNoFailures();
     }
