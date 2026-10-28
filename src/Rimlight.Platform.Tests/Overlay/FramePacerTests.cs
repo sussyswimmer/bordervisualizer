@@ -178,6 +178,68 @@ public sealed class FramePacerTests
     }
 
     [Fact]
+    public void ChangeRateSeesTheFlowMovement()
+    {
+        // H-033: the Flow amount's fade counts like Intensity's; the comets' and ripples' travel counts by the light it
+        // moves (FramePacer.CometSlope, FrontSlope), scaled by the amount the shader shows of it.
+        LightState flowing = Shown with { Flow = new FlowMotion(1, 0.3f, new Ripple(0.2f, 0.1f, 0.5f), default, default, default) };
+        Assert.Equal(0, FramePacer.ChangeRate(flowing, flowing, 0.1f));
+        Assert.Equal(1f, FramePacer.ChangeRate(flowing, flowing with { Flow = flowing.Flow with { Amount = 0.9f } }, 0.1f), 4);
+        // The comets at their slowest (0.04 perimeters a second, 0.004 a frame at 10 fps) are fast change: they would
+        // step. Their phase is a loop like Phase.
+        Assert.Equal(FramePacer.CometSlope * 0.004f / 0.1f, Comets(flowing, 0.3f, 0.304f), 3);
+        Assert.True(Comets(flowing, 0.3f, 0.304f) > FramePacer.FastChangePerSecond);
+        Assert.Equal(FramePacer.CometSlope * 0.002f / 0.1f, Comets(flowing, 0.999f, 0.001f), 2);
+        // Without an amount nothing they do shows.
+        LightState pulse = flowing with { Flow = flowing.Flow with { Amount = 0 } };
+        Assert.Equal(0, FramePacer.ChangeRate(pulse, pulse with { Flow = pulse.Flow with { CometPhase = 0.5f } }, 0.1f));
+        Assert.Equal(0, FramePacer.ChangeRate(pulse, pulse with { Flow = pulse.Flow with { Ripple0 = default } }, 0.1f));
+        // A ripple: its strength, and its fronts' travel while it shows (0.045 perimeters a frame at half strength).
+        Assert.Equal(1f, Ripple(flowing, flowing.Flow.Ripple0 with { Strength = 0.4f }), 4);
+        Assert.Equal(FramePacer.FrontSlope * 0.5f * 0.045f / 0.1f, Ripple(flowing, flowing.Flow.Ripple0 with { Radius = 0.145f }), 2);
+        Assert.Equal(9f, Ripple(flowing with { Flow = flowing.Flow with { Ripple0 = default } }, new Ripple(0.7f, 0, 0.9f)), 4);
+        // A ripple that faded out leaves its slot without its radius counting.
+        LightState faint = flowing with { Flow = flowing.Flow with { Ripple0 = new Ripple(0.2f, 1.2f, 0.002f) } };
+        Assert.Equal(0.02f, Ripple(faint, default), 4);
+        // Not finite never counts as fast.
+        Assert.Equal(0, Ripple(flowing, flowing.Flow.Ripple0 with { Radius = float.NaN, Strength = 0.5f }));
+        Assert.Equal(0, Comets(flowing, 0.3f, float.PositiveInfinity));
+
+        static float Comets(in LightState state, float from, float to) => FramePacer.ChangeRate(
+            state with { Flow = state.Flow with { CometPhase = from } }, state with { Flow = state.Flow with { CometPhase = to } }, 0.1f);
+
+        static float Ripple(in LightState state, Ripple to) =>
+            FramePacer.ChangeRate(state, state with { Flow = state.Flow with { Ripple0 = to } }, 0.1f);
+    }
+
+    [Fact]
+    public void MovingCometsAndAFlowFadeNeverFallToTenFramesASecond()
+    {
+        // Slow motion (Idle Glow coming in as the music fades) with the Flow movement still showing: its comets moving,
+        // or its amount fading, keep the full rate; once its amount is 0 the slow rate returns.
+        var pacer = new FramePacer();
+        var flow = new FlowMotion(1, 0, default, default, default, default);
+        double now = 0;
+        pacer.Next(now, Report(FrameMotion.Slow, Shown with { Flow = flow }));
+        for (int i = 1; i <= 20; i++)
+        {
+            flow = flow with { CometPhase = flow.CometPhase + 0.004f }; // 0.04 perimeters a second at 10 fps
+            Assert.Equal(Pace.Full, pacer.Next(now += 0.1, Report(FrameMotion.Slow, Shown with { Flow = flow }, dt: 0.1f)));
+        }
+        for (int i = 1; i <= 20; i++)
+        {
+            flow = flow with { Amount = MathF.Max(flow.Amount - 0.05f, 0) }; // a 2 s fade
+            Assert.Equal(Pace.Full, pacer.Next(now += 0.1, Report(FrameMotion.Slow, Shown with { Flow = flow }, dt: 0.1f)));
+        }
+        for (int i = 1; i <= 10; i++)
+        {
+            flow = flow with { CometPhase = flow.CometPhase + 0.004f };
+            pacer.Next(now += 0.1, Report(FrameMotion.Slow, Shown with { Flow = flow }, dt: 0.1f));
+        }
+        Assert.Equal(Pace.Slow, pacer.Next(now + 0.1, Report(FrameMotion.Slow, Shown with { Flow = flow }, dt: 0.1f)));
+    }
+
+    [Fact]
     public void PacingAllocatesNothing()
     {
         var pacer = new FramePacer();

@@ -33,6 +33,12 @@ internal sealed class PaceModel
     public const double MaxFrameDtSeconds = 0.25;
     /// <summary>Below this Visibility nothing is drawn and the overlay is hidden (GlowConstants.MinVisibility).</summary>
     public const float MinVisibility = 0.5f / 255;
+    /// <summary>How much the light changes per perimeter a Flow comet's head travels, at most (FramePacer.CometSlope:
+    /// (1 - GlowProfile.FlowFloor) / GlowProfile.CometHead).</summary>
+    public const float CometSlope = (1 - 0.5f) / 0.01f;
+    /// <summary>... and per perimeter a ripple's front travels, at full strength (FramePacer.FrontSlope:
+    /// 1 / GlowProfile.RippleFront).</summary>
+    public const float FrontSlope = 1 / 0.015f;
 
     private LightState previous;
     private double busyUntil = double.NegativeInfinity;
@@ -90,7 +96,7 @@ internal sealed class PaceModel
         pace == Pace.Full && elapsedSeconds < fullInterval;
 
     // FramePacer.ChangeRate: the fastest change of anything the glow shows, per second (colors reach the screen through
-    // the gradient, whose refills count on their own).
+    // the gradient, whose refills count on their own), the Flow movement's included (FlowChange).
     private static float ChangeRate(in LightState a, in LightState b, float dtSeconds)
     {
         if (!(dtSeconds > 0)) return 0;
@@ -99,8 +105,31 @@ internal sealed class PaceModel
             MathF.Max(MathF.Max(Delta(a.Intensity, b.Intensity), Delta(a.Visibility, b.Visibility)),
                 MathF.Max(Delta(a.Pulse, b.Pulse), Delta(a.Spread, b.Spread))),
             MathF.Max(MathF.Max(Delta(a.Ratio, b.Ratio), Delta(a.CoreThicknessDip, b.CoreThicknessDip) / 40),
-                float.IsFinite(phase) ? MathF.Min(phase, 1 - phase) : 0));
+                MathF.Max(float.IsFinite(phase) ? MathF.Min(phase, 1 - phase) : 0, FlowChange(a.Flow, b.Flow))));
         return change / dtSeconds;
+    }
+
+    // FramePacer.FlowChange: the Flow amount's change, and the light the comets and ripples move, scaled by the amount.
+    private static float FlowChange(in FlowMotion a, in FlowMotion b)
+    {
+        float comets = MathF.Abs(b.CometPhase - a.CometPhase) % 1;
+        float travel = float.IsFinite(comets) ? CometSlope * MathF.Min(comets, 1 - comets) : 0;
+        float ripples = MathF.Max(MathF.Max(RippleChange(a.Ripple0, b.Ripple0), RippleChange(a.Ripple1, b.Ripple1)),
+            MathF.Max(RippleChange(a.Ripple2, b.Ripple2), RippleChange(a.Ripple3, b.Ripple3)));
+        float amount = MathF.Max(Unit(a.Amount), Unit(b.Amount));
+        return MathF.Max(Delta(a.Amount, b.Amount), amount * MathF.Max(travel, ripples));
+    }
+
+    // FramePacer.RippleChange: a ripple's strength change and, while it shows in both frames, its fronts' travel.
+    private static float RippleChange(in Ripple a, in Ripple b)
+    {
+        float change = Delta(a.Strength, b.Strength);
+        if (a.Strength > 0 && b.Strength > 0)
+        {
+            float strength = MathF.Max(Unit(a.Strength), Unit(b.Strength));
+            change = MathF.Max(change, FrontSlope * strength * Delta(a.Radius, b.Radius));
+        }
+        return change;
     }
 
     private static float Delta(float a, float b)
@@ -108,4 +137,6 @@ internal sealed class PaceModel
         float d = MathF.Abs(b - a);
         return float.IsFinite(d) ? d : 0;
     }
+
+    private static float Unit(float value) => float.IsFinite(value) ? Math.Clamp(value, 0, 1) : 0;
 }

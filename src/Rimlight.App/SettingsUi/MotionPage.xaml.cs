@@ -9,8 +9,9 @@ using Rimlight.Core;
 namespace Rimlight.App.SettingsUi;
 
 /// <summary>
-/// Motion (doc 06 §3.3): the mode, what happens when it's quiet, sensitivity, and a live sound level meter fed by the
-/// overlay thread's analyzer (polled about 15 times a second, only while the page is on screen).
+/// Motion (doc 06 §3.3): the mode, the movement (light travelling round the edge, or the whole edge pulsing), what
+/// happens when it's quiet, sensitivity, and a live sound level meter fed by the overlay thread's analyzer (polled about
+/// 15 times a second, only while the page is on screen).
 /// </summary>
 internal partial class MotionPage : UserControl, ISettingsPage
 {
@@ -44,6 +45,9 @@ internal partial class MotionPage : UserControl, ISettingsPage
         MusicSyncChoice.IsChecked = settings.Animation == AnimationMode.MusicSync;
         IdleGlowChoice.IsChecked = settings.Animation == AnimationMode.IdleGlow;
         OffChoice.IsChecked = settings.Animation == AnimationMode.Off;
+        bool pulse = settings.Movement == MovementStyle.Pulse; // anything else is Flow, the default
+        FlowChoice.IsChecked = !pulse;
+        PulseChoice.IsChecked = pulse;
         WhenSilentBox.SelectedIndex = settings.WhenSilent == SilentBehavior.Hide ? 1 : 0;
         WhenSilentBox.IsEnabled = settings.Animation == AnimationMode.MusicSync;
         WhenSilentDescription.Text = settings.Animation == AnimationMode.MusicSync
@@ -77,6 +81,12 @@ internal partial class MotionPage : UserControl, ISettingsPage
             : ReferenceEquals(sender, IdleGlowChoice) ? AnimationMode.IdleGlow
             : AnimationMode.MusicSync;
         edits.Update(s => s with { Animation = mode });
+    }
+
+    private void OnMovementChanged(object sender, RoutedEventArgs e)
+    {
+        MovementStyle movement = ReferenceEquals(sender, PulseChoice) ? MovementStyle.Pulse : MovementStyle.Flow;
+        edits.Update(s => s with { Movement = movement });
     }
 
     private void OnWhenSilentChanged(object sender, SelectionChangedEventArgs e)

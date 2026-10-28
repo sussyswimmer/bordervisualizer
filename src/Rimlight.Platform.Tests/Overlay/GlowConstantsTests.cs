@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Rimlight.Core;
 using Rimlight.Platform.Overlay;
 using Xunit;
@@ -171,8 +172,122 @@ public sealed class GlowConstantsTests
     [Fact]
     public void TheLayoutMatchesTheShadersConstantBuffer()
     {
-        Assert.Equal(GlowConstants.SizeInBytes, System.Runtime.InteropServices.Marshal.SizeOf<GlowConstants>());
-        Assert.Equal(80, GlowConstants.SizeInBytes);
+        // Ten registers (GlowShaderTests lays the cbuffer out field by field): the Flow movement's amount and comet
+        // phase open register 5, and its four ripples take a register each, 6 to 9.
+        Assert.Equal(GlowConstants.SizeInBytes, Marshal.SizeOf<GlowConstants>());
+        Assert.Equal(160, GlowConstants.SizeInBytes);
+        Assert.Equal(80, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.FlowAmount)));
+        Assert.Equal(84, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.CometPhase)));
+        Assert.Equal(88, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.FlowPad0)));
+        Assert.Equal(92, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.FlowPad1)));
+        Assert.Equal(96, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.Ripple0)));
+        Assert.Equal(112, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.Ripple1)));
+        Assert.Equal(128, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.Ripple2)));
+        Assert.Equal(144, (int)Marshal.OffsetOf<GlowConstants>(nameof(GlowConstants.Ripple3)));
+        Assert.Equal(16, Marshal.SizeOf<GlowRipple>());
+        Assert.Equal(8, (int)Marshal.OffsetOf<GlowRipple>(nameof(GlowRipple.Strength)));
+    }
+
+    [Fact]
+    public void CreateMapsTheFlowMovementCleanedForTheShader()
+    {
+        // LightState.Flow (H-033) lands in registers 5-9 as the shader reads it: the amount 0..1, the comet phase a
+        // fraction, each ripple's origin a fraction, its radius at least 0 and its strength 0..1; not finite is 0.
+        var flow = new FlowMotion(0.6f, 1.3f,
+            new Ripple(0.25f, 0.1f, 0.8f),
+            new Ripple(-0.25f, -1, 2),
+            new Ripple(float.NaN, float.PositiveInfinity, float.NaN),
+            default);
+        GlowConstants c = GlowConstants.Create(State with { Flow = flow }, 1920, 1080, 1, 1, 0, Mean);
+        Assert.Equal(0.6f, c.FlowAmount);
+        Assert.Equal(0.3f, c.CometPhase, 6);
+        Assert.Equal(0.25f, c.Ripple0.Origin);
+        Assert.Equal(0.1f, c.Ripple0.Radius);
+        Assert.Equal(0.8f, c.Ripple0.Strength);
+        Assert.Equal(0.75f, c.Ripple1.Origin);
+        Assert.Equal(0, c.Ripple1.Radius);
+        Assert.Equal(1, c.Ripple1.Strength);
+        Assert.Equal(default, c.Ripple2);
+        Assert.Equal(default, c.Ripple3);
+        Assert.Equal(0, c.FlowPad0);
+        Assert.Equal(0, c.FlowPad1);
+        // The gain rises with the amount (GlowProfile.FlowBoost), rolled off as ever.
+        Assert.Equal(GlowProfile.Gain(0.8f, 1, 0.6f), c.Gain);
+        Assert.True(c.Gain > GlowConstants.Create(State, 1920, 1080, 1, 1, 0, Mean).Gain);
+
+        // Out of range: the amount is clamped, a phase wraps, not finite is none.
+        Assert.Equal(1, GlowConstants.Create(State with { Flow = flow with { Amount = 3 } }, 100, 100, 1, 1, 0, Mean).FlowAmount);
+        Assert.Equal(0, GlowConstants.Create(State with { Flow = flow with { Amount = -1 } }, 100, 100, 1, 1, 0, Mean).FlowAmount);
+        GlowConstants bad = GlowConstants.Create(State with { Flow = flow with { Amount = float.NaN, CometPhase = float.NaN } },
+            100, 100, 1, 1, 0, Mean);
+        Assert.Equal(0, bad.FlowAmount);
+        Assert.Equal(0, bad.CometPhase);
+        Assert.Equal(GlowProfile.Gain(0.8f, 1), bad.Gain);
+        Assert.Equal(0.75f, GlowConstants.Create(State with { Flow = flow with { CometPhase = -0.25f } }, 100, 100, 1, 1, 0, Mean).CometPhase, 6);
+    }
+
+    [Fact]
+    public void WithoutAFlowAmountTheConstantsAreAsBefore()
+    {
+        // The Pulse movement and Idle Glow have no Flow amount (default FlowMotion): every constant is what it was
+        // before the Flow movement, the gain included, and the shader branches over the motion.
+        GlowConstants c = GlowConstants.Create(State, 2560, 1440, 1.25f, 1, 8, Mean);
+        Assert.Equal(GlowProfile.Gain(0.8f, 1), c.Gain);
+        Assert.Equal(0, c.FlowAmount);
+        Assert.Equal(0, c.CometPhase);
+        Assert.Equal(default, c.Ripple0);
+        Assert.Equal(default, c.Ripple3);
+        // A comet phase and ripples without an amount are carried as they are, but the gain doesn't rise and the
+        // shader branches over them.
+        var still = new FlowMotion(0, 0.4f, new Ripple(0.5f, 0.1f, 1), default, default, default);
+        GlowConstants idle = GlowConstants.Create(State with { Flow = still }, 2560, 1440, 1.25f, 1, 8, Mean);
+        Assert.Equal(c.Gain, idle.Gain);
+        Assert.Equal(0, idle.FlowAmount);
+    }
+
+    [Fact]
+    public void LooksLikeAndEqualsSeeTheFlowMovement()
+    {
+        var flow = new FlowMotion(0.8f, 0.3f, new Ripple(0.2f, 0.05f, 0.7f), default, default, default);
+        GlowConstants a = GlowConstants.Create(State with { Flow = flow }, 1920, 1080, 1, 1, 0, Mean);
+        Assert.True(a.LooksLike(a));
+        Assert.True(a.Equals(a));
+
+        // Changes the eye can't see still look the same: under half a code value, a comet or a front moved by a
+        // fraction of a pixel, the comet phase across the loop's seam.
+        GlowConstants b = a;
+        b.FlowAmount += 0.4f / 255;
+        b.CometPhase += 0.0001f;
+        b.Ripple0.Strength -= 0.4f / 255;
+        b.Ripple0.Radius += 0.0001f;
+        Assert.True(a.LooksLike(b));
+        Assert.False(a.Equals(b));
+        GlowConstants wrap = a;
+        wrap.CometPhase = 0.99995f;
+        GlowConstants zero = a;
+        zero.CometPhase = 0.00005f;
+        Assert.True(wrap.LooksLike(zero));
+
+        foreach (Func<GlowConstants, GlowConstants> change in new Func<GlowConstants, GlowConstants>[]
+        {
+            k => k with { FlowAmount = k.FlowAmount - 1f / 255 },
+            k => k with { CometPhase = k.CometPhase + 0.001f },
+            k => k with { Ripple0 = k.Ripple0 with { Strength = k.Ripple0.Strength - 1f / 255 } },
+            k => k with { Ripple0 = k.Ripple0 with { Radius = k.Ripple0.Radius + 0.001f } },
+            k => k with { Ripple0 = k.Ripple0 with { Origin = k.Ripple0.Origin + 0.001f } },
+            k => k with { Ripple0 = default },
+            k => k with { Ripple3 = new GlowRipple { Origin = 0.5f, Strength = 0.5f } },
+        })
+        {
+            GlowConstants moved = change(a);
+            Assert.False(a.LooksLike(moved));
+            Assert.False(a.Equals(moved));
+        }
+
+        // Two empty slots look alike wherever their unused origin and radius are.
+        GlowConstants empty = a;
+        empty.Ripple1 = new GlowRipple { Origin = 0.9f, Radius = 3 };
+        Assert.True(a.LooksLike(empty));
     }
 
     [Theory]

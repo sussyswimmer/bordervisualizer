@@ -29,6 +29,7 @@ public sealed class SettingsPageTests : UiTest
             settingsPage.Refresh(settings with
             {
                 Animation = AnimationMode.IdleGlow, ColorMode = ColorMode.Manual, EdgeStyle = EdgeStyle.Line,
+                Movement = MovementStyle.Pulse,
             });
             settingsPage.SetActive(false);
             Assert.True(wide.Height > 100, $"{name} measured {wide}");
@@ -90,6 +91,34 @@ public sealed class SettingsPageTests : UiTest
             Assert.Equal(EdgeStyle.Glow, Controller.SettingsService.Current.EdgeStyle);
             ((ISettingsPage)page).Refresh(Controller.SettingsService.Current);
             Assert.DoesNotContain("line", page.ThicknessDescription.Text, StringComparison.Ordinal);
+        });
+        AssertNoFailures();
+    }
+
+    [WindowsFact]
+    public void TheMovementChoiceSwitchesBetweenFlowAndPulse()
+    {
+        // H-033 (Maxwell's request): the light travels round the edge (Flow, the default) or the whole edge pulses on
+        // each beat as before (Pulse), chosen on the Motion page.
+        UiThread.Run(() =>
+        {
+            var page = new MotionPage(Controller);
+            Settings before = Controller.SettingsService.Current;
+            ((ISettingsPage)page).Refresh(before);
+            Assert.Equal(before.Movement == MovementStyle.Pulse, page.PulseChoice.IsChecked);
+            Assert.Equal(before.Movement != MovementStyle.Pulse, page.FlowChoice.IsChecked);
+            page.PulseChoice.IsChecked = true;
+            Assert.Equal(MovementStyle.Pulse, Controller.SettingsService.Current.Movement);
+            ((ISettingsPage)page).Refresh(Controller.SettingsService.Current);
+            Assert.False(page.FlowChoice.IsChecked);
+            page.FlowChoice.IsChecked = true;
+            Assert.Equal(MovementStyle.Flow, Controller.SettingsService.Current.Movement);
+            ((ISettingsPage)page).Refresh(Controller.SettingsService.Current);
+            Assert.False(page.PulseChoice.IsChecked);
+            // An unknown value shows as Flow, the default.
+            ((ISettingsPage)page).Refresh(Controller.SettingsService.Current with { Movement = (MovementStyle)7 });
+            Assert.True(page.FlowChoice.IsChecked);
+            Assert.False(page.PulseChoice.IsChecked);
         });
         AssertNoFailures();
     }

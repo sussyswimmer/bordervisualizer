@@ -18,10 +18,10 @@
                     <TextBlock Style="{StaticResource RowLabel}" Text="Mode" />
                     <RadioButton x:Name="MusicSyncChoice" GroupName="Mode" Margin="0,8,0,0" Checked="OnModeChanged"
                                  AutomationProperties.Name="Music Sync"
-                                 AutomationProperties.HelpText="Brightness and width follow the music, with a pulse on each beat.">
+                                 AutomationProperties.HelpText="Brightness and width follow the music, and the light moves with each beat.">
                         <StackPanel>
                             <TextBlock Text="Music Sync" />
-                            <TextBlock Style="{StaticResource RowDescription}" Text="Brightness and width follow the music, with a pulse on each beat." />
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Brightness and width follow the music, and the light moves with each beat." />
                         </StackPanel>
                     </RadioButton>
                     <RadioButton x:Name="IdleGlowChoice" GroupName="Mode" Margin="0,8,0,0" Checked="OnModeChanged"
@@ -38,6 +38,30 @@
                         <StackPanel>
                             <TextBlock Text="Off" />
                             <TextBlock Style="{StaticResource RowDescription}" Text="No glow, and nothing runs." />
+                        </StackPanel>
+                    </RadioButton>
+                </StackPanel>
+            </Border>
+
+            <!-- How the light moves with the music (Settings.Movement, H-033): light travelling round the edge (Maxwell's
+                 request, the default), or the whole edge pulsing on each beat as before. -->
+            <Border Style="{StaticResource Row}">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource RowLabel}" Text="Movement" />
+                    <RadioButton x:Name="FlowChoice" GroupName="Movement" Margin="0,8,0,0" Checked="OnMovementChanged"
+                                 AutomationProperties.Name="Flow"
+                                 AutomationProperties.HelpText="Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it.">
+                        <StackPanel>
+                            <TextBlock Text="Flow" />
+                            <TextBlock Style="{StaticResource RowDescription}" Text="Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it." />
+                        </StackPanel>
+                    </RadioButton>
+                    <RadioButton x:Name="PulseChoice" GroupName="Movement" Margin="0,8,0,0" Checked="OnMovementChanged"
+                                 AutomationProperties.Name="Pulse"
+                                 AutomationProperties.HelpText="The whole edge swells and brightens together on each beat.">
+                        <StackPanel>
+                            <TextBlock Text="Pulse" />
+                            <TextBlock Style="{StaticResource RowDescription}" Text="The whole edge swells and brightens together on each beat." />
                         </StackPanel>
                     </RadioButton>
                 </StackPanel>
