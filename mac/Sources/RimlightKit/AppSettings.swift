@@ -7,6 +7,7 @@ struct AppSettings: Codable, Equatable {
     var enabled: Bool
     var animation: String          // MusicSync | IdleGlow | Off
     var whenSilent: String         // IdleGlow | Hide
+    var movement: String           // Flow | Pulse: light travelling round the edge, or the whole edge pulsing
     var colorMode: String          // AlbumArt | Manual
     var overrideAlbumColor: Bool
     var primaryHex: String

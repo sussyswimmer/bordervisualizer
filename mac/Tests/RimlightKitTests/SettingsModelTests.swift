@@ -29,6 +29,19 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(saved.edgeStyle, "Line")
     }
 
+    func testTheMovementRoundTripsThroughCore() throws {
+        // Core writes the enum by name ("Flow" by default) and keeps "Pulse" (Settings > Motion > Movement).
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        var settings = try XCTUnwrap(Core.loadSettings(directory: directory).flatMap(AppSettings.decode))
+        XCTAssertEqual(settings.movement, "Flow")
+        settings.movement = "Pulse"
+        let json = try XCTUnwrap(settings.encoded())
+        XCTAssertEqual(Core.saveSettings(directory: directory, json: json), RL_OK)
+        let saved = try XCTUnwrap(Core.loadSettings(directory: directory).flatMap(AppSettings.decode))
+        XCTAssertEqual(saved.movement, "Pulse")
+    }
+
     func testColoursRoundTripAsSrgbHex() {
         for hex in ["#7C5CFF", "#22D3EE", "#000000", "#FFFFFF", "#FF8A2A"] {
             XCTAssertEqual(Color(hex: hex).hex, hex)
@@ -49,15 +62,17 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(applied.fpsCap, 30) // a preset changes the look only
     }
 
-    func testPresetsKeepTheEdgeStyle() throws {
+    func testPresetsKeepTheEdgeStyleAndTheMovement() throws {
         var base = AppSettings.fallback
         base.edgeStyle = "Line"
+        base.movement = "Pulse"
         let json = try XCTUnwrap(base.encoded())
         for index in 0..<rl_presets_count() {
             let applied = try XCTUnwrap(json.withCString { source in
                 Core.readString { rl_preset_apply(index, source, $0, $1) }
             }.flatMap(AppSettings.decode))
             XCTAssertEqual(applied.edgeStyle, "Line", "preset \(index)")
+            XCTAssertEqual(applied.movement, "Pulse", "preset \(index)")
         }
     }
 }
