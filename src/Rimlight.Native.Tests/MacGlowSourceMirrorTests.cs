@@ -6,18 +6,20 @@ namespace Rimlight.Native.Tests;
 
 // The Mac's frame source runs the same frames as the Windows one. Rimlight.Platform.Tests' BenchMirrorTests holds
 // Bench's FramePipeline equal to MusicGlowSource; this holds MacGlowSource equal to FramePipeline, bit for bit, on the
-// same audio, settings, album palettes and pauses (docs/10-MACOS.md §1.4). Like FramePipeline it leaves out the demo
-// and Settings' meter.
+// same audio, settings (in either movement), album palettes and pauses (docs/10-MACOS.md §1.4). Like FramePipeline it
+// leaves out the demo and Settings' meter.
 public sealed class MacGlowSourceMirrorTests
 {
     private const int SampleRate = 48000;
 
     private enum Program { Music, Silence, NoPackets }
 
-    [Fact]
-    public void TheMacRunsTheSameFramesAsTheWindowsFrameSource()
+    [Theory]
+    [InlineData(MovementStyle.Flow)]
+    [InlineData(MovementStyle.Pulse)]
+    public void TheMacRunsTheSameFramesAsTheWindowsFrameSource(MovementStyle movement)
     {
-        var settings = new Settings();
+        var settings = new Settings { Movement = movement };
         var mac = new MacGlowSource(settings);
         var bench = new BenchPipeline(settings, MacGlowSource.ManualPalette(settings));
         float[] gradient = new float[256];
@@ -82,7 +84,9 @@ public sealed class MacGlowSourceMirrorTests
             var macFrame = mac.NextFrame(dt, settings, paused, gradient, samples, capturing ? SampleRate : 0, generation);
             var benchMotion = bench.NextFrame(samples, rate, dt, settings, published, paused, changed);
             frames++;
-            if (macFrame.State.Pulse > 0.3f) pulses++;
+            // A beat shows as the whole edge's pulse, or in the Flow movement (whose pulse keeps only a share of it)
+            // as the ripple it sends along the edge.
+            if (macFrame.State.Pulse > 0.3f || StrongestRipple(macFrame.State.Flow) > 0.3f) pulses++;
 
             Assert.True(macFrame.State == bench.State, $"{now:0.000} s: the Mac drew {macFrame.State}, Windows {bench.State}");
             Assert.Equal(bench.Refilled, macFrame.GradientChanged);
@@ -92,6 +96,10 @@ public sealed class MacGlowSourceMirrorTests
         Assert.True(frames > 2000, $"{frames} frames");
         Assert.True(pulses > 100, $"only {pulses} frames pulsed: the music never reached the light");
     }
+
+    private static float StrongestRipple(FlowMotion flow) =>
+        MathF.Max(MathF.Max(flow.Ripple0.Strength, flow.Ripple1.Strength),
+            MathF.Max(flow.Ripple2.Strength, flow.Ripple3.Strength));
 
     // A 120 BPM kick (a decaying 55 Hz burst) over a quiet chord and noise: enough for beats and a groove.
     private static float Music(double t, Random random)
