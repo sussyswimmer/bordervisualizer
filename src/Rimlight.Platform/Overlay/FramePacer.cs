@@ -52,8 +52,8 @@ internal sealed class FramePacer
     public const double MaxFrameDtSeconds = 0.25;      // a longer gap (nothing to draw, a stall) counts as one frame
     // The Flow movement (H-033) moves light along the edge: how much a pixel's brightness changes per perimeter a
     // comet's head or a ripple's front travels, at most (GlowProfile.Comets, RippleAt: the heads' Gaussian over
-    // CometHead, a front's over RippleFront, rounded up). A comet at its slowest, 0.04 perimeters a second, changes the
-    // light at its head by about 2 a second at the full amount: it would visibly step at 10 fps.
+    // CometHead, a front's over RippleFront, rounded up). A comet at its slowest, 0.15 perimeters a second, changes the
+    // light at its head by about 4.5 a second at the full amount: it would visibly step at 10 fps.
     public const float CometSlope = (1 - GlowProfile.FlowFloor) / GlowProfile.CometHead;
     public const float FrontSlope = 1 / GlowProfile.RippleFront;
     private const double VsyncTolerance = 0.97;        // a 59 Hz report of a 59.94 Hz display still counts as 60

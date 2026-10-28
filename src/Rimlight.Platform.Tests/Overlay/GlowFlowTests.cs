@@ -45,7 +45,8 @@ public sealed class GlowFlowTests
                 float head = (float)k / GlowProfile.CometCount - phase;
                 Near(1, GlowProfile.Comets(head - MathF.Floor(head), phase), 1e-3f);
             }
-            float floor = MathF.Exp(-0.5f / GlowProfile.CometTail); // the tail reaches the next head at its dimmest
+            // At its dimmest the tail has run the whole way to the next head (round to its own with one comet).
+            float floor = MathF.Exp(-1f / GlowProfile.CometCount / GlowProfile.CometTail);
             for (float t = 0; t < 1; t += 1e-4f)
             {
                 float comets = GlowProfile.Comets(t, phase);
@@ -88,7 +89,7 @@ public sealed class GlowFlowTests
     {
         // The heads move toward smaller t as the phase grows (counterclockwise, the way the colours flow), so the tail
         // lies at larger t: a long exponential behind, a Gaussian over about CometHead ahead.
-        float head = 0.5f - 0.3f; // comet 1 at phase 0.3
+        float head = 0.7f; // the first comet's head, at 0 - 0.3 round the loop, at phase 0.3
         Near(MathF.Exp(-0.06f / GlowProfile.CometTail), GlowProfile.Comets(head + 0.06f, 0.3f), 1e-4f);
         Near(MathF.Exp(-1), GlowProfile.Comets(head - GlowProfile.CometHead, 0.3f), 1e-4f);
         Assert.True(GlowProfile.Comets(head - 0.03f, 0.3f) < GlowProfile.Comets(head + 0.03f, 0.3f));
@@ -144,12 +145,15 @@ public sealed class GlowFlowTests
     public void FlowMeanIsTheCometsAverage()
     {
         // FlowMean is FlowFloor + (1 - FlowFloor) x CometCount x (the head's Gaussian half, CometHead sqrt(pi) / 2,
-        // plus the tail, CometTail): what the shaders blend to deep inside.
+        // plus the tail, cut where it reaches the next head: CometTail (1 - exp(-1 / (CometCount CometTail)))): what
+        // the shaders blend to deep inside.
+        float spacing = 1f / GlowProfile.CometCount;
         float formula = GlowProfile.FlowFloor + (1 - GlowProfile.FlowFloor) * GlowProfile.CometCount *
-            (GlowProfile.CometHead * MathF.Sqrt(MathF.PI) / 2 + GlowProfile.CometTail);
+            (GlowProfile.CometHead * MathF.Sqrt(MathF.PI) / 2 +
+            GlowProfile.CometTail * (1 - MathF.Exp(-spacing / GlowProfile.CometTail)));
         Near(GlowProfile.FlowMean, formula, 1e-6f);
-        // Averaged round the perimeter it is within 0.3 % (each tail is cut short at the next head), so the blend to
-        // it deep inside neither brightens nor dims the light there.
+        // Averaged round the perimeter it is within 0.3 % (where the next head's Gaussian outshines the end of a tail,
+        // the larger wins), so the blend to it deep inside neither brightens nor dims the light there.
         GlowConstants c = Flowing(1920, 1080, 1, 1, 0.3f, 0);
         double sum = 0;
         const int samples = 200_000;

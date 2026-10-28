@@ -203,7 +203,7 @@ struct MotionPage: View {
         if model.settings.animation != "MusicSync" { return "Only matters in Music Sync." }
         return model.settings.movement == "Pulse"
             ? "The whole edge swells and brightens together on each beat."
-            : "Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it."
+            : "Light travels round the edge: a comet chases round it, the colors stream round it and each beat ripples along it."
     }
 
     var body: some View {

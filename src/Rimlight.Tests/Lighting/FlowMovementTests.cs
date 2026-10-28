@@ -6,7 +6,7 @@ using Xunit.Abstractions;
 namespace Rimlight.Tests.Lighting;
 
 // H-033: the Flow movement, the default. Maxwell: "I want the rimlight to be like the video I sent where it moves
-// around and doesn't just bounce". Two comets chase round the edge, faster when the music is louder and pushed along by
+// around and doesn't just bounce". A comet chases round the edge, faster when the music is louder and pushed along by
 // each beat; the colors stream round it faster; each beat sends a ripple running both ways along it from one spot,
 // golden-ratio steps apart, while the whole-edge pulse keeps 40 % of the beat. Expected values are the spec's numbers
 // written out, not the engine's constants, so changing a constant fails a test. (The Pulse movement is pinned to the
@@ -120,7 +120,7 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
     [InlineData(0.25f, 30f, 0.3f)]
     public void TheCometsRunFasterWhenTheMusicIsLouder(float level, float fps, float jitter)
     {
-        // 0.04 laps a second at Level 0, 0.2 at Level 1, at any frame rate.
+        // 0.15 laps a second at Level 0 (6.7 s a lap), 0.45 at Level 1 (2.2 s), at any frame rate.
         var audio = new AudioFeatures(level, 0.5f, 0, false);
         var engine = Settled(Flow, audio);
         var random = new Random(3);
@@ -135,14 +135,14 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
             time += dt;
         }
         output.WriteLine($"Level {level}: {advance / time:F5} laps a second");
-        Assert.Equal((0.04 + 0.16 * level) * time, advance, 1e-5);
+        Assert.Equal((0.15 + 0.3 * level) * time, advance, 1e-5);
     }
 
     [Theory]
     [InlineData(60)]
     [InlineData(144)]
     [InlineData(30)]
-    public void EachBeatPushesTheCometsTwoAndAHalfHundredthsOfALap(int fps)
+    public void EachBeatPushesTheCometEightHundredthsOfALap(int fps)
     {
         // 120 BPM for 10 s like the analyzer reports it (1 on the beat, τ = 120 ms decay), then 2 s for the last push.
         // The colors' kick stays 0.01 cycles a beat, on top of Flow's faster drift (0.04 + 0.06 × Level).
@@ -164,14 +164,14 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
             phase = state.Phase;
         }
         Assert.Equal(20, beats);
-        Assert.Equal(0.12 * frames * dt + 0.025 * beats, cometAdvance, 1e-5);
+        Assert.Equal(0.3 * frames * dt + 0.08 * beats, cometAdvance, 1e-5); // 0.46 laps a second: the clip's 2.2 s
         Assert.Equal(0.07 * frames * dt + 0.01 * beats, phaseAdvance, 1e-5);
     }
 
     [Fact]
     public void ABeatPushesTheCometsAsAQuickPushInProportionToItsHeight()
     {
-        // A beat of 0.5 pushes 0.0125 laps, delivered like the colors' kick: 13 % on the beat frame at 60 fps, 92 % by
+        // A beat of 0.5 pushes 0.04 laps, delivered like the colors' kick: 13 % on the beat frame at 60 fps, 92 % by
         // 0.3 s. A rise of 0.1 or less is no beat at all.
         var engine = Settled(Flow, Loud);
         float comets = engine.Update(0, Loud, Palette.Default, Flow, false).Flow.CometPhase, beat = 0.5f;
@@ -179,26 +179,26 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
         for (int i = 1; i <= 18; i++)
         {
             float next = engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, Flow, false).Flow.CometPhase;
-            pushed += Advance(comets, next) - 0.12 * Dt;
+            pushed += Advance(comets, next) - 0.3 * Dt;
             comets = next;
             beat *= MathF.Exp(-Dt / 0.12f);
-            if (i == 1) Assert.Equal(0.0125 * (1 - Math.Exp(-Dt / 0.12)), pushed, 1e-6);
+            if (i == 1) Assert.Equal(0.04 * (1 - Math.Exp(-Dt / 0.12)), pushed, 1e-6);
         }
-        Assert.Equal(0.0125 * (1 - Math.Exp(-0.3 / 0.12)), pushed, 1e-6);
+        Assert.Equal(0.04 * (1 - Math.Exp(-0.3 / 0.12)), pushed, 1e-6);
         for (int i = 0; i < 120; i++)
         {
             float next = engine.Update(Dt, Loud with { Beat = beat *= MathF.Exp(-Dt / 0.12f) }, Palette.Default, Flow, false).Flow.CometPhase;
-            pushed += Advance(comets, next) - 0.12 * Dt;
+            pushed += Advance(comets, next) - 0.3 * Dt;
             comets = next;
         }
-        Assert.Equal(0.0125, pushed, 1e-6);
+        Assert.Equal(0.04, pushed, 1e-6);
         foreach (float wobble in new[] { 0.09f, 0.05f, 0.14f })
         {
             float next = engine.Update(Dt, Loud with { Beat = wobble }, Palette.Default, Flow, false).Flow.CometPhase;
-            pushed += Advance(comets, next) - 0.12 * Dt;
+            pushed += Advance(comets, next) - 0.3 * Dt;
             comets = next;
         }
-        Assert.Equal(0.0125, pushed, 1e-6);
+        Assert.Equal(0.04, pushed, 1e-6);
     }
 
     [Fact]
@@ -485,7 +485,7 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
             advance += Advance(comets, state.Flow.CometPhase);
             comets = state.Flow.CometPhase;
         }
-        Assert.Equal(0.12 * 60 * Dt, advance, 1e-6);
+        Assert.Equal(0.3 * 60 * Dt, advance, 1e-6);
     }
 
     [Fact]
@@ -513,7 +513,7 @@ public sealed class FlowMovementTests(ITestOutputHelper output)
         float comets = state.Flow.CometPhase;
         Assert.Equal(new Ripple(0, 0, 1), state.Flow.Ripple0);
         state = engine.Update(1000, Loud with { Beat = 1 }, Palette.Default, Flow, false);
-        Assert.Equal(0.12 * 0.1 + 0.025 * (1 - Math.Exp(-0.1 / 0.12)), Advance(comets, state.Flow.CometPhase), 1e-6);
+        Assert.Equal(0.3 * 0.1 + 0.08 * (1 - Math.Exp(-0.1 / 0.12)), Advance(comets, state.Flow.CometPhase), 1e-6);
         Assert.Equal(0.045f, state.Flow.Ripple0.Radius, 1e-6f);
         Assert.Equal(Math.Exp(-0.1 / 0.4), state.Flow.Ripple0.Strength, 1e-6);
     }

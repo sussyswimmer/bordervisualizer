@@ -44,13 +44,13 @@ static const float HalfPi = 1.57079637;
 
 // The Flow movement's shape (GlowProfile's constants of the same names; GlowShaderTests compares them).
 // Lengths are in perimeters.
-static const int CometCount = 2;          // comets chasing round the edge, evenly spaced
-static const float CometHead = 0.01;      // a comet's light ahead of its head: exp(-(a / CometHead)^2)
-static const float CometTail = 0.12;      // and behind it: exp(-b / CometTail), a long trail
-static const float FlowFloor = 0.5;       // the light between the comets, as a share of a comet's peak
+static const int CometCount = 1;          // comets chasing round the edge, evenly spaced: one, as in the reference clip
+static const float CometHead = 0.03;      // a comet's light ahead of its head: exp(-(a / CometHead)^2), a soft end
+static const float CometTail = 0.3;       // and behind it: exp(-b / CometTail), lighting about half the edge
+static const float FlowFloor = 0.1;       // the light away from the comet, as a share of its peak: nearly dark
 static const float RippleFront = 0.015;   // a ripple's light ahead of its front: exp(-(x / RippleFront)^2)
 static const float RippleTrail = 0.06;    // and behind it, back toward its origin: exp(x / RippleTrail)
-static const float FlowMean = 0.62886227; // the comets' light averaged round the edge: what it blends to deep inside
+static const float FlowMean = 0.38429615; // the comets' light averaged round the edge: what it blends to deep inside
 
 // Full-screen triangle from SV_VertexID: (-1, 1), (3, 1), (-1, -3) in clip space. No vertex buffer.
 float4 VSMain(uint id : SV_VertexID) : SV_Position
@@ -287,7 +287,7 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     float depth = min(min(p.x, p.y), min(ScreenPx.x - p.x, ScreenPx.y - p.y));
     float deep = smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth);
 
-    // The Flow movement (GlowProfile.Motion, Maxwell's request): comets chase round the edge and the beats' ripples
+    // The Flow movement (GlowProfile.Motion, Maxwell's request): a comet chases round the edge and the beats' ripples
     // run along it, on the colours' own coordinate t, blending to their mean where the colours blend to theirs. The
     // motion is at most 1, so the test above was an upper bound; dimmed by it, the pixel may now fall under half a
     // code value too. With FlowAmount 0 it is branched over.

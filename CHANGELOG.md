@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Flow moves like the video.** Instead of two short comets slowly circling an evenly lit edge, Flow now sends one comet around the edge whose tail lights about half of it, with the rest of the edge nearly dark. It goes about three times as fast, roughly a lap every 2 seconds on a loud song with a steady beat, still faster when the music is louder and pushed along by every beat. The colors streaming around and the beat flashes are as before. Pulse is unchanged.
+
 ## [1.0.4] - 2026-10-28
 
 ### Added

@@ -16,8 +16,9 @@ namespace Rimlight.Core.Lighting;
 // drift crossfade with the music weight.
 //
 // The Flow movement (H-033; Maxwell: "I want the rimlight to be like the video I sent where it moves around and doesn't
-// just bounce"). Light travels round the edge in three ways: two comets chase round it, faster when the music is
-// louder and pushed along by each beat; the colors drift round it faster; and each beat sends a ripple running both
+// just bounce"). Light travels round the edge in three ways: a comet chases round it, faster when the music is
+// louder and pushed along by each beat, at about the reference clip's lap of 2-2.5 s on a loud song with a steady
+// beat; the colors drift round it faster; and each beat sends a ripple running both
 // ways along it from one spot, while the whole-edge pulse keeps only a share of the beat. The renderers draw the comets
 // and the ripples (Platform's GlowProfile is the reference math); the engine only moves them. How much of it shows,
 // the Flow amount, is the flow fade × the music weight, so Idle Glow has none and it fades with the music like
@@ -55,11 +56,11 @@ internal sealed class LightEngine : ILightEngine
 
     // The Flow movement (H-033). Speeds are in perimeters (cycles) a second, at the full Flow amount.
     internal const float FlowFadeSeconds = 0.3f;          // the Movement setting's crossfade between Flow and Pulse
-    internal const float CometBaseCyclesPerSecond = 0.04f;    // the comets with the music at Level 0: a lap in 25 s
-    internal const float CometLevelCyclesPerSecond = 0.16f;   // added at Level 1, so 0.2 laps a second at full loudness
-    // Each full beat pushes the comets this far, × the height Beat rises to, delivered like the colors' kick
-    // (KickSeconds): a quick shove along, not a jump.
-    internal const float CometKickCycles = 0.025f;
+    internal const float CometBaseCyclesPerSecond = 0.15f;    // the comet with the music at Level 0: a lap in 6.7 s
+    internal const float CometLevelCyclesPerSecond = 0.3f;    // added at Level 1, so 0.45 laps a second at full loudness
+    // Each full beat pushes the comet this far, × the height Beat rises to, delivered like the colors' kick
+    // (KickSeconds): a quick shove along, not a jump. At Level 0.5 and 120 BPM it laps in about 2.2 s.
+    internal const float CometKickCycles = 0.08f;
     internal const float FlowDriftCyclesPerSecond = 0.04f;    // the colors' drift in Flow at Level 0 (Pulse: 0.015)
     internal const float FlowDriftLevelCyclesPerSecond = 0.06f; // added at Level 1, so 0.1 cycles a second at most
     internal const float RippleSpeed = 0.45f;             // perimeters a second each of a ripple's two fronts runs

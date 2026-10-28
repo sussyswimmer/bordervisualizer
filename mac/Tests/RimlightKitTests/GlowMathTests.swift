@@ -193,12 +193,11 @@ final class GlowMathTests: XCTestCase {
     // MARK: - The Flow movement's pieces
 
     func testTheCometsAreBrightestAtTheirHeadsAndContinuous() {
-        // Two heads half a perimeter apart, at 1 / 2 - phase and 1 - phase; nothing jumps anywhere round the loop.
+        // One head, at 1 - phase; nothing jumps anywhere round the loop.
         let phase: Float = 0.3
-        XCTAssertEqual(gm_comets(0.2, phase), 1, accuracy: 1e-6)
         XCTAssertEqual(gm_comets(0.7, phase), 1, accuracy: 1e-6)
-        XCTAssertLessThan(gm_comets(0.45, phase), 0.2) // a quarter of the perimeter (about two tails) behind the first head
-        XCTAssertGreaterThan(gm_comets(0.21, phase), gm_comets(0.19, phase)) // the tail fades slower than the head
+        XCTAssertLessThan(gm_comets(0.2, phase), 0.2) // half a perimeter behind it the tail is down to exp(-0.5 / 0.3)
+        XCTAssertGreaterThan(gm_comets(0.71, phase), gm_comets(0.69, phase)) // the tail fades slower than the head
         var previous = gm_comets(0, phase)
         for i in 1...20_000 {
             let value = gm_comets(Float(i) / 20_000, phase)
@@ -238,22 +237,23 @@ final class GlowMathTests: XCTestCase {
         }
     }
 
-    func testTheMotionDimsTheEdgeBetweenTheCometsAndBlendsToItsMeanDeepInside() throws {
+    func testTheMotionDimsTheEdgeAwayFromTheCometAndBlendsToItsMeanDeepInside() throws {
         let golden = try XCTUnwrap(Self.golden().cases.first { $0.name == "flow-glow-1080p-half" })
         var k = Self.constants(golden.constants)
         k.flowAmount = 1
         k.cometPhase = 0
         k.ripples = (RlGlowRipple(), RlGlowRipple(), RlGlowRipple(), RlGlowRipple())
-        // At the edge: 1 at a comet's head (t 0, the top-left corner), and near the floor of 0.5 at the end of its
-        // tail, just before the next head (t 0.5).
+        // At the edge: 1 at the comet's head (t 0, the top-left corner), still above a quarter of it half way round
+        // its tail, and near the floor of 0.1 at the tail's end, just before it comes round to the head again.
         XCTAssertEqual(gm_motion_at(k, 0, 0), 1, accuracy: 1e-6)
-        XCTAssertEqual(gm_motion_at(k, 0.47, 0), 0.5, accuracy: 0.02)
-        // Deep inside it is the mean, wherever the comets are.
-        XCTAssertEqual(gm_motion_at(k, 0, 1), 0.62886227, accuracy: 1e-6)
-        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 0.62886227, accuracy: 1e-6)
+        XCTAssertGreaterThan(gm_motion_at(k, 0.47, 0), 0.25)
+        XCTAssertEqual(gm_motion_at(k, 0.9, 0), 0.15, accuracy: 0.02)
+        // Deep inside it is the mean, wherever the comet is.
+        XCTAssertEqual(gm_motion_at(k, 0, 1), 0.38429615, accuracy: 1e-6)
+        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 0.38429615, accuracy: 1e-6)
         // Half the amount is half way to 1.
         k.flowAmount = 0.5
-        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 1 - 0.5 * (1 - 0.62886227), accuracy: 1e-6)
+        XCTAssertEqual(gm_motion_at(k, 0.4, 1), 1 - 0.5 * (1 - 0.38429615), accuracy: 1e-6)
     }
 
     func testThePerimeterRunsClockwiseFromTheTopLeftCorner() {
