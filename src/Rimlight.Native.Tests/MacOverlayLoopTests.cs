@@ -238,6 +238,36 @@ public sealed class MacOverlayLoopTests
         Assert.True(plain.Equals(GlowConstants.Create(state, 1920, 1080, 1, 1, 0, mean)));
     }
 
+    [Fact]
+    public void TheConstantsCarryTheLightStatesFlowMovement()
+    {
+        // The Flow movement (Maxwell's request) crosses the ABI in RlLightState and reaches the shader's last five
+        // registers through Create: its amount, which also raises the gain, its comets and its ripples (an empty slot
+        // stays empty), round the notch as anywhere else.
+        var still = new LightState(new Rgb(0.8f, 0.2f, 0.9f), new Rgb(0.1f, 0.8f, 0.9f), 0.6f, 0.5f, 0.45f, 6, 0.3f,
+            0.6f, 1);
+        LightState moving = still with
+        {
+            Flow = new FlowMotion(0.6f, 0.85f, new Ripple(0.99f, 0.03f, 0.7f), default, new Ripple(0.4f, 0, 0.3f),
+                default),
+        };
+        var mean = new Rgb(0.3f, 0.2f, 0.6f);
+        GlowConstants k = MacOverlayLoop.ConstantsFor(moving, Notched(3024, 1964, 2), 0, EdgeStyle.Line, mean);
+        Assert.Equal(0.6f, k.FlowAmount);
+        Assert.Equal(0.85f, k.CometPhase);
+        Assert.Equal(GlowRipple.From(moving.Flow.Ripple0), k.Ripple0);
+        Assert.Equal(default, k.Ripple1);
+        Assert.Equal(GlowRipple.From(moving.Flow.Ripple2), k.Ripple2);
+        Assert.Equal(GlowProfile.Gain(0.5f, 0.6f, 0.6f), k.Gain);
+        Assert.Equal(64, k.NotchHeightPx);
+
+        GlowConstants plain = MacOverlayLoop.ConstantsFor(still, Notched(3024, 1964, 2), 0, EdgeStyle.Line, mean);
+        Assert.Equal(0, plain.FlowAmount);
+        Assert.Equal(GlowProfile.Gain(0.5f, 0.6f), plain.Gain); // without the Flow movement, the gain from before it
+        Assert.True(k.Gain > plain.Gain);
+        Assert.False(k.LooksLike(plain));
+    }
+
     private double now = 100;
 
     private static SurfaceInfo Notched(int widthPx, int heightPx, float pixelsPerPoint) => new()

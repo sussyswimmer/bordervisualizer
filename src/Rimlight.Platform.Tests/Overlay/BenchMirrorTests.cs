@@ -41,6 +41,23 @@ public sealed class BenchMirrorTests
                 Visibility = random.Next(4) == 0 ? visibilities[random.Next(visibilities.Length)] : state.Visibility,
                 Intensity = Math.Clamp(state.Intensity + (float)(random.NextDouble() - 0.5) * 0.1f, 0, 1),
                 Phase = state.Phase + (random.Next(3) == 0 ? 0.01f : 0),
+                // The Flow movement (H-033): its amount fading, its comets moving at their slowest or fastest, and a
+                // ripple appearing, spreading, fading and leaving its slot.
+                Flow = random.Next(3) == 0 ? state.Flow : state.Flow with
+                {
+                    Amount = Math.Clamp(state.Flow.Amount + (float)(random.NextDouble() - 0.5) * 0.1f, 0, 1),
+                    CometPhase = (state.Flow.CometPhase + (random.Next(2) == 0 ? 0.0007f : 0.0033f)) % 1,
+                    Ripple1 = random.Next(4) switch
+                    {
+                        0 => default,
+                        1 => new Ripple((float)random.NextDouble(), 0, (float)random.NextDouble()),
+                        _ => state.Flow.Ripple1 with
+                        {
+                            Radius = state.Flow.Ripple1.Radius + 0.0075f,
+                            Strength = state.Flow.Ripple1.Strength * 0.96f,
+                        },
+                    },
+                },
             };
             FrameMotion motion = motions[random.Next(motions.Length)];
             bool refilled = random.Next(20) == 0;
@@ -55,6 +72,8 @@ public sealed class BenchMirrorTests
         Assert.Equal(FramePacer.ChangeHoldSeconds, PaceModel.ChangeHoldSeconds);
         Assert.Equal(FramePacer.FastChangePerSecond, PaceModel.FastChangePerSecond);
         Assert.Equal(GlowConstants.MinVisibility, PaceModel.MinVisibility);
+        Assert.Equal(FramePacer.CometSlope, PaceModel.CometSlope);
+        Assert.Equal(FramePacer.FrontSlope, PaceModel.FrontSlope);
     }
 
     [Fact]

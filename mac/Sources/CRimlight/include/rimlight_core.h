@@ -12,7 +12,7 @@
 
 #include "glow_math.h"
 
-#define RL_ABI_VERSION 9
+#define RL_ABI_VERSION 10
 
 static const int32_t RL_OK = 0;
 static const int32_t RL_INVALID_ARGUMENT = -1; // a null pointer, a negative capacity or a string that isn't UTF-8
@@ -81,17 +81,33 @@ typedef struct RlRgb {
     float r, g, b;
 } RlRgb;
 
-/// Core's LightState (linear RGB colours; the rest 0..1, thickness in points).
+/// A beat's ripple (Core's Ripple): where it started on the perimeter (0..1, clockwise from the top-left corner), how
+/// far each of its two fronts has run (in perimeters) and how bright it is now (0..1; 0 is none).
+typedef struct RlRipple {
+    float origin, radius, strength;
+} RlRipple;
+
+/// The Flow movement for one frame (Core's FlowMotion): how much of it shows (0..1; 0 lights the edge evenly), where
+/// its comets are (0..1) and the beats' ripples.
+typedef struct RlFlowMotion {
+    float amount, cometPhase;
+    RlRipple ripple0, ripple1, ripple2, ripple3;
+} RlFlowMotion;
+
+/// Core's LightState (linear RGB colours; the rest 0..1, thickness in points), its Flow movement last.
 typedef struct RlLightState {
     RlRgb colorA;
     RlRgb colorB;
     float ratio, intensity, spread, coreThicknessDip, phase, pulse, visibility;
+    RlFlowMotion flow;
 } RlLightState;
 
 GM_STATIC_ASSERT(sizeof(RlSurface) == 32, "RlSurface must match SurfaceInfo");
 GM_STATIC_ASSERT(sizeof(RlFrameInfo) == 16, "RlFrameInfo must match FrameInfo");
 GM_STATIC_ASSERT(sizeof(RlPace) == 24, "RlPace must match PaceInfo");
-GM_STATIC_ASSERT(sizeof(RlLightState) == 52, "RlLightState must match LightState");
+GM_STATIC_ASSERT(sizeof(RlRipple) == 12, "RlRipple must match Ripple");
+GM_STATIC_ASSERT(sizeof(RlFlowMotion) == 56, "RlFlowMotion must match FlowMotion");
+GM_STATIC_ASSERT(sizeof(RlLightState) == 108, "RlLightState must match LightState");
 
 static const int32_t RL_PACE_FULL = 0;  // frames on the display link, at fullRateHz
 static const int32_t RL_PACE_SLOW = 1;  // one frame after intervalSeconds

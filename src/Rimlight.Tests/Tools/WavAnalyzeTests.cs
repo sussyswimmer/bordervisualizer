@@ -103,7 +103,7 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         output.WriteLine(text);
         Assert.Equal(0, code);
         Assert.Equal("", error);
-        Assert.Contains("Feed: 60 fps ±10 % (seed 1), 10 ms packets; tuning: defaults; light: Brightness 0.6, Sensitivity 1", text);
+        Assert.Contains("Feed: 60 fps ±10 % (seed 1), 10 ms packets; tuning: defaults; light: Brightness 0.6, Sensitivity 1, Movement Flow", text);
         Assert.Matches(@"Light: Intensity mean 0\.\d\d \(0\.\d\d to 0\.\d\d\); pulses >= 0\.5: \d+ \(\d+\.\d a minute\), >= 0\.2: \d+", text);
 
         string[] rows = File.ReadAllLines(Path.Combine(directory, "mix.engine.csv"));
@@ -120,11 +120,12 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.Contains(cells, c => c[Column("samples")] == 960);                            // a frame is 15-18 ms
         for (int i = 1; i < cells.Length; i++) Assert.True(cells[i][Column("beatCount")] >= cells[i - 1][Column("beatCount")]);
         Assert.InRange(cells[^1][Column("beatCount")], 20, 26);                             // 120 BPM for 12 s
-        // Music Sync with music: the pulse is the analyzer's Beat, Intensity is Brightness × (0.35 + 0.65 × Level).
-        Assert.All(cells, c => Assert.Equal(c[Column("beat")], c[Column("pulse")]));
+        // Music Sync with music in the default Flow movement: the whole-edge pulse is 40 % of the analyzer's Beat (the
+        // ripples carry the rest round the edge), Intensity is Brightness × (0.35 + 0.65 × Level).
+        Assert.All(cells, c => Assert.Equal(0.4 * c[Column("beat")], c[Column("pulse")], tolerance: 1e-4)); // printed to 4 places
         Assert.All(cells, c => Assert.Equal(0.6 * (0.35 + 0.65 * c[Column("level")]), c[Column("intensity")], tolerance: 1e-4)); // printed to 4 places
         Assert.Equal(1, cells[^1][Column("visibility")]);                                    // the start fade is over
-        Assert.InRange(cells.Max(c => c[Column("pulse")]), 0.99, 1);
+        Assert.InRange(cells.Max(c => c[Column("pulse")]), 0.396, 0.4);
         // The internal stages are read: a drum groove has punch, the song position and the kick-likeness move.
         Assert.InRange(cells[^1][Column("punch")], 0.9, 1);
         Assert.All(cells, c => Assert.InRange(c[Column("position")], 0, 1));
@@ -156,6 +157,43 @@ public sealed class WavAnalyzeTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(2, code);
         Assert.Contains("--engine", error);
         Assert.Equal(2, Cli(wav, "--engine", "--sensitivity", "3", "--out", directory).Code);
+    }
+
+    [Fact]
+    public void EngineModeReplaysThePulseMovement()
+    {
+        // --movement Pulse replays the whole edge swelling on each beat, as before the Flow movement (H-033): the pulse
+        // is the analyzer's Beat itself, so tools/corpus's measures (a hit is a pulse peak of 0.5 or more) and its
+        // baselines in docs/PROGRESS.md still apply. The default, Flow, keeps 40 % of it (above).
+        string wav = Path.Combine(directory, "mix.wav");
+        Assert.Equal(0, Cli("generate", wav, "--seconds", "12", "--full-mix").Code);
+
+        (int code, string text, string error) = Cli(wav, "--engine", "--movement", "Pulse", "--out", directory, "--no-plot", "--brightness", "0.6");
+        output.WriteLine(text);
+        Assert.Equal(0, code);
+        Assert.Equal("", error);
+        Assert.Contains("; light: Brightness 0.6, Sensitivity 1, Movement Pulse", text);
+        int big = int.Parse(Regex.Match(text, @"Light: .*; pulses >= 0\.5: (\d+) ").Groups[1].Value, CultureInfo.InvariantCulture);
+        // Measured: 20 of the 23 beats, all but the first three (as above). In Flow the same track has none.
+        Assert.InRange(big, 18, 23);
+
+        string[] rows = File.ReadAllLines(Path.Combine(directory, "mix.engine.csv"));
+        string[] header = rows[0].Split(',');
+        double[][] cells = rows[1..].Select(r => r.Split(',').Select(c => double.Parse(c, CultureInfo.InvariantCulture)).ToArray()).ToArray();
+        int Column(string name) => Array.IndexOf(header, name);
+        Assert.All(cells, c => Assert.Equal(c[Column("beat")], c[Column("pulse")]));         // the beat, exactly
+        Assert.InRange(cells.Max(c => c[Column("pulse")]), 0.99, 1);
+        Assert.All(cells, c => Assert.Equal(0.6 * (0.35 + 0.65 * c[Column("level")]), c[Column("intensity")], tolerance: 1e-4));
+
+        // Only the two names (not "1", which Enum.Parse would take), and only with the engine.
+        (code, _, error) = Cli(wav, "--engine", "--movement", "Ripple", "--out", directory);
+        Assert.Equal(2, code);
+        Assert.Contains("--movement must be Flow or Pulse, not \"Ripple\".", error);
+        Assert.Equal(2, Cli(wav, "--engine", "--movement", "1", "--out", directory).Code);
+        (code, _, error) = Cli(wav, "--movement", "Pulse", "--out", directory);
+        Assert.Equal(2, code);
+        Assert.Contains("--engine", error);
+        Assert.Equal(0, Cli(wav, "--engine", "--movement", "flow", "--out", directory, "--no-plot").Code); // any case
     }
 
     [Fact]

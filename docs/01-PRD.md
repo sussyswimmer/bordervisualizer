@@ -14,7 +14,7 @@ Windows 10 (2004+) and Windows 11 users who listen to music while working or gam
 ### 2. Animation modes
 | Mode | Behavior |
 |---|---|
-| **Music Sync** (default) | Brightness and width follow loudness. A pulse fires on each beat (kick/bass onset). The color gradient drifts slowly around the perimeter. |
+| **Music Sync** (default) | Brightness and width follow loudness. A pulse fires on each beat (kick/bass onset). The color gradient drifts slowly around the perimeter. *Clarification (Maxwell's request, H-033, with a video of a screen edge whose light travels round it): "I want the rimlight to be like the video I sent where it moves around and doesn't just bounce". The new **Movement** choice on the Motion page decides how the light follows the music. **Flow**, the default, has two comets chasing round the edge, faster when it is louder and pushed on by each beat, colors streaming round it, and a flash running both ways along the edge from a new spot on each beat; the whole-edge pulse keeps 40 % of its size. **Pulse** is the look described above. Both only show in Music Sync (`Settings.Movement`, doc 04 §3).* |
 | **Idle Glow** | A steady glow with a very slow "breathing" (about a 6 s sine, ±10% brightness). Ignores audio. |
 | **Off** | Nothing rendered. The render loop is fully stopped. |
 

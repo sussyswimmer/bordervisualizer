@@ -18,12 +18,13 @@ public sealed class GlowShaderTests
     [Fact]
     public void GlowConstantsSitWhereTheShadersCbufferReadsThem()
     {
-        // Lay the cbuffer out by HLSL's packing rule (a vector never straddles a 16-byte register) and compare each
-        // field's name and byte offset with the struct's. ScreenPx and MeanColor are vectors in HLSL, two and three
-        // floats in C#.
+        // Lay the cbuffer out by HLSL's packing rules (a vector never straddles a 16-byte register; every element of an
+        // array starts a register of its own) and compare each field's name and byte offset with the struct's.
+        // ScreenPx and MeanColor are vectors in HLSL, two and three floats in C#; the Flow movement's Ripples[i] is the
+        // GlowRipple RippleI, whose x, y, z and w are its Origin, Radius, Strength and Pad.
         var expected = new List<(string Name, int Offset)>();
         int offset = 0;
-        foreach ((string type, string name) in CbufferFields(ShaderSource()))
+        foreach ((string type, string name, int count) in CbufferFields(ShaderSource()))
         {
             int components = type switch
             {
@@ -33,6 +34,17 @@ public sealed class GlowShaderTests
                 "float4" => 4,
                 _ => throw new InvalidOperationException($"Unexpected cbuffer type {type} for {name}"),
             };
+            if (count > 0)
+            {
+                Assert.True((name, components) == ("Ripples", 4), $"No C# mapping for the cbuffer's {type} {name}[{count}]");
+                for (int i = 0; i < count; i++)
+                {
+                    offset = (offset + 15) / 16 * 16;
+                    expected.Add(($"Ripple{i}", offset));
+                    offset += 16;
+                }
+                continue;
+            }
             if (offset / 16 != (offset + 4 * components - 1) / 16)
                 offset = (offset + 15) / 16 * 16;
             string[] fields = (name, components) switch
@@ -56,6 +68,15 @@ public sealed class GlowShaderTests
         Assert.Equal(expected, actual);
         Assert.Equal(GlowConstants.SizeInBytes, (offset + 15) / 16 * 16);
         Assert.Equal(GlowConstants.SizeInBytes, Marshal.SizeOf<GlowConstants>());
+        Assert.Equal(160, GlowConstants.SizeInBytes);
+
+        // A ripple fills its register as the shader reads it: x origin, y radius, z strength.
+        var ripple = typeof(GlowRipple).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Select(f => (f.Name, (int)Marshal.OffsetOf<GlowRipple>(f.Name)))
+            .OrderBy(f => f.Item2)
+            .ToList();
+        Assert.Equal(new[] { ("Origin", 0), ("Radius", 4), ("Strength", 8), ("Pad", 12) }, ripple);
+        Assert.Equal(16, Marshal.SizeOf<GlowRipple>());
     }
 
     [Fact]
@@ -103,6 +124,60 @@ public sealed class GlowShaderTests
         Assert.Contains("lineDistance = AroundNotch(lineDistance, notchDistance);", shader);
     }
 
+    [Fact]
+    public void TheShaderMovesTheLightAsGlowProfileDoes()
+    {
+        // The Flow movement (H-033): GlowProfile.Comets, RippleAt, Flow and Motion, with the same constants, on the
+        // colours' own perimeter coordinate, behind FlowAmount > 0 so the Pulse movement and Idle Glow run the code
+        // above unchanged.
+        string shader = ShaderSource();
+        Assert.Equal(GlowProfile.CometCount, int.Parse(Constant(shader, "int", "CometCount"), CultureInfo.InvariantCulture));
+        Assert.Equal(GlowProfile.CometHead, FloatConstant(shader, "CometHead"));
+        Assert.Equal(GlowProfile.CometTail, FloatConstant(shader, "CometTail"));
+        Assert.Equal(GlowProfile.FlowFloor, FloatConstant(shader, "FlowFloor"));
+        Assert.Equal(GlowProfile.RippleFront, FloatConstant(shader, "RippleFront"));
+        Assert.Equal(GlowProfile.RippleTrail, FloatConstant(shader, "RippleTrail"));
+        Assert.Equal(GlowProfile.FlowMean, FloatConstant(shader, "FlowMean"));
+
+        // Comets: the larger exponent of each comet's head and tail, round the loop.
+        Assert.Contains("float head = (float)k / CometCount - CometPhase;", shader);
+        Assert.Contains("float behind = frac(t - head) / CometTail;", shader);
+        Assert.Contains("float ahead = frac(head - t) / CometHead;", shader);
+        Assert.Contains("brightest = max(brightest, max(-behind, -ahead * ahead));", shader);
+        Assert.Contains("return exp(brightest);", shader);
+        // RippleAt: nothing without a strength, else a Gaussian ahead of each front and a trail behind it.
+        Assert.Contains("return x - floor(x + 0.5);", shader);
+        Assert.Contains("[branch] if (ripple.z > 0)", shader);
+        Assert.Contains("float x = abs(Wrap(t - ripple.x)) - ripple.y;", shader);
+        Assert.Contains("float exponent = x >= 0 ? -(x / RippleFront) * (x / RippleFront) : x / RippleTrail;", shader);
+        Assert.Contains("light = ripple.z * exp(exponent);", shader);
+        // Flow and Motion: the ripples over the comets like light through two filters, the blend deep inside, the
+        // amount.
+        Assert.Contains("float m = FlowFloor + (1 - FlowFloor) * Comets(t);", shader);
+        Assert.Contains("m = 1 - (1 - m) * (1 - RippleAt(t, Ripples[i]));", shader);
+        Assert.Contains("m += (FlowMean - m) * deep;", shader);
+        Assert.Contains("return 1 + (m - 1) * FlowAmount;", shader);
+        // PSMain: one perimeter coordinate for the colour and the motion, the colour's blend reused, the motion behind
+        // its branch and a second early out, all before the gradient is sampled.
+        Assert.Contains("float t = PerimeterT(p, ScreenPx, ColorRadiusPx);", shader);
+        Assert.Contains("float deep = smoothstep(0.5 * ColorRadiusPx, ColorRadiusPx, depth);", shader);
+        Assert.Contains("[branch] if (FlowAmount > 0)", shader);
+        Assert.Contains("a *= Motion(t, deep);", shader);
+        Assert.Contains("float u = frac(t + Phase);", shader);
+        Assert.Contains("rgb = lerp(rgb, MeanColor, deep);", shader);
+        Assert.Single(Regex.Matches(shader, @"PerimeterT\(p,"));
+        int motion = shader.IndexOf("a *= Motion(t, deep);", StringComparison.Ordinal);
+        Assert.True(motion < shader.IndexOf("Gradient.SampleLevel", StringComparison.Ordinal));
+        Assert.Contains("[branch] if (a < 0.5 / 255)", shader[motion..]);
+    }
+
+    [Fact]
+    public void TheShaderIsAscii()
+    {
+        // D3DCompile reads the source as bytes; a stray non-ASCII character in a comment has broken shaders before.
+        Assert.All(ShaderSource(), c => Assert.True(c < 128, $"Glow.hlsl has the non-ASCII character U+{(int)c:X4}"));
+    }
+
     internal static string ShaderSource()
     {
         using Stream stream = typeof(GlowConstants).Assembly.GetManifestResourceStream(ResourceName)
@@ -111,8 +186,8 @@ public sealed class GlowShaderTests
         return reader.ReadToEnd();
     }
 
-    // The (type, name) of each field of `cbuffer Light`, in order.
-    private static IEnumerable<(string Type, string Name)> CbufferFields(string shader)
+    // The (type, name, array length or 0) of each field of `cbuffer Light`, in order.
+    private static IEnumerable<(string Type, string Name, int Count)> CbufferFields(string shader)
     {
         Match block = Regex.Match(shader, @"cbuffer\s+Light\b[^{]*\{(?<body>[^}]*)\}");
         Assert.True(block.Success, "Glow.hlsl has no cbuffer Light");
@@ -121,11 +196,23 @@ public sealed class GlowShaderTests
             int comment = raw.IndexOf("//", StringComparison.Ordinal);
             string line = (comment >= 0 ? raw[..comment] : raw).Trim();
             if (line.Length == 0) continue;
-            Match field = Regex.Match(line, @"^(?<type>\w+)\s+(?<name>\w+)\s*;$");
+            Match field = Regex.Match(line, @"^(?<type>\w+)\s+(?<name>\w+)\s*(\[\s*(?<count>\d+)\s*\])?\s*;$");
             Assert.True(field.Success, $"Unexpected cbuffer line: {line}");
-            yield return (field.Groups["type"].Value, field.Groups["name"].Value);
+            int count = field.Groups["count"].Success ? int.Parse(field.Groups["count"].Value, CultureInfo.InvariantCulture) : 0;
+            yield return (field.Groups["type"].Value, field.Groups["name"].Value, count);
         }
     }
 
     private static string F(float value) => value.ToString(CultureInfo.InvariantCulture);
+
+    // The literal of `static const <type> <name> = <literal>;`.
+    private static string Constant(string shader, string type, string name)
+    {
+        Match constant = Regex.Match(shader, $@"static\s+const\s+{type}\s+{name}\s*=\s*(?<value>[^;]+);");
+        Assert.True(constant.Success, $"Glow.hlsl has no static const {type} {name}");
+        return constant.Groups["value"].Value.Trim();
+    }
+
+    private static float FloatConstant(string shader, string name) =>
+        float.Parse(Constant(shader, "float", name), CultureInfo.InvariantCulture);
 }

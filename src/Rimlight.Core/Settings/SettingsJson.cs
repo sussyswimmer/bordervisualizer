@@ -103,6 +103,7 @@ internal static class SettingsJson
             Enabled = ReadBool(f, nameof(Settings.Enabled), d.Enabled),
             Animation = ReadEnum(f, nameof(Settings.Animation), d.Animation),
             WhenSilent = ReadEnum(f, nameof(Settings.WhenSilent), d.WhenSilent),
+            Movement = ReadEnum(f, nameof(Settings.Movement), d.Movement),
             ColorMode = ReadEnum(f, nameof(Settings.ColorMode), d.ColorMode),
             OverrideAlbumColor = ReadBool(f, nameof(Settings.OverrideAlbumColor), d.OverrideAlbumColor),
             PrimaryHex = ReadString(f, nameof(Settings.PrimaryHex), d.PrimaryHex),

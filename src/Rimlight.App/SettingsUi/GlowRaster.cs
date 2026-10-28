@@ -6,29 +6,34 @@ namespace Rimlight.App.SettingsUi;
 /// <summary>
 /// Draws the glow on the CPU for the Appearance page's preview: a port of <c>Glow.hlsl</c> (doc 04 §3) into a small
 /// premultiplied BGRA buffer, as if the card were a 1280-DIP-wide screen. The edge profile, in either edge style (the
-/// soft glow, or the bright line with its halo), and the Glow mapping are <see cref="GlowProfile"/>'s, the same the
-/// overlay uses. Everything that depends only on the shape is cached per pixel and recomputed when the shape changes,
-/// so a frame costs one square root and one exp per lit pixel. No allocation after construction. Pure code; any one
-/// thread.
+/// soft glow, or the bright line with its halo), the Glow mapping and the Flow movement's comets and ripples are
+/// <see cref="GlowProfile"/>'s, the same the overlay uses. Everything that depends only on the shape is cached per
+/// pixel and recomputed when the shape changes, so a frame costs one square root and one exp per lit pixel. In the Flow
+/// movement it adds a table of the comets and the ripples round the perimeter, filled once a frame, and one
+/// interpolation in it per lit pixel. No allocation after construction. Pure code; any one thread.
 /// </summary>
 internal sealed class GlowRaster
 {
     /// <summary>The width, in DIPs, of the screen the preview stands for: thickness and corner radius scale by it.</summary>
     public const float ScreenWidthDip = 1280;
 
-    private const float HalfPi = 1.5707963f;
     // Colors around the perimeter, looked up rather than filtered: 1024 steps put them within about a pixel of the
     // shader's at this size.
     private const int LutSize = 1024;
+    // The Flow movement's light round the perimeter, looked up the same way: it depends only on the perimeter
+    // coordinate and the frame, so it is computed at 2048 steps once a frame and interpolated per pixel. Computed per
+    // pixel instead, the comets and the ripples made a Flow frame cost 3 to 6 times a Pulse frame.
+    private const int FlowLutSize = 2048;
     // The shape cache is rebuilt when the spread moves more than this fraction (an engine may vary it with the music;
     // only the corner rounding of the light and color fields depends on it, which nobody can see move by 10%).
     private const float SpreadCacheTolerance = 0.1f;
 
     private readonly float[] glowDepth;  // distance into the light's rounded field
     private readonly float[] lineDepth;  // distance in from the screen's own edge, for the Line style's line
-    private readonly float[] perimeter;  // perimeter coordinate t in [0, 1)
-    private readonly float[] meanBlend;  // how far the color has blended to the mean (deep inside)
+    private readonly float[] perimeter;  // perimeter coordinate t in [0, 1): the colors' and the Flow movement's
+    private readonly float[] meanBlend;  // how far the color (and the Flow movement) has blended to the mean, deep inside
     private readonly float[] lut = new float[LutSize * 3]; // the gradient around the perimeter, sRGB-encoded
+    private readonly float[] flowLut = new float[FlowLutSize + 1]; // GlowProfile.Flow at t = j / FlowLutSize, this frame's
     private float meanR, meanG, meanB; // the gradient's mean, sRGB-encoded
     private int gradientVersion;
 
@@ -106,9 +111,16 @@ internal sealed class GlowRaster
         float shoulder = GlowProfile.ShoulderFor(line ? 0 : thickness, scale);
         float lineWidth = line ? GlowProfile.LineFor(thickness, scale) : 0;
         float pulse = Clamp01(state.Pulse);
+        // The Flow movement, cleaned as GlowConstants.Create cleans it for the shader. Without an amount it draws
+        // nothing, so its comets and ripples are left out of the frame and can't make it redraw.
+        float amount = Clamp01(state.Flow.Amount);
+        bool flowing = amount > 0;
 
         var frame = new Frame(corner, shoulder, spread, lineWidth, Clamp01(state.Intensity), pulse,
-            Fraction(state.Phase), Clamp01(state.Visibility), gradientVersion);
+            Fraction(state.Phase), Clamp01(state.Visibility), gradientVersion, amount,
+            flowing ? Fraction(state.Flow.CometPhase) : 0,
+            flowing ? Clean(state.Flow.Ripple0) : default, flowing ? Clean(state.Flow.Ripple1) : default,
+            flowing ? Clean(state.Flow.Ripple2) : default, flowing ? Clean(state.Flow.Ripple3) : default);
         if (drawn && frame == last) return false;
 
         if (corner != shapeCorner || shoulder != shapeShoulder || !(MathF.Abs(spread - shapeSpread) <= SpreadCacheTolerance * shapeSpread))
@@ -117,20 +129,23 @@ internal sealed class GlowRaster
         // Per frame: the light is flat at the edge and fades as exp(-(sqrt(depth^2 + shoulder^2) - shoulder) / spread),
         // and the beat widens the shoulder and the spread alike (doc 04 §3 step 2). The spread's floor is the shader's
         // (K7 floored it at a whole pixel, which at about a quarter pixel per DIP drew Glow 0's hairline up to about 40
-        // code values brighter than the shader does at this scale). The gain scales the whole profile, as in the shader.
+        // code values brighter than the shader does at this scale). The gain scales the whole profile, as in the shader,
+        // and rises with the Flow amount.
         float pulsedShoulder = GlowProfile.PulsedShoulder(shoulder, pulse);
         float pulsedSpread = GlowProfile.PulsedSpread(spread, pulse);
-        float gain = GlowProfile.Gain(frame.Intensity, pulse);
+        float gain = GlowProfile.Gain(frame.Intensity, pulse, amount);
         float visibility = frame.Visibility;
         // Beyond this depth the light (or the Line style's halo) is under half a code value: peak gain visibility
         // e^(-eased / spread) < 1/510 where the eased distance sqrt(depth^2 + w^2) - w passes h = spread ln(strongest),
-        // that is where depth^2 = h (h + 2w). The line itself ends at its width plus the softness.
+        // that is where depth^2 = h (h + 2w). The line itself ends at its width plus the softness. The Flow movement
+        // only ever dims the light, so the bound holds with it.
         float peak = line ? GlowProfile.HaloPeak : GlowProfile.GlowPeak;
         float strongest = peak * gain * visibility * 510;
         float eased = strongest > 1 ? pulsedSpread * MathF.Log(strongest) : -1;
         float cutoff = eased > 0 ? MathF.Sqrt(eased * (eased + 2 * pulsedShoulder)) : -1;
         float lineEnd = lineWidth + GlowProfile.LineSoftnessPx;
         float phase = frame.Phase;
+        if (flowing) FillFlow(frame);
 
         int[] pixels = Pixels;
         for (int p = 0; p < pixels.Length; p++)
@@ -149,6 +164,17 @@ internal sealed class GlowRaster
             {
                 pixels[p] = 0;
                 continue;
+            }
+            // The Flow movement (GlowProfile.Motion, as the shader computes it): the comets and the ripples along the
+            // perimeter, blended to their mean deep inside where the colors blend to theirs, faded in by the amount.
+            if (flowing)
+            {
+                alpha *= Motion(frame, perimeter[p], meanBlend[p]);
+                if (alpha < 0.5f / 255)
+                {
+                    pixels[p] = 0;
+                    continue;
+                }
             }
             int index = ((int)((perimeter[p] + phase) * LutSize) & LutSize - 1) * 3;
             float blend = meanBlend[p];
@@ -181,43 +207,49 @@ internal sealed class GlowRaster
                 glowDepth[p] = GlowProfile.Depth(px, py, Width, Height, glowRadius);
                 // The screen's own shape, which the overlay's line follows (no notch on Windows: four corners alike).
                 lineDepth[p] = GlowProfile.Depth(px, py, Width, Height, corner, corner);
-                perimeter[p] = PerimeterT(px, py, Width, Height, colorRadius);
-                float edgeDepth = MathF.Min(MathF.Min(px, py), MathF.Min(Width - px, Height - py));
-                meanBlend[p] = SmoothStep(0.5f * colorRadius, colorRadius, edgeDepth);
+                perimeter[p] = GlowProfile.PerimeterT(px, py, Width, Height, colorRadius);
+                meanBlend[p] = SmoothStep(0.5f * colorRadius, colorRadius, GlowProfile.EdgeDepth(px, py, Width, Height));
             }
         }
     }
 
-    // Arc length clockwise from the top-left corner along a rounded rectangle of corner radius r (Glow.hlsl PerimeterT).
-    private static float PerimeterT(float px, float py, float width, float height, float r)
+    // GlowProfile.Flow round the perimeter for this frame, at t = j / FlowLutSize: the comets over the dimmer edge, each
+    // ripple on top, step for step as the reference and the shader compute it. The last entry is t = 1, the first
+    // again, so a pixel interpolates without wrapping.
+    private void FillFlow(in Frame frame)
     {
-        float topLen = width - 2 * r;
-        float sideLen = height - 2 * r;
-        float arcLen = HalfPi * r;
-        float total = 2 * (topLen + sideLen) + 4 * arcLen;
-        bool left = px < r, right = px > width - r, top = py < r, bottom = py > height - r;
-        float s;
-        if (top && right)
-            s = topLen + arcLen * QuarterAngle(px - (width - r), -(py - r)) / HalfPi;
-        else if (bottom && right)
-            s = topLen + arcLen + sideLen + arcLen * QuarterAngle(py - (height - r), px - (width - r)) / HalfPi;
-        else if (bottom && left)
-            s = 2 * topLen + 2 * arcLen + sideLen + arcLen * QuarterAngle(-(px - r), py - (height - r)) / HalfPi;
-        else if (top && left)
-            s = 2 * topLen + 3 * arcLen + 2 * sideLen + arcLen * QuarterAngle(-(py - r), -(px - r)) / HalfPi;
-        else
+        for (int j = 0; j <= FlowLutSize; j++)
         {
-            float dTop = py, dRight = width - px, dBottom = height - py, dLeft = px;
-            float nearest = MathF.Min(MathF.Min(dTop, dRight), MathF.Min(dBottom, dLeft));
-            if (nearest == dTop) s = px - r;
-            else if (nearest == dRight) s = topLen + arcLen + (py - r);
-            else if (nearest == dBottom) s = topLen + 2 * arcLen + sideLen + (width - r - px);
-            else s = 2 * topLen + 3 * arcLen + sideLen + (height - r - py);
+            float t = (float)j / FlowLutSize;
+            float m = GlowProfile.FlowFloor + (1 - GlowProfile.FlowFloor) * GlowProfile.Comets(t, frame.CometPhase);
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple0));
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple1));
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple2));
+            m = 1 - (1 - m) * (1 - RippleAt(t, frame.Ripple3));
+            flowLut[j] = m;
         }
-        return Fraction((s + 0.5f * arcLen) / total);
     }
 
-    private static float QuarterAngle(float y, float x) => MathF.Atan2(y, MathF.Max(x, 1e-5f));
+    // GlowProfile.Motion for a pixel at perimeter coordinate t whose color has blended `deep` of the way to the mean:
+    // the frame's Flow interpolated at t, blended to FlowMean and faded in by the amount, as the reference and the
+    // shader compute it. Linear steps of 1/2048 keep the alpha within a few hundredths of a code value of theirs (0.03
+    // at worst in the tests' frames), most at the kinks: a comet's head, a ripple's fronts.
+    private float Motion(in Frame frame, float t, float deep)
+    {
+        float x = t * FlowLutSize;
+        int i = Math.Min((int)x, FlowLutSize - 1); // PerimeterT's frac can round up to 1
+        float m = flowLut[i] + (flowLut[i + 1] - flowLut[i]) * (x - i);
+        m += (GlowProfile.FlowMean - m) * deep;
+        return 1 + (m - 1) * frame.FlowAmount;
+    }
+
+    private static float RippleAt(float t, in Ripple ripple) =>
+        GlowProfile.RippleAt(t, ripple.Origin, ripple.Radius, ripple.Strength);
+
+    // A ripple as GlowConstants hands it to the shader (GlowRipple.From): its origin a fraction, its radius at least 0,
+    // its strength 0..1; not finite is 0.
+    private static Ripple Clean(Ripple ripple) => new(Fraction(ripple.Origin),
+        float.IsFinite(ripple.Radius) ? MathF.Max(ripple.Radius, 0) : 0, Clamp01(ripple.Strength));
 
     private static float SmoothStep(float edge0, float edge1, float x)
     {
@@ -238,7 +270,9 @@ internal sealed class GlowRaster
 
     private static float Fraction(float value) => float.IsFinite(value) ? value - MathF.Floor(value) : 0;
 
-    // Everything a frame's pixels depend on.
+    // Everything a frame's pixels depend on; in the Flow movement where its comets and ripples are, so a moving comet
+    // redraws.
     private readonly record struct Frame(float Corner, float Shoulder, float Spread, float LineWidth, float Intensity,
-        float Pulse, float Phase, float Visibility, int GradientVersion);
+        float Pulse, float Phase, float Visibility, int GradientVersion, float FlowAmount, float CometPhase,
+        Ripple Ripple0, Ripple Ripple1, Ripple Ripple2, Ripple Ripple3);
 }

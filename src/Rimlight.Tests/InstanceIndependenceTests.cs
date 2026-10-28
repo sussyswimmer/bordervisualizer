@@ -30,6 +30,7 @@ public sealed class InstanceIndependenceTests
         new() { Animation = AnimationMode.Off },
         new() { Glow = 0.9f, PrimaryRatio = 0.3f, Brightness = 0.5f },
         new() { Enabled = false },
+        new() { Movement = MovementStyle.Pulse },
     ];
 
     // Static fields allowed in the render-thread types besides readonly fields of immutable types, with the reason
@@ -127,6 +128,10 @@ public sealed class InstanceIndependenceTests
 
             hash = Hash(hash, state.ColorA.R, state.ColorA.G, state.ColorA.B, state.ColorB.R, state.ColorB.G,
                 state.ColorB.B, state.Ratio, state.Intensity, state.Spread, state.CoreThicknessDip, state.Phase, state.Pulse, state.Visibility);
+            FlowMotion flow = state.Flow;
+            hash = Hash(hash, flow.Amount, flow.CometPhase, flow.Ripple0.Origin, flow.Ripple0.Radius, flow.Ripple0.Strength,
+                flow.Ripple1.Origin, flow.Ripple1.Radius, flow.Ripple1.Strength, flow.Ripple2.Origin, flow.Ripple2.Radius,
+                flow.Ripple2.Strength, flow.Ripple3.Origin, flow.Ripple3.Radius, flow.Ripple3.Strength);
             hash = Hash(hash, engine.IsStatic ? 1 : 0, blender.IsAnimating ? 1 : 0);
             foreach (float texel in gradient) hash = Hash(hash, texel);
             Hashes.Add(Hash(hash, blender.Current));

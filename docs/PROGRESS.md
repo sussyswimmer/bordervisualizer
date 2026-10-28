@@ -693,6 +693,7 @@ Done by Claude Code on Maxwell's instruction (both lanes this run). Branch `wip/
 - [x] Black-and-white covers glow soft white and grey instead of the manual colors or an invented blue (Maxwell: "a song that is white and black ... put light blue and dark blue"). Near-neutral colors keep their chroma up to 0.05, and only a blank image counts as no art. Muted covers (chroma 0.05–0.10) now glow paler. `wip/bw-album-colors` 05a621f, HANDOFF H-027. — effort: S
 - [x] Black-and-white covers, again: on 1.0.0 with Spotify on Windows, some covers were "still just light blue and dark blue". An all-black cover was still "no art" (the manual #7C5CFF / #22D3EE), and a kept cast of chroma 0.02 glowed slate blue. Now only an image with no opaque pixel is no art, and a palette whose colors are both at or below chroma 0.045 glows pure grey and white (`Glow.ColorScale`). Measured on 35 real covers; notes under "Black-and-white covers, again". Released as 1.0.1. — effort: S
 - [x] Bright line edge style, and the light round the notch. Maxwell, with a photo of a MacBook whose edge has a crisp neon line dipping round the camera notch: "Please I want it to look like this or have an option to look like this and detect if theres a notch and go around it for the lighting". `Settings.EdgeStyle` (Glow | Line, default Glow; contract change H-032), the line and its halo in `GlowProfile`, `Glow.hlsl` and `glow_math.h` (`GlowConstants` 64 → 80 bytes), Settings › Appearance › Edge on both platforms, and on a notched Mac the light round the notch and the rounded top corners (macOS notes below) — branch claude/confident-mccarthy-gt8tif — effort: M (Windows and Mac confirmation pending)
+- [x] Flow: the light moves round the edge. Maxwell, with a video of a screen edge whose light travels round it: "I want the rimlight to be like the video I sent where it moves aaround and doesn't just bounce". Only a still of the video came through, and he picked all three motions: comets chasing round the edge, colors flowing round it, and beats rippling round it. `Settings.Movement` (Flow | Pulse, default Flow; contract change H-033) and `LightState.Flow`; the engine moves the comets and the ripples; `GlowProfile.Motion` draws them and `Glow.hlsl`, `GlowRaster` and `glow_math.h` mirror it (`GlowConstants` 80 → 160 bytes, C ABI 10); Settings › Motion › Movement on both platforms. Built in three parallel branches (engine, Windows, Mac) from one spec, then reviewed in six areas with every finding checked by a second reviewer: no blockers or majors, and all 5 minors and 10 nits fixed. Notes under "Flow". Released as 1.0.4. — branch claude/confident-mccarthy-gt8tif — effort: L (Windows and Mac confirmation pending)
 
 ## macOS (Claude Code)
 
@@ -3404,6 +3405,19 @@ Maxwell, on the 1.0.0 release, Windows, Spotify: "can you fix the error where it
 - [ ] A colorful cover: the same colors as in 1.0.0.
 - [ ] A faded, muted photo cover: a soft tint of its color, not grey.
 - Bug: purple and light blue on any song that has a cover, or a visible tint on a black-and-white one.
+
+## Flow (Maxwell on 1.0.3)
+
+- **Look:** tuned in an offline prototype rendered with the same math, using space-time plots of the edge and a contact sheet after a beat (the mockup clip sent to Maxwell).
+  - Two comets with a crisp head (Gaussian, 0.01 of the perimeter) and a long tail (e-folding 0.12) over a floor of 0.5.
+  - Comets move at 0.04 + 0.16 × Level laps per second, and each beat pushes them 0.025.
+  - Colors drift at 0.04 + 0.06 × Level, against Pulse's 0.015.
+  - Ripples' fronts run 0.45 perimeters a second, Gaussian ahead (0.015), and trail behind with e-folding 0.06; they fade with τ 0.4 s.
+  - Comets and colors flow the same way, counterclockwise, the comets about twice as fast.
+- **Pulse is unchanged:** the engine's Pulse path is bit-identical to the old engine (`PulseMovementTests` against `PulseReferenceEngine`), and every alpha with no Flow amount is too. The Flow output is `default` whenever its amount is 0, so Pulse and Idle Glow carry none.
+- **Pacing:** `ChangeRate` turns the comet phase into a brightness change (× (1 - floor) / head = 50) and counts each live ripple's front, so slow comets keep the full rate. `LooksLike` ignores comets and ripples once the amount can't be seen, so the crossfade to Idle Glow doesn't present invisible changes.
+- **Cost:** the engine adds tens of nanoseconds per update (CORE-API §6). The shader adds two exps for the comets and one per live ripple, only on lit pixels after the early out. The Settings preview fills a 2048-entry table of the motion per frame instead of evaluating it per pixel. PERF.md's numbers predate Flow; the soak should be run again.
+- **Not verified here:** the HLSL compile (the Windows job now compiles it), the Swift and Metal compiles (the macOS job), and how it looks on a real screen. **Manual test (Windows and Mac):** play music with default settings. Two bright comets should chase round the edge, faster when it's louder, each beat should send a flash running both ways along the edge from a new spot, and the colors should stream. Settings › Motion › Movement › Pulse should bring back the old whole-edge pulse within about 0.3 s. It is a bug if the light flickers or steps, the comets judder, there is a seam or line deep inside or at a corner, the glow stops drawing, or Pulse looks different from 1.0.3.
 
 ## Lane B notes
 

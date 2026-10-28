@@ -39,6 +39,10 @@ internal static class WavAnalyzeCli
                              too. Here --packet-ms defaults to 10 and --jitter to 0.1, as on a real PC.
           --brightness <f>   With --engine: Settings.Brightness, 0.1 to 1 (default 0.8)
           --sensitivity <f>  With --engine: Settings.Sensitivity, 0.25 to 2 (default 1, or the tuning file's)
+          --movement <m>     With --engine: Settings.Movement, Flow or Pulse (default Flow, as in the app). In Flow the
+                             whole-edge pulse is 40 % of the beat (the ripples carry the rest round the edge) and the
+                             glow's gain rises with the Flow amount; in Pulse the pulse is the beat. tools/corpus
+                             measures Pulse, so its runs pass --movement Pulse.
 
         Output: one CSV row per render frame with the columns
           time,level,bass,beat,isSilent,flux,threshold,bpm
@@ -50,10 +54,12 @@ internal static class WavAnalyzeCli
           phase,position,loudnessDb,referenceDb,punch,drive,kickLike,grade,levelTarget
         samples: new samples this frame (0 between packets); beatCount and fired: beats detected so far and in this
         frame, whatever their grade; intensity to phase: the LightState the overlay draws (the glow's strength is
-        Intensity x (1 + 0.25 x Pulse), rolled off near 1, x Visibility). The last eight are the analyzer's internal
-        dynamics (CORE-API 4.2: the song position, loudness and reference in dB, punch and its drive, the latest
-        onset's kick-likeness and grade, doc 03's Level target), empty for a build without them. A row's time is when
-        its frame is computed; the screen shows it about 1-2 frames later.
+        Intensity x (1 + 0.25 x Pulse), in Flow also x (1 + 0.3 x the Flow amount, 1 while music plays), rolled off
+        near 1, x Visibility; in Flow the comets and the beats' ripples also move along the edge, which the CSV leaves
+        out). The last eight are the analyzer's internal dynamics (CORE-API 4.2: the song position, loudness and
+        reference in dB, punch and its drive, the latest onset's kick-likeness and grade, doc 03's Level target), empty
+        for a build without them. A row's time is when its frame is computed; the screen shows it about 1-2 frames
+        later.
 
         Tuning JSON: one object whose keys are AudioTuning property names. Give any subset; the rest keep their
         defaults. Keys are case-insensitive, unknown keys are errors, comments and trailing commas are allowed:
@@ -126,13 +132,13 @@ internal static class WavAnalyzeCli
     private static int Analyze(string[] args, TextWriter output)
     {
         var a = new CommandLine(args,
-            ["out", "csv", "plot", "fps", "jitter", "packet-ms", "seed", "tuning", "range", "width", "brightness", "sensitivity"],
+            ["out", "csv", "plot", "fps", "jitter", "packet-ms", "seed", "tuning", "range", "width", "brightness", "sensitivity", "movement"],
             ["no-plot", "engine"]);
         if (a.Positional.Count != 1) throw new UsageException(a.Positional.Count == 0 ? "Expected a WAV file." : "Expected one WAV file.");
         string path = a.Positional[0];
         bool engine = a.Has("engine");
-        if (!engine && (a.Has("brightness") || a.Has("sensitivity")))
-            throw new UsageException("--brightness and --sensitivity set the light: use them with --engine (or Sensitivity in --tuning).");
+        if (!engine && (a.Has("brightness") || a.Has("sensitivity") || a.Has("movement")))
+            throw new UsageException("--brightness, --sensitivity and --movement set the light: use them with --engine (or Sensitivity in --tuning).");
         // The engine replay defaults to what the app gets: WASAPI's 10 ms packets on an uneven frame clock.
         var feed = new FeedOptions
         {
@@ -151,6 +157,7 @@ internal static class WavAnalyzeCli
             {
                 Brightness = (float)a.Number("brightness", defaults.Brightness, 0.1, 1),
                 Sensitivity = (float)a.Number("sensitivity", tuning?.Sensitivity ?? defaults.Sensitivity, 0.25, 2),
+                Movement = a.Text("movement") is { } movement ? ParseMovement(movement) : defaults.Movement,
             }
             : null;
 
@@ -193,7 +200,7 @@ internal static class WavAnalyzeCli
 
         output.WriteLine($"{Path.GetFileName(path)}: {audio.Info}, {audio.Info.Seconds.ToString("F2", C)} s");
         output.WriteLine($"Feed: {DescribeFeed(feed)}; tuning: {DescribeTuning(tuning, tuningPath)}" + (settings is null ? ""
-            : $"; light: Brightness {settings.Brightness.ToString("0.##", C)}, Sensitivity {settings.Sensitivity.ToString("0.##", C)}"));
+            : $"; light: Brightness {settings.Brightness.ToString("0.##", C)}, Sensitivity {settings.Sensitivity.ToString("0.##", C)}, Movement {settings.Movement}"));
         output.WriteLine($"Beats: {result.BeatTimes.Count}");
         WriteBeatTimes(output, result.BeatTimes);
         output.WriteLine($"Tempo: {DescribeTempo(result)}");
@@ -332,6 +339,14 @@ internal static class WavAnalyzeCli
         "float32" or "float" => WavSampleFormat.Float32,
         "float64" => WavSampleFormat.Float64,
         _ => throw new UsageException($"--format must be pcm8, pcm16, pcm24, pcm32, float32 or float64, not \"{text}\"."),
+    };
+
+    // By name only: Enum.TryParse would also take "1" or "7", and an undefined Movement plays as Flow.
+    private static MovementStyle ParseMovement(string text) => text.ToLowerInvariant() switch
+    {
+        "flow" => MovementStyle.Flow,
+        "pulse" => MovementStyle.Pulse,
+        _ => throw new UsageException($"--movement must be Flow or Pulse, not \"{text}\"."),
     };
 
     internal static string DescribeFeed(FeedOptions feed)

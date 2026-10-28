@@ -10,10 +10,11 @@ namespace Rimlight.Tests.Audio;
 // move like a slow wave with no bounce on a whisper, rap and EDM hit hard and on time on every kick, drums entering
 // make a song punchier, a bounce is as big as the moment, a bass guitar or a piano is not a drum, and a chorus is
 // brighter than a quiet verse. Everything runs through CoreFactory's analyzer and light engine the way the overlay
-// does: 60 fps, audio in 10 ms WASAPI packets, default settings (Brightness 0.8). The songs are procedural
-// (StyleTracks, no recorded music); round 2 tuned on real recordings with independently annotated kicks and kept these
-// as the regression floor. "Before" numbers in the comments are the same tracks through Core at 5b387fc, "round 1" the
-// round 1 change as measured then (its first version, and 6ac553b after the review), "now" round 2.
+// does: 60 fps, audio in 10 ms WASAPI packets, default settings (Brightness 0.8) but the Pulse movement, whose pulse is
+// the whole beat. The songs are procedural (StyleTracks, no recorded music); round 2 tuned on real recordings with
+// independently annotated kicks and kept these as the regression floor. "Before" numbers in the comments are the same
+// tracks through Core at 5b387fc, "round 1" the round 1 change as measured then (its first version, and 6ac553b after
+// the review), "now" round 2.
 public sealed class MusicDynamicsTests(ITestOutputHelper output)
 {
     private const int Rate = 48000;
@@ -537,7 +538,9 @@ public sealed class MusicDynamicsTests(ITestOutputHelper output)
     {
         IAudioAnalyzer analyzer = CoreFactory.CreateAnalyzer((tuning ?? new AudioTuning()) with { Sensitivity = sensitivity });
         ILightEngine engine = CoreFactory.CreateLightEngine();
-        var settings = new Settings { Sensitivity = sensitivity };
+        // The Pulse movement: the whole-edge pulse is the analyzer's graded beat, which these tests measure (in Flow the
+        // ripples carry 60 % of it along the edge instead).
+        var settings = new Settings { Sensitivity = sensitivity, Movement = MovementStyle.Pulse };
         var character = ((AudioAnalyzer)analyzer).Character;
         int packet = rate / 100;
         double time = 0, end = samples.Length / (double)rate;

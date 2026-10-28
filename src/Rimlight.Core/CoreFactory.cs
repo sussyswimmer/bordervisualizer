@@ -118,8 +118,8 @@ public static class CoreFactory
     /// One fill took about 0.6 µs, idle or during a fade, on the Linux test machine.</para>
     /// </remarks>
     public static IPaletteBlender CreatePaletteBlender(Palette initial) => new PaletteBlender(initial);
-    /// <summary>Creates the real light engine: doc 07 Phase 3 intensity, beat pulse and phase drift, Idle Glow
-    /// breathing, and every fade (doc 01 §2, doc 04 §4).</summary>
+    /// <summary>Creates the real light engine: doc 07 Phase 3 intensity, beat pulse and phase drift, the Flow
+    /// movement's comets and ripples (H-033), Idle Glow breathing, and every fade (doc 01 §2, doc 04 §4).</summary>
     /// <returns>A new light engine.</returns>
     /// <remarks>
     /// <para>Call each instance from one thread only: the render thread, which may own one per monitor (see below); a
@@ -137,25 +137,43 @@ public static class CoreFactory
     /// never applies again (H-007). Visibility carries every fade: pause, Enabled = false and Animation = Off fade out
     /// and back in over 300 ms; in Music Sync with WhenSilent = Hide, <see cref="AudioFeatures.IsSilent"/> fades out
     /// over 1.5 s, keeping the look it starts with (Idle Glow too), and sound brings it back within 150 ms. With
-    /// WhenSilent = IdleGlow, IsSilent instead crossfades Intensity, Pulse and the drift to Idle Glow over 1.5 s and
-    /// back within 150 ms, and Visibility stays 1. Switching between Music Sync and Idle Glow uses the same crossfade.
-    /// A new engine starts at Visibility 0 and fades in over 300 ms. All fades are smoothstep-eased.</para>
+    /// WhenSilent = IdleGlow, IsSilent instead crossfades Intensity, Pulse, the drift and the Flow amount to Idle Glow
+    /// over 1.5 s and back within 150 ms, and Visibility stays 1. Switching between Music Sync and Idle Glow uses the
+    /// same crossfade. A new engine starts at Visibility 0 and fades in over 300 ms. All fades are
+    /// smoothstep-eased.</para>
     /// <para><b>Other fields.</b> ColorA and ColorB are the palette's Primary and Secondary (pass the palette last given to
     /// <see cref="IPaletteBlender.SetTarget"/>; the gradient carries the crossfade). Ratio is PrimaryRatio clamped to
     /// 0.1..0.9, Spread is Glow (0..1, mapped to pixels by the renderer) and CoreThicknessDip is clamped to 0..40.
-    /// Pulse is Beat (the analyzer's graded pulse), unsmoothed, times the Music Sync weight. Phase is in [0, 1): it drifts
-    /// 0.015 cycles/s, and each beat (Beat rising by more than 0.1; it re-arms once Beat falls) adds 0.01 cycles × the
-    /// height Beat rises to, as a push that decays with τ = 120 ms. Idle Glow has no drift and no pulse.</para>
+    /// Pulse is Beat (the analyzer's graded pulse), unsmoothed, times the Music Sync weight; in Flow it keeps 40 % of
+    /// that (Beat × weight × (1 − 0.6 × the Movement fade)), the ripples carrying the rest. Phase is in [0, 1): it
+    /// drifts 0.015 cycles/s in Pulse and 0.04 + 0.06 × Level cycles/s in Flow (crossfading with the Movement fade),
+    /// times the Music Sync weight, and each beat (Beat rising by more than 0.1; it re-arms once Beat falls) adds
+    /// 0.01 cycles × the height Beat rises to, as a push that decays with τ = 120 ms. Idle Glow has no drift and no
+    /// pulse.</para>
+    /// <para><b>The Flow movement (H-033).</b> <see cref="Settings.Movement"/> = <see cref="MovementStyle.Flow"/> (the
+    /// default; an undefined value too) fills <see cref="LightState.Flow"/>; <see cref="MovementStyle.Pulse"/> gives
+    /// exactly the state from before Flow existed, with Flow none. Switching crossfades over 300 ms while the light
+    /// shows; while it doesn't, the switch is instant. <see cref="FlowMotion.Amount"/> is that fade × the Music Sync
+    /// weight, so it is 0 in Pulse and in Idle Glow and fades with silence like Intensity; whenever it is 0 the whole
+    /// <see cref="FlowMotion"/> is <c>default</c>. <see cref="FlowMotion.CometPhase"/> is in [0, 1) and grows at
+    /// (0.04 + 0.16 × Level) × Amount laps a second, and each beat pushes it 0.025 laps × Amount × the height Beat
+    /// rises to, delivered like the colors' kick. Each beat that starts while Amount is above 0 starts a
+    /// <see cref="Ripple"/> at the height Beat reaches (a rise that continues over the next frames raises it), its
+    /// origin 0.618034 of the perimeter on from the previous ripple's (the first at 0); its <see cref="Ripple.Radius"/>
+    /// grows 0.45 perimeters a second and its <see cref="Ripple.Strength"/> is that height × exp(−age / 0.4 s). One
+    /// fainter than 1/512 is dropped; up to four run at once in fixed slots (Ripple0..3, a free slot is
+    /// <c>default</c>), and a beat with all four taken replaces the faintest. Positions are fractions of the perimeter
+    /// clockwise from the top-left corner, before Phase; the renderers draw them (Platform's GlowProfile).</para>
     /// <para><b>IsStatic.</b> True only while the light is hidden and stays hidden for the same inputs: the 300 ms gate
     /// fade has finished (paused, Enabled = false, Animation = Off), or, in Music Sync with WhenSilent = Hide, the 1.5 s
     /// silence fade has. It turns true on the second such Update in a row, so the frame that reaches Visibility 0 is
     /// still presented. While it is true nothing moves with time: Update returns the same state for the same inputs
-    /// whatever dtSeconds is, and how many calls it gets changes nothing later, so the renderer may stop presenting and
-    /// stop calling. It turns false on the very Update whose inputs can show the light again (even with
-    /// dtSeconds = 0): unpaused, Enabled, Animation not Off, IsSilent cleared, or WhenSilent or Animation no longer
-    /// hiding silence. Changes that cannot show the light (palette, Glow, Brightness and other appearance fields, Level,
-    /// Beat) leave it true. Every visible state moves (Music Sync drifts, Idle Glow breathes), so it is never true while
-    /// anything is visible.</para>
+    /// whatever dtSeconds is (the ripples are cleared and the comets stand still), and how many calls it gets changes
+    /// nothing later, so the renderer may stop presenting and stop calling. It turns false on the very Update whose
+    /// inputs can show the light again (even with dtSeconds = 0): unpaused, Enabled, Animation not Off, IsSilent
+    /// cleared, or WhenSilent or Animation no longer hiding silence. Changes that cannot show the light (palette, Glow, Brightness and other appearance fields,
+    /// Movement, Level, Beat) leave it true. Every visible state moves (Music Sync drifts, Idle Glow breathes), so it is
+    /// never true while anything is visible.</para>
     /// <para><b>Renderer guidance (doc 02).</b> While Music Sync hides silence, keep feeding the analyzer and calling
     /// Update at a low rate, or the return of sound goes unnoticed. In Off, disabled or paused, only a settings or pause
     /// change can wake it. Idle Glow (Animation = IdleGlow, or Music Sync with WhenSilent = IdleGlow from 1.5 s after

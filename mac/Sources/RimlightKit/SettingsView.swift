@@ -197,6 +197,15 @@ struct ColorPage: View {
 struct MotionPage: View {
     @ObservedObject var model: SettingsModel
 
+    /// What the chosen movement does (doc 06 §3.3), in the Windows Motion page's words; outside Music Sync, where the
+    /// light doesn't follow the music, that it changes nothing there (as When it's quiet).
+    private var movementHelp: String {
+        if model.settings.animation != "MusicSync" { return "Only matters in Music Sync." }
+        return model.settings.movement == "Pulse"
+            ? "The whole edge swells and brightens together on each beat."
+            : "Light travels round the edge: comets chase round it, the colors stream round it and each beat ripples along it."
+    }
+
     var body: some View {
         Form {
             Section {
@@ -205,6 +214,16 @@ struct MotionPage: View {
                     Text("Idle Glow").tag("IdleGlow")
                     Text("Off").tag("Off")
                 }
+                // How the light moves with the music (Maxwell's request): light travelling round the edge, the
+                // default, or the whole edge pulsing on each beat as before.
+                Picker("Movement", selection: $model.settings.movement) {
+                    Text("Flow").tag("Flow")
+                    Text("Pulse").tag("Pulse")
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.settings.animation != "MusicSync")
+                Text(movementHelp)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Picker("When it's quiet", selection: $model.settings.whenSilent) {
                     Text("Keep a soft glow").tag("IdleGlow")
                     Text("Hide the glow").tag("Hide")

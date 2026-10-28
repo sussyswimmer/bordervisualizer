@@ -66,7 +66,8 @@ internal static class AnalysisRecordingCsv
 {
     /// <summary>The header row. <c>tools/audio-tools/RecordingCsv.cs</c> reads these names (a test keeps them equal).</summary>
     public const string Header =
-        "time,dt,samples,level,bass,beat,isSilent,beatCount,flux,threshold,bpm,intensity,pulse,spread,visibility,phase,followsMusic";
+        "time,dt,samples,level,bass,beat,isSilent,beatCount,flux,threshold,bpm,intensity,pulse,spread,visibility,phase,"
+        + "flowAmount,cometPhase,followsMusic";
 
     private static readonly CultureInfo C = CultureInfo.InvariantCulture;
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
@@ -160,7 +161,9 @@ internal static class AnalysisRecordingCsv
             + "samples the analyzer got, at the capture rate (a count); level, bass, beat: 0 to 1; isSilent: 0 or 1; beatCount: "
             + "beats since the analyzer's last reset (a beat fired where it rises); flux and threshold: bass flux and the beat "
             + "threshold, in the analyzer's units; bpm: 0 while unknown; intensity, pulse, spread, visibility, phase: the light "
-            + "state the overlay got; followsMusic: 1 when the light engine got this audio (music sync, glow on, not paused, no demo).");
+            + "state the overlay got; flowAmount: how much of the Flow movement showed, 0 to 1 (0 in Pulse and Idle "
+            + "Glow); cometPhase: where its comets were, 0 to 1; followsMusic: 1 when the light engine got this audio "
+            + "(music sync, glow on, not paused, no demo).");
         writer.WriteLine(Header);
 
         var row = new StringBuilder(160);
@@ -169,7 +172,8 @@ internal static class AnalysisRecordingCsv
             row.Clear();
             row.Append(C, $"{f.Time:F6},{f.Dt:F6},{f.Samples},{f.Features.Level:F4},{f.Features.Bass:F4},{f.Features.Beat:F4},");
             row.Append(C, $"{(f.Features.IsSilent ? 1 : 0)},{f.BeatCount},{f.Flux:G6},{f.Threshold:G6},{f.Bpm:F2},");
-            row.Append(C, $"{f.Intensity:F4},{f.Pulse:F4},{f.Spread:F4},{f.Visibility:F4},{f.Phase:F5},{(f.FollowsMusic ? 1 : 0)}");
+            row.Append(C, $"{f.Intensity:F4},{f.Pulse:F4},{f.Spread:F4},{f.Visibility:F4},{f.Phase:F5},");
+            row.Append(C, $"{f.FlowAmount:F4},{f.CometPhase:F5},{(f.FollowsMusic ? 1 : 0)}");
             writer.WriteLine(row);
         }
     }
@@ -199,7 +203,8 @@ internal static class AnalysisRecordingCsv
     // The settings that shape the light and its timing, named as in settings.json. Colors, monitors and the shortcut
     // don't change what the analyzer or the light engine compute.
     private static string DescribeSettings(Settings s) => string.Create(C,
-        $"enabled={Bool(s.Enabled)} animation={s.Animation} whenSilent={s.WhenSilent} brightness={s.Brightness:0.###} "
+        $"enabled={Bool(s.Enabled)} animation={s.Animation} whenSilent={s.WhenSilent} movement={s.Movement} "
+        + $"brightness={s.Brightness:0.###} "
         + $"glow={s.Glow:0.###} coreThicknessDip={s.CoreThicknessDip:0.###} cornerRadiusDip={s.CornerRadiusDip:0.###} "
         + $"edgeStyle={s.EdgeStyle} primaryRatio={s.PrimaryRatio:0.###} sensitivity={s.Sensitivity:0.###} "
         + $"fpsCap={s.FpsCap} onBattery={s.OnBattery} pauseInFullscreen={Bool(s.PauseInFullscreen)}");

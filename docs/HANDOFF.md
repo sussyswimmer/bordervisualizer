@@ -1,5 +1,24 @@
 # Handoff
 
+## [DONE] H-033 · from: claude-code · to: codex, maxwell · type: CONTRACT CHANGE · blocking: none
+**Need:** Maxwell, on 1.0.3, with a video of a screen edge whose light travels round it: "I want the rimlight to be like the video I sent where it moves aaround and doesn't just bounce". Only a still of the video came through, so he was asked which motions he meant, and he picked all three: light chasing round the edge, colors flowing round it, and beats rippling round it. The renderers need per-frame state to draw that, and the look needs a setting.
+**Repro:** —
+**Proposed:** Done, approved by that request (2026-10-28):
+- **Contract:**
+  - New `src/Rimlight.Core/Contracts/MovementStyle.cs`: `public enum MovementStyle { Flow, Pulse }`.
+  - `Settings.Movement` (default `Flow`), after `WhenSilent`. Flow is the default, so the light moves for everyone once they update. Pulse is the old look, bit for bit.
+  - `LightState.Flow`, an init-only `FlowMotion(Amount, CometPhase, Ripple0..Ripple3)` with `Ripple(Origin, Radius, Strength)`. Its default means none.
+- **Core:** the light engine moves two comets, faster with Level and pushed by each beat like the color kick. The colors drift at 0.04 + 0.06 × Level laps per second instead of 0.015. Each beat onset starts a ripple from a new spot (golden-ratio steps), whose fronts run 0.45 perimeters a second and fade with τ 0.4 s, four at most. The whole-edge pulse keeps 40 % of the beat. A Movement change crossfades over 0.3 s. Everything fades with the music weight, so Idle Glow and silence are as before, and a Hide fade keeps the movement it started with. `SettingsJson` writes `"movement"` (a missing or unknown value is Flow), `SettingsValidator` resets an undefined value to Flow, and presets keep it. Tests: `FlowMovementTests`; `PulseMovementTests`, which replays 3 × 36,000 frames against a copy of the old engine and compares bit for bit; settings tests; and the public-surface list.
+- **Renderer:** `GlowConstants` grows from 80 to 160 bytes: the Flow amount, the comet phase and two pads in one register, then the four ripples, one register each. `GlowProfile.Motion` is the reference: the comets over a floor of 0.5, the ripples combined like light through filters, and a blend to `FlowMean` deep inside where the colors blend to theirs. With the Flow amount the gain rises 30 %. `Glow.hlsl`, the Settings preview (`GlowRaster`) and the Mac's `glow_math.h` mirror the reference. `FramePacer.ChangeRate` and Bench's `PaceModel` count the motion, so moving comets never drop to 10 fps. With no Flow amount, every alpha is as before. The perimeter coordinate's half pi is now `MathF.PI / 2` to the bit in all three, so a color can move by an ulp.
+- **Mac (C ABI 10):** `RlGlowConstants` is 160 bytes. `RlLightState` is 108 bytes and ends with `RlFlowMotion`. The golden table gains two flow cases, and the old cases' samples are unchanged.
+- **Also:**
+  - Settings › Motion › Movement on both platforms, disabled outside Music Sync like When it's quiet.
+  - The recording's `movement=` setting and its `flowAmount` and `cometPhase` columns.
+  - `wav-analyze --movement Flow|Pulse`: the corpus metrics replay Pulse so they compare with the old baselines.
+  - The Windows CI job now compiles `Glow.hlsl` (`ShaderCompileTests`).
+  - docs/CORE-API.md, doc 04 §3, doc 06 §3.3 and doc 10 §3.3.
+- **Codex:** nothing to do beyond keeping `Movement` and the Flow state in later Lane A work. Any acceptance measure built on `Pulse` should replay `--movement Pulse`, or account for Flow's 40 % pulse.
+---
 ## [DONE] H-032 · from: claude-code · to: codex, maxwell · type: CONTRACT CHANGE · blocking: none
 **Need:** Maxwell, on the Mac app, with a photo of a MacBook whose screen edge has a crisp, bright neon-like line hugging it, dipping round the camera notch, with a dim glow inside it: "Please I want it to look like this or have an option to look like this and detect if theres a notch and go around it for the lighting". That needs a setting, so `Settings` gains one field.
 **Repro:** —

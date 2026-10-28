@@ -88,6 +88,7 @@ public sealed class SettingsValidatorTests
             Monitors = (MonitorSelection)3,
             OnBattery = (BatteryBehavior)(-3),
             EdgeStyle = (EdgeStyle)2,
+            Movement = (MovementStyle)2,
         });
         Assert.Equal(AnimationMode.MusicSync, valid.Animation);
         Assert.Equal(SilentBehavior.IdleGlow, valid.WhenSilent);
@@ -95,6 +96,7 @@ public sealed class SettingsValidatorTests
         Assert.Equal(MonitorSelection.All, valid.Monitors);
         Assert.Equal(BatteryBehavior.Reduce, valid.OnBattery);
         Assert.Equal(EdgeStyle.Glow, valid.EdgeStyle);
+        Assert.Equal(MovementStyle.Flow, valid.Movement);
     }
 
     [Fact]
@@ -112,6 +114,8 @@ public sealed class SettingsValidatorTests
             Assert.Equal(value, SettingsValidator.Validate(new Settings { OnBattery = value }).OnBattery);
         foreach (EdgeStyle value in Enum.GetValues<EdgeStyle>())
             Assert.Equal(value, SettingsValidator.Validate(new Settings { EdgeStyle = value }).EdgeStyle);
+        foreach (MovementStyle value in Enum.GetValues<MovementStyle>())
+            Assert.Equal(value, SettingsValidator.Validate(new Settings { Movement = value }).Movement);
     }
 
     [Theory]
@@ -228,6 +232,7 @@ public sealed class SettingsValidatorTests
         Assert.Equal(0.45f, valid.Glow);
         Assert.Equal(1f, valid.Brightness);
         Assert.Equal(EdgeStyle.Glow, valid.EdgeStyle);
+        Assert.Equal(MovementStyle.Flow, valid.Movement);
         Assert.Equal(new[] { "A" }, valid.CustomMonitorIds);
         Assert.Equal(60, valid.FpsCap);
         Assert.Equal("Ctrl+Alt+L", valid.ToggleHotkey);

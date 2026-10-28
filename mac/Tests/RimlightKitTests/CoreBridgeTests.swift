@@ -21,6 +21,20 @@ final class CoreBridgeTests: XCTestCase {
         XCTAssertTrue(Core.abiMatches)
     }
 
+    func testTheStructsHaveTheLibrarysSizes() {
+        // As Swift imports them (the C ripples[4] becomes a tuple): the shader's 160-byte constants, ten registers with
+        // the Flow movement's last, and Core's LightState with its Flow movement, 27 floats (AbiLayoutTests pins the C#
+        // side).
+        XCTAssertEqual(MemoryLayout<RlGlowConstants>.size, 160)
+        XCTAssertEqual(MemoryLayout<RlGlowRipple>.size, 16)
+        XCTAssertEqual(MemoryLayout<RlLightState>.size, 108)
+        XCTAssertEqual(MemoryLayout<RlFlowMotion>.size, 56)
+        XCTAssertEqual(MemoryLayout<RlSurface>.size, 32)
+        XCTAssertEqual(MemoryLayout<RlGlowConstants>.offset(of: \.flowAmount), 80)
+        XCTAssertEqual(MemoryLayout<RlGlowConstants>.offset(of: \.ripples), 96)
+        XCTAssertEqual(MemoryLayout<RlLightState>.offset(of: \.flow), 52)
+    }
+
     func testNameAndVersionComeFromCore() {
         XCTAssertFalse(Core.appName.isEmpty)
         XCTAssertNotNil(Core.version.range(of: #"^\d+\.\d+\.\d+"#, options: .regularExpression), Core.version)

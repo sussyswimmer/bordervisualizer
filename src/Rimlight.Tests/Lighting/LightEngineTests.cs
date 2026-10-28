@@ -9,10 +9,13 @@ namespace Rimlight.Tests.Lighting;
 
 // C6: the real ILightEngine (doc 07 Phase 3, doc 01 §2, doc 04 §4, doc 02 idle optimization, H-007, H-008 item 2).
 // Expected values are the spec's numbers written out, not the engine's constants, so changing a constant fails a test.
+// The default settings are the Flow movement (H-033); the tests of the drift's and the pulse's numbers use Pulse, whose
+// numbers they are, and FlowMovementTests has Flow's.
 public sealed class LightEngineTests(ITestOutputHelper output)
 {
     private const float Dt = 1f / 60;
     private static readonly Settings Music = new();                                       // Music Sync; silence → Idle Glow
+    private static readonly Settings PulseMusic = Music with { Movement = MovementStyle.Pulse }; // the beat swells the whole edge
     private static readonly Settings Hide = new() { WhenSilent = SilentBehavior.Hide };
     private static readonly Settings Idle = new() { Animation = AnimationMode.IdleGlow };
     private static readonly Settings Off = new() { Animation = AnimationMode.Off };
@@ -103,9 +106,9 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     public void PulseIsTheBeatOnTheSameFrame()
     {
         // Snappy: no smoothing between the analyzer's Beat (1 on a beat, then τ = 120 ms decay) and Pulse.
-        var engine = Settled(Music, Loud);
+        var engine = Settled(PulseMusic, Loud);
         foreach (float beat in new[] { 1f, 0.87f, 0.37f, 0.05f, 0f, 1f })
-            Assert.Equal(beat, engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, Music, false).Pulse);
+            Assert.Equal(beat, engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, PulseMusic, false).Pulse);
     }
 
     [Theory]
@@ -116,14 +119,14 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     [InlineData(10f, 0f)]
     public void PhaseDriftsFifteenThousandthsOfACycleASecondAtAnyFrameRate(float fps, float jitter)
     {
-        var engine = Settled(Music, Loud);
+        var engine = Settled(PulseMusic, Loud);
         var random = new Random(5);
-        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        float phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase;
         double advance = 0, time = 0;
         while (time < 30)
         {
             float dt = 1 / fps * (1 + jitter * (float)(random.NextDouble() * 2 - 1));
-            float next = engine.Update(dt, Loud, Palette.Default, Music, false).Phase;
+            float next = engine.Update(dt, Loud, Palette.Default, PulseMusic, false).Phase;
             advance += Advance(phase, next);
             phase = next;
             time += dt;
@@ -138,8 +141,8 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     public void EachBeatAddsOneHundredthOfACycle(int fps)
     {
         // 120 BPM for 10 s like the analyzer reports it (1 on the beat, τ = 120 ms decay), then 2 s for the last push.
-        var engine = Settled(Music, Loud);
-        float dt = 1f / fps, beat = 0, phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        var engine = Settled(PulseMusic, Loud);
+        float dt = 1f / fps, beat = 0, phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase;
         double advance = 0;
         int frames = 12 * fps, beats = 0;
         for (int i = 1; i <= frames; i++)
@@ -147,7 +150,7 @@ public sealed class LightEngineTests(ITestOutputHelper output)
             bool onBeat = i <= 10 * fps && i % (fps / 2) == 0;
             if (onBeat) beats++;
             beat = onBeat ? 1 : beat * MathF.Exp(-dt / 0.12f);
-            float next = engine.Update(dt, Loud with { Beat = beat }, Palette.Default, Music, false).Phase;
+            float next = engine.Update(dt, Loud with { Beat = beat }, Palette.Default, PulseMusic, false).Phase;
             advance += Advance(phase, next);
             phase = next;
         }
@@ -159,12 +162,12 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     public void AKickIsAQuickPushNotAJump()
     {
         // The 0.01 cycles arrive as a push decaying with τ = 120 ms: 13 % on the beat frame at 60 fps, 92 % by 0.3 s.
-        var engine = Settled(Music, Loud);
-        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase, beat = 1;
+        var engine = Settled(PulseMusic, Loud);
+        float phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase, beat = 1;
         double kicked = 0;
         for (int i = 1; i <= 18; i++)
         {
-            float next = engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, Music, false).Phase;
+            float next = engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, PulseMusic, false).Phase;
             kicked += Advance(phase, next) - 0.015 * Dt;
             phase = next;
             beat *= MathF.Exp(-Dt / 0.12f);
@@ -178,12 +181,12 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     {
         // Maxwell's feedback, round 1: the analyzer grades each beat 0..1. A beat of 0.5 pushes 0.005 cycles, one rising
         // from a leftover 0.3 to 0.8 pushes 0.008 (the height it reaches), and a rise of 0.1 or less is no beat at all.
-        var engine = Settled(Music, Loud);
-        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        var engine = Settled(PulseMusic, Loud);
+        float phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase;
         double advance = 0, time = 0;
         void Step(float beat)
         {
-            float next = engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, Music, false).Phase;
+            float next = engine.Update(Dt, Loud with { Beat = beat }, Palette.Default, PulseMusic, false).Phase;
             advance += Advance(phase, next);
             phase = next;
             time += Dt;
@@ -209,12 +212,12 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     public void ABeatCountsOnceHoweverItRises()
     {
         // A Beat that ramps up over several frames, or repeats on dt = 0 frames, is one beat. A later beat counts again.
-        var engine = Settled(Music, Loud);
-        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        var engine = Settled(PulseMusic, Loud);
+        float phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase;
         double advance = 0, time = 0;
         void Step(float dt, float beat)
         {
-            float next = engine.Update(dt, Loud with { Beat = beat }, Palette.Default, Music, false).Phase;
+            float next = engine.Update(dt, Loud with { Beat = beat }, Palette.Default, PulseMusic, false).Phase;
             advance += Advance(phase, next);
             phase = next;
             time += dt;
@@ -278,10 +281,10 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     {
         // WhenSilent = IdleGlow: over 1.5 s after IsSilent, then back within 150 ms when sound returns.
         // Visibility stays 1 throughout; drift and pulse fade with the music.
-        var engine = Settled(Music, Quiet);
-        float last = engine.Update(0, Quiet, Palette.Default, Music, false).Intensity;
+        var engine = Settled(PulseMusic, Quiet);
+        float last = engine.Update(0, Quiet, Palette.Default, PulseMusic, false).Intensity;
         Assert.Equal(QuietIntensity, last, 1e-6f);
-        var handover = Frames(engine, 90, Silent, Music);
+        var handover = Frames(engine, 90, Silent, PulseMusic);
         foreach (LightState state in handover)
         {
             Assert.Equal(1f, state.Visibility);
@@ -291,13 +294,13 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         Assert.InRange(handover[44].Intensity, QuietIntensity + 0.1f, IdleLow - 0.05f);
 
         // Idle Glow now: breathing range, no drift, no pulse even if the analyzer reported a beat.
-        var idle = Frames(engine, 360, Silent with { Beat = 1 }, Music);
+        var idle = Frames(engine, 360, Silent with { Beat = 1 }, PulseMusic);
         Assert.All(idle, s => Assert.InRange(s.Intensity, IdleLow - 1e-6f, IdleHigh + 1e-6f));
         Assert.All(idle, s => Assert.Equal(handover[^1].Phase, s.Phase));
         Assert.All(idle, s => Assert.Equal(0f, s.Pulse));
 
         last = idle[^1].Intensity;
-        var back = Frames(engine, 9, Loud with { Beat = 0.5f }, Music);
+        var back = Frames(engine, 9, Loud with { Beat = 0.5f }, PulseMusic);
         foreach (LightState state in back)
         {
             Assert.True(MathF.Abs(state.Intensity - last) < 0.1f, $"Intensity jumped {last} → {state.Intensity}");
@@ -629,13 +632,13 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     {
         // A beat lands just before the gate closes. Its push keeps turning the phase during the 300 ms fade-out, and
         // what is left of it once the light is hidden is dropped, so the light comes back drifting from where it stopped.
-        var engine = Settled(Music, Loud);
-        engine.Update(Dt, Loud with { Beat = 1 }, Palette.Default, Music, false);
-        Run(engine, 0.5f, Loud, Music, paused: true);
+        var engine = Settled(PulseMusic, Loud);
+        engine.Update(Dt, Loud with { Beat = 1 }, Palette.Default, PulseMusic, false);
+        Run(engine, 0.5f, Loud, PulseMusic, paused: true);
         Assert.True(engine.IsStatic);
-        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
+        float phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase;
         double advance = 0;
-        foreach (LightState state in Frames(engine, 60, Loud, Music))
+        foreach (LightState state in Frames(engine, 60, Loud, PulseMusic))
         {
             advance += Advance(phase, state.Phase);
             phase = state.Phase;
@@ -678,9 +681,9 @@ public sealed class LightEngineTests(ITestOutputHelper output)
     public void AStallCountsAsATenthOfASecond()
     {
         // A huge step (render stall, sleep) moves fades and drift by at most 0.1 s, so nothing jumps.
-        var engine = Settled(Music, Loud);
-        float phase = engine.Update(0, Loud, Palette.Default, Music, false).Phase;
-        LightState state = engine.Update(1000, Loud, Palette.Default, Music, true);
+        var engine = Settled(PulseMusic, Loud);
+        float phase = engine.Update(0, Loud, Palette.Default, PulseMusic, false).Phase;
+        LightState state = engine.Update(1000, Loud, Palette.Default, PulseMusic, true);
         Assert.Equal(Smooth(1 - 0.1f / 0.3f), state.Visibility, 1e-5f);
         Assert.Equal(0.015 * 0.1, Advance(phase, state.Phase), 1e-6);
 
@@ -734,6 +737,8 @@ public sealed class LightEngineTests(ITestOutputHelper output)
             settingsList.Add(Hide with { Brightness = v, Glow = v, PrimaryRatio = v, CoreThicknessDip = v * 100 });
             settingsList.Add(Idle with { Brightness = v, Glow = v, PrimaryRatio = v, CoreThicknessDip = v * 100 });
             settingsList.Add(Music with { Animation = (AnimationMode)42, WhenSilent = (SilentBehavior)42, Brightness = v });
+            settingsList.Add(Music with { Movement = (MovementStyle)42, Brightness = v });
+            settingsList.Add(PulseMusic with { Brightness = v, Glow = v });
         }
         int frame = 0;
         foreach (Settings settings in settingsList)
@@ -747,6 +752,15 @@ public sealed class LightEngineTests(ITestOutputHelper output)
                     Assert.InRange(s.Ratio, 0.1f, 0.9f);
                     Assert.InRange(s.CoreThicknessDip, 0f, 40f);
                     Assert.InRange(s.Phase, 0f, 0.99999994f);
+                    FlowMotion flow = s.Flow;
+                    Assert.InRange(flow.Amount, 0f, 1f);
+                    Assert.InRange(flow.CometPhase, 0f, 0.99999994f);
+                    foreach (Ripple r in new[] { flow.Ripple0, flow.Ripple1, flow.Ripple2, flow.Ripple3 })
+                    {
+                        Assert.InRange(r.Origin, 0f, 0.99999994f);
+                        Assert.InRange(r.Radius, 0f, 2f);
+                        Assert.InRange(r.Strength, 0f, 1f);
+                    }
                 }
         // Non-finite settings fall back to the defaults.
         LightState fallback = Run(new LightEngine(), 1, Loud, Music with { Brightness = float.NaN, Glow = float.NaN, PrimaryRatio = float.NaN, CoreThicknessDip = float.NaN });
@@ -809,7 +823,12 @@ public sealed class LightEngineTests(ITestOutputHelper output)
 
     // ---- determinism and allocations ----
 
-    private static readonly Settings[] Modes = [Music, Hide, Idle, Off, Disabled, Music with { Brightness = 0.4f, Glow = 0.9f }];
+    // Flow and Pulse, so switching between them is covered too.
+    private static readonly Settings[] Modes =
+    [
+        Music, Hide, Idle, Off, Disabled, Music with { Brightness = 0.4f, Glow = 0.9f }, PulseMusic,
+        Hide with { Movement = MovementStyle.Pulse },
+    ];
 
     private static void Scenario(LightEngine engine, int frames, int seed, List<(LightState State, bool IsStatic)>? record)
     {
@@ -864,8 +883,9 @@ public sealed class LightEngineTests(ITestOutputHelper output)
         // Each analyzer beat pushes the phase by 0.01 cycles × the height its pulse rises to (CORE-API §6.1), on top of
         // the drift. Since Maxwell's feedback round 1 the analyzer grades each beat, and a groove has to establish itself
         // (the first second only listens, the drive needs two kicks): the kicks up to 2 s pulse less or not at all, and
-        // every one after them is a full pulse.
+        // every one after them is a full pulse. (Pulse: in Flow the colors drift faster, FlowMovementTests.)
         const int rate = 48000, step = rate / 60;
+        Settings hide = Hide with { Movement = MovementStyle.Pulse };
         float[] kicks = SyntheticAudio.KickTrack(rate, 10, 120, 0.8f, 0.2f);
         var analyzer = new AudioAnalyzer();
         var engine = new LightEngine();
@@ -880,7 +900,7 @@ public sealed class LightEngineTests(ITestOutputHelper output)
                 : i < 1080 ? ReadOnlySpan<float>.Empty
                 : kicks.AsSpan((i - 1080) * step, step);
             AudioFeatures audio = analyzer.Process(samples, rate, Dt);
-            LightState state = engine.Update(Dt, audio, Palette.Default, Hide, false);
+            LightState state = engine.Update(Dt, audio, Palette.Default, hide, false);
             visibility[i] = state.Visibility;
             if (i < 700)
             {

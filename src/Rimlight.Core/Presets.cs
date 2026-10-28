@@ -8,8 +8,9 @@ namespace Rimlight.Core;
 /// <see cref="Settings.SecondaryHex"/>, <see cref="Settings.PrimaryRatio"/>, <see cref="Settings.CoreThicknessDip"/>,
 /// <see cref="Settings.Glow"/> and <see cref="Settings.Brightness"/>. Applying presets one after another therefore
 /// gives the same look as applying the last one alone (only Minimal's Idle Glow mode stays until the user changes the
-/// mode). Corner radius and taskbar coverage fit the user's screen, not the look, so they are kept, and so is
-/// <see cref="Settings.EdgeStyle"/>: soft glow or bright line is the user's pick, and every preset suits both.</para>
+/// mode). Corner radius and taskbar coverage fit the user's screen, not the look, so they are kept, and so are
+/// <see cref="Settings.EdgeStyle"/> and <see cref="Settings.Movement"/>: soft glow or bright line, light that flows
+/// round the edge or pulses on it, are the user's picks, and every preset suits all of them.</para>
 /// <para>Every preset also sets <see cref="Settings.OverrideAlbumColor"/> to true and keeps
 /// <see cref="Settings.ColorMode"/>, so the look shows even in Album Art mode, and turning Override off brings the album
 /// colors back (H-009). Minimal also sets <see cref="Settings.Animation"/> to <see cref="AnimationMode.IdleGlow"/>.
@@ -26,8 +27,8 @@ public static class Presets
     /// <item><b>Sunset:</b> orange into pink.</item>
     /// <item><b>Neon:</b> magenta and cyan, an even split, a thick 12-DIP core at full brightness.</item>
     /// <item><b>Ember:</b> red into amber. "Slow" is a dim (0.6), very soft (glow 0.8), thin-cored look, so beats
-    /// swell like embers instead of flashing; the engine's motion speed isn't a setting, and Sensitivity is motion,
-    /// which presets leave alone.</item>
+    /// swell like embers instead of flashing; the engine's motion speed isn't a setting, and Sensitivity and Movement
+    /// are motion, which presets leave alone.</item>
     /// <item><b>Minimal:</b> a soft warm-to-cool white 1-DIP hairline with little glow, in Idle Glow mode.</item>
     /// </list>
     /// </remarks>

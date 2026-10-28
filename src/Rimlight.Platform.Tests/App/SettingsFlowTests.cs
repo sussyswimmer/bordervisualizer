@@ -6,7 +6,10 @@ using Xunit;
 namespace Rimlight.Platform.Tests;
 
 // The app's settings with the real store (C7): SettingsService (K3) saves what the UI changes, the first run's welcome
-// shows once (K6), and the presets (C7) show as chosen in the tray and on the Appearance page (K6/K7).
+// shows once (K6), and the presets (C7) show as chosen in the tray and on the Appearance page (K6/K7). The saves run on
+// SettingsService's timer, a thread-pool callback, so these run with the other tests that wait on the pool: beside the
+// parallel classes, a retry 1 s away once waited out the whole 10 s (CI, with the Flow movement's long shader tests).
+[Collection(SerialTests.Name)]
 public sealed class SettingsFlowTests : IDisposable
 {
     private readonly string directory = Path.Combine(Path.GetTempPath(), "rimlight-k10-" + Guid.NewGuid().ToString("N"));

@@ -1,8 +1,9 @@
 #!/bin/sh
 # Replays every corpus track through a build's per-frame work (wav-analyze --engine).
-# Usage: run_harness.sh <corpus dir> <out dir> [extra wav-analyze options, e.g. --tuning params.json]
+# Usage: run_harness.sh <corpus dir> <out dir> [extra wav-analyze options, e.g. --movement Pulse --tuning params.json]
 # Build first: dotnet build tools/wav-analyze -c Release. To compare two builds, build each one into its own
-# folder and set WAV_ANALYZE to its wav-analyze.dll.
+# folder and set WAV_ANALYZE to its wav-analyze.dll. metrics.py measures the Pulse movement, so pass --movement Pulse
+# (the app's default is Flow); leave it out for a build from before the Flow movement, which has only Pulse.
 set -e
 corpus="$1"; out="$2"
 [ -n "$corpus" ] && [ -n "$out" ] || { echo "usage: $0 <corpus dir> <out dir> [wav-analyze options]" >&2; exit 2; }

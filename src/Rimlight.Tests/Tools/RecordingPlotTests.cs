@@ -93,6 +93,7 @@ public sealed class RecordingPlotTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(0.03f, second.Dt, 6);
         Assert.Equal((0, 0f, true), (first.Samples, first.Bpm, first.FollowsMusic));
         Assert.True(float.IsNaN(first.Intensity) && float.IsNaN(first.Phase));
+        Assert.Equal((0f, 0f), (first.FlowAmount, first.CometPhase)); // a file from before the Flow movement had none
         Assert.True(float.IsNaN(second.Threshold));
         Assert.Equal(0.001f, second.Flux);
         Assert.Equal(0.05, recording.Seconds, 9);
@@ -140,13 +141,13 @@ public sealed class RecordingPlotTests(ITestOutputHelper output) : IDisposable
         File.WriteAllText(bad, "time,dt,level,bass,beat,isSilent,beatCount,flux\n");
         AssertFails(bad, "bad.csv has no threshold column");
 
-        File.WriteAllText(bad, RecordingCsv.Header + "\n0.1,0.1,800,0.5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25\n");
-        AssertFails(bad, "bad.csv line 2: expected 17 values, found 16.");
+        File.WriteAllText(bad, RecordingCsv.Header + "\n0.1,0.1,800,0.5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25,0.9,0.3\n");
+        AssertFails(bad, "bad.csv line 2: expected 19 values, found 18.");
 
-        File.WriteAllText(bad, RecordingCsv.Header + "\n0.1,0.1,800,0,5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25\n"); // a decimal comma
+        File.WriteAllText(bad, RecordingCsv.Header + "\n0.1,0.1,800,0,5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25,0.9,0.3\n"); // a decimal comma
         AssertFails(bad, "bad.csv line 2: isSilent should be 0 or 1, not \"0.5\".");
 
-        File.WriteAllText(bad, RecordingCsv.Header + "\n0.1,0.1,800,0.5,0.5,0.5,0,1.5,0.1,0.2,120,0.6,0.5,0.45,1,0.25,1\n");
+        File.WriteAllText(bad, RecordingCsv.Header + "\n0.1,0.1,800,0.5,0.5,0.5,0,1.5,0.1,0.2,120,0.6,0.5,0.45,1,0.25,0.9,0.3,1\n");
         AssertFails(bad, "bad.csv line 2: beatCount should be a whole number, not \"1.5\".");
 
         File.WriteAllText(bad, RecordingCsv.Header + "\n");
@@ -157,7 +158,8 @@ public sealed class RecordingPlotTests(ITestOutputHelper output) : IDisposable
         Assert.Contains("missing.csv", error);
 
         string good = Path.Combine(directory, "good.csv");
-        File.WriteAllText(good, RecordingCsv.Header + "\n0.5,0.5,800,0.5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25,1\n1,0.5,800,0.5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25,1\n");
+        File.WriteAllText(good, RecordingCsv.Header + "\n0.5,0.5,800,0.5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25,0.9,0.3,1\n"
+            + "1,0.5,800,0.5,0.5,0.5,0,1,0.1,0.2,120,0.6,0.5,0.45,1,0.25,0.9,0.31,1\n");
         (code, _, error) = Cli("plot", good, "--range", "5:10", "--out", directory);
         Assert.Equal(2, code);
         Assert.Contains("--range starts at 5 s but good.csv is only 1.00 s long.", error);
@@ -202,7 +204,8 @@ public sealed class RecordingPlotTests(ITestOutputHelper output) : IDisposable
             if (i > 0) beats += f.BeatsFired;
             AudioFeatures a = f.Features;
             text.Append(C, $"{f.Time - start:F6},{f.Time - last:F6},{f.Samples},{a.Level:F4},{a.Bass:F4},{a.Beat:F4},{(a.IsSilent ? 1 : 0)},{beats},");
-            text.Append(C, $"{f.Flux:G6},{f.Threshold:G6},{f.Bpm:F2},{0.8f * (0.35f + 0.65f * a.Level):F4},{a.Beat:F4},0.4500,1.0000,{i * 0.00025 % 1:F5},1\n");
+            text.Append(C, $"{f.Flux:G6},{f.Threshold:G6},{f.Bpm:F2},{0.8f * (0.35f + 0.65f * a.Level):F4},{a.Beat:F4},0.4500,1.0000,{i * 0.00025 % 1:F5},");
+            text.Append(C, $"0.9000,{i * 0.0005 % 1:F5},1\n");
             last = f.Time;
         }
         return text.ToString();
