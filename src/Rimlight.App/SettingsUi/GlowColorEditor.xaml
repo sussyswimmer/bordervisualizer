@@ -4,11 +4,19 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml">
     <UserControl.Resources>
-        <ResourceDictionary Source="PageStyles.xaml" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="PageStyles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <!-- The hue and saturation sliders' own track is hidden: the strip under each is their track. -->
+            <SolidColorBrush x:Key="SliderTrackFill" Color="Transparent" />
+            <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="Transparent" />
+        </ResourceDictionary>
     </UserControl.Resources>
 
     <!-- A color: hex input, plus hue and saturation sliders (at the color's own brightness). Standard sliders keep it
-         usable from the keyboard and with a screen reader; the strips under them show what each position gives. -->
+         usable from the keyboard and with a screen reader; the strip each one slides along shows what each position
+         gives. -->
     <Border Style="{StaticResource Row}">
         <StackPanel>
             <DockPanel>
@@ -26,10 +34,9 @@
 
             <DockPanel Margin="0,12,0,0">
                 <TextBlock DockPanel.Dock="Left" Width="80" Style="{StaticResource RowLabel}" Text="Hue" />
-                <StackPanel>
-                    <Slider x:Name="HueSlider" Minimum="0" Maximum="359" SmallChange="1" LargeChange="15" TickFrequency="1"
-                            IsSnapToTickEnabled="True" ValueChanged="OnHueChanged" />
-                    <Border Height="6" CornerRadius="3" Margin="8,2,8,0">
+                <Grid>
+                    <Border Height="6" CornerRadius="3" Margin="8,0" VerticalAlignment="Center"
+                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
                         <Border.Background>
                             <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                 <GradientStop Offset="0" Color="#FF0000" />
@@ -42,16 +49,19 @@
                             </LinearGradientBrush>
                         </Border.Background>
                     </Border>
-                </StackPanel>
+                    <Slider x:Name="HueSlider" Minimum="0" Maximum="359" SmallChange="1" LargeChange="15" TickFrequency="1"
+                            IsSnapToTickEnabled="True" ValueChanged="OnHueChanged" />
+                </Grid>
             </DockPanel>
 
             <DockPanel Margin="0,8,0,0">
                 <TextBlock DockPanel.Dock="Left" Width="80" Style="{StaticResource RowLabel}" Text="Saturation" />
-                <StackPanel>
+                <Grid>
+                    <Border x:Name="SaturationStrip" Height="6" CornerRadius="3" Margin="8,0" VerticalAlignment="Center"
+                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" />
                     <Slider x:Name="SaturationSlider" Minimum="0" Maximum="100" SmallChange="1" LargeChange="10" TickFrequency="1"
                             IsSnapToTickEnabled="True" ValueChanged="OnSaturationChanged" />
-                    <Border x:Name="SaturationStrip" Height="6" CornerRadius="3" Margin="8,2,8,0" />
-                </StackPanel>
+                </Grid>
             </DockPanel>
         </StackPanel>
     </Border>
