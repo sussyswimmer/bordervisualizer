@@ -10,7 +10,8 @@ namespace Rimlight.Core.Lighting;
 //   music  is the Music Sync weight against Idle Glow: 0 in Idle Glow, and in Music Sync with WhenSilent = IdleGlow
 //          while IsSilent; 1.5 s toward Idle Glow, 150 ms back (doc 01 §2). A Hide fade keeps the weight it starts
 //          with, as Off does, so the light fades out with the look it had.
-//   flow   is the Movement setting: 1 in Flow, 0 in Pulse; 300 ms either way (H-033).
+//   flow   is the Movement setting: 1 in Flow, 0 in Pulse; 300 ms either way (H-033). A Hide fade keeps the movement
+//          it starts with too, as it keeps the music weight.
 // Visibility = gate × shown (H-008 item 2: Visibility carries every fade, Intensity none). Intensity, Pulse and the
 // drift crossfade with the music weight.
 //
@@ -124,6 +125,7 @@ internal sealed class LightEngine : ILightEngine
             if (quiet && settings.WhenSilent == SilentBehavior.Hide)
             {
                 shownTarget = 0;
+                flowTarget = flow;                    // the movement too; the wake frame jumps it to the setting
             }
             else
             {
